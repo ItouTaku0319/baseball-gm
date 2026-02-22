@@ -48,7 +48,7 @@ export default function NewGamePage() {
       },
     ];
 
-    const season = createSeason(2026, leagues, 24);
+    const season = createSeason(2026, leagues);
 
     const gameState: GameState = {
       id: crypto.randomUUID(),
@@ -84,18 +84,18 @@ export default function NewGamePage() {
                 onClick={() => setSelectedTeamId(team.id)}
                 className={`w-full text-left p-4 rounded-lg border transition-all ${
                   selectedTeamId === team.id
-                    ? "border-blue-500 bg-blue-950/50"
-                    : "border-gray-700 bg-gray-800/50 hover:border-gray-500"
+                    ? "border-blue-500 bg-blue-950/50 shadow-lg shadow-blue-900/20"
+                    : "border-gray-700 bg-gray-800/50 hover:border-gray-500 hover:bg-gray-800"
                 }`}
               >
                 <div className="flex items-center gap-3">
                   <div
-                    className="w-4 h-4 rounded-full"
+                    className="w-5 h-5 rounded-full flex-shrink-0"
                     style={{ backgroundColor: team.color }}
                   />
-                  <span className="font-medium">{team.name}</span>
+                  <span className="font-medium text-white">{team.name}</span>
                 </div>
-                <div className="text-sm text-gray-500 mt-1 ml-7">
+                <div className="text-sm text-gray-500 mt-1 ml-8">
                   {team.homeBallpark}
                 </div>
               </button>
@@ -114,18 +114,18 @@ export default function NewGamePage() {
                 onClick={() => setSelectedTeamId(team.id)}
                 className={`w-full text-left p-4 rounded-lg border transition-all ${
                   selectedTeamId === team.id
-                    ? "border-emerald-500 bg-emerald-950/50"
-                    : "border-gray-700 bg-gray-800/50 hover:border-gray-500"
+                    ? "border-emerald-500 bg-emerald-950/50 shadow-lg shadow-emerald-900/20"
+                    : "border-gray-700 bg-gray-800/50 hover:border-gray-500 hover:bg-gray-800"
                 }`}
               >
                 <div className="flex items-center gap-3">
                   <div
-                    className="w-4 h-4 rounded-full"
+                    className="w-5 h-5 rounded-full flex-shrink-0"
                     style={{ backgroundColor: team.color }}
                   />
-                  <span className="font-medium">{team.name}</span>
+                  <span className="font-medium text-white">{team.name}</span>
                 </div>
-                <div className="text-sm text-gray-500 mt-1 ml-7">
+                <div className="text-sm text-gray-500 mt-1 ml-8">
                   {team.homeBallpark}
                 </div>
               </button>

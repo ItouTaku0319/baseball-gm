@@ -1,5 +1,12 @@
 import { create } from "zustand";
 import type { GameState } from "@/models/game-state";
+import {
+  startSeason as startSeasonEngine,
+  simulateNextGame,
+  simulateDay as simulateDayEngine,
+  simulateWeek as simulateWeekEngine,
+  simulateToNextMyGame as simulateToNextMyGameEngine,
+} from "@/engine/season-advancement";
 
 /**
  * ゲーム全体の状態管理
@@ -22,6 +29,17 @@ interface GameStore {
   loadSavedGamesList: () => void;
   /** セーブデータを削除 */
   deleteSave: (id: string) => void;
+
+  /** シーズンを開始 (preseason → regular_season) */
+  startSeason: () => void;
+  /** 次の1試合をシミュレーション */
+  simNext: () => void;
+  /** 1日分をシミュレーション */
+  simDay: () => void;
+  /** 1週間分をシミュレーション */
+  simWeek: () => void;
+  /** 自チームの次の試合まで進める */
+  simToMyGame: () => void;
 }
 
 const SAVE_PREFIX = "baseball-gm-save-";
@@ -77,5 +95,45 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const filtered = list.filter((s: { id: string }) => s.id !== id);
     localStorage.setItem(SAVE_LIST_KEY, JSON.stringify(filtered));
     set({ savedGames: filtered });
+  },
+
+  startSeason: () => {
+    const { game } = get();
+    if (!game) return;
+    const newGame = startSeasonEngine(game);
+    set({ game: newGame });
+    get().saveGame();
+  },
+
+  simNext: () => {
+    const { game } = get();
+    if (!game || game.currentSeason.phase !== "regular_season") return;
+    const newGame = simulateNextGame(game);
+    set({ game: newGame });
+    get().saveGame();
+  },
+
+  simDay: () => {
+    const { game } = get();
+    if (!game || game.currentSeason.phase !== "regular_season") return;
+    const newGame = simulateDayEngine(game);
+    set({ game: newGame });
+    get().saveGame();
+  },
+
+  simWeek: () => {
+    const { game } = get();
+    if (!game || game.currentSeason.phase !== "regular_season") return;
+    const newGame = simulateWeekEngine(game);
+    set({ game: newGame });
+    get().saveGame();
+  },
+
+  simToMyGame: () => {
+    const { game } = get();
+    if (!game || game.currentSeason.phase !== "regular_season") return;
+    const newGame = simulateToNextMyGameEngine(game);
+    set({ game: newGame });
+    get().saveGame();
   },
 }));

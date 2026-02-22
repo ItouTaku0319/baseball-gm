@@ -25,7 +25,7 @@ export default function Home() {
       <div className="flex flex-col gap-4 w-full max-w-sm">
         <Link
           href="/game/new"
-          className="block text-center py-4 px-8 bg-blue-600 hover:bg-blue-700 rounded-lg text-lg font-semibold transition-colors"
+          className="block text-center py-4 px-8 bg-blue-600 hover:bg-blue-500 rounded-lg text-lg font-semibold transition-colors"
         >
           新しいゲームを始める
         </Link>
@@ -39,20 +39,20 @@ export default function Home() {
               {savedGames.map((save) => (
                 <div
                   key={save.id}
-                  className="flex items-center justify-between p-3 bg-gray-800 rounded-lg border border-gray-700"
+                  className="flex items-center justify-between p-4 bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-500 transition-colors"
                 >
                   <Link
                     href={`/game/${save.id}`}
                     className="flex-1 hover:text-blue-400 transition-colors"
                   >
-                    <div className="font-medium">{save.name}</div>
-                    <div className="text-xs text-gray-500">
+                    <div className="font-medium text-white">{save.name}</div>
+                    <div className="text-xs text-gray-500 mt-1">
                       {new Date(save.updatedAt).toLocaleString("ja-JP")}
                     </div>
                   </Link>
                   <button
                     onClick={() => deleteSave(save.id)}
-                    className="text-sm text-red-400 hover:text-red-300 ml-3"
+                    className="text-sm text-red-400 hover:text-red-300 ml-4 px-2 py-1 rounded hover:bg-red-950/30 transition-colors"
                   >
                     削除
                   </button>

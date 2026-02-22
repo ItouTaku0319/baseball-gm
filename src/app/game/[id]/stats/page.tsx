@@ -1,26 +1,1059 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useGameStore } from "@/store/game-store";
 
-/** TODO: 成績表示機能を実装する */
+// ── Sort types ──
+
+type BattingSortBasic = "avg" | "homeRuns" | "rbi" | "stolenBases";
+type BattingSortAdv = "ops" | "woba" | "wrcPlus" | "war";
+type BattingSort = BattingSortBasic | BattingSortAdv;
+
+type PitchingSortBasic = "era" | "wins" | "strikeouts" | "saves";
+type PitchingSortAdv = "fip" | "war" | "k9" | "kPerBb";
+type PitchingSort = PitchingSortBasic | PitchingSortAdv;
+
+type LeagueFilter = "myTeam" | "central" | "pacific" | "all";
+
+// ── Row interfaces ──
+
+interface BatterRow {
+  playerId: string;
+  name: string;
+  teamId: string;
+  teamShortName: string;
+  teamColor: string;
+  leagueId: string;
+  // basic
+  games: number;
+  pa: number;
+  atBats: number;
+  hits: number;
+  doubles: number;
+  triples: number;
+  homeRuns: number;
+  rbi: number;
+  walks: number;
+  strikeouts: number;
+  stolenBases: number;
+  avg: number;
+  obp: number;
+  slg: number;
+  ops: number;
+  // advanced
+  iso: number;
+  babip: number;
+  kPct: number;
+  bbPct: number;
+  bbPerK: number;
+  woba: number;
+  wrcPlus: number;
+  war: number;
+}
+
+interface PitcherRow {
+  playerId: string;
+  name: string;
+  teamId: string;
+  teamShortName: string;
+  teamColor: string;
+  leagueId: string;
+  // basic
+  games: number;
+  wins: number;
+  losses: number;
+  era: number;
+  outs: number;
+  ipDisplay: string;
+  ip: number;
+  strikeouts: number;
+  walks: number;
+  hits: number;
+  homeRunsAllowed: number;
+  whip: number;
+  saves: number;
+  // advanced
+  k9: number;
+  bb9: number;
+  hr9: number;
+  kPerBb: number;
+  kPct: number;
+  bbPct: number;
+  fip: number;
+  war: number;
+}
+
+// ── wOBA linear weights (MLB standard) ──
+
+const W_BB = 0.69;
+const W_1B = 0.87;
+const W_2B = 1.27;
+const W_3B = 1.62;
+const W_HR = 2.1;
+const WOBA_SCALE = 1.157;
+
+// ── Format helpers ──
+
+function fmtRate(val: number): string {
+  if (!isFinite(val)) return "---";
+  if (val >= 1) return val.toFixed(3);
+  return val.toFixed(3).replace(/^0/, "");
+}
+
+function fmtPct(val: number): string {
+  if (!isFinite(val)) return "---";
+  return (val * 100).toFixed(1) + "%";
+}
+
+function fmtDec2(val: number): string {
+  if (!isFinite(val)) return "---";
+  return val.toFixed(2);
+}
+
+function fmtDec1(val: number): string {
+  if (!isFinite(val)) return "---";
+  return val.toFixed(1);
+}
+
+function fmtWar(val: number): string {
+  if (!isFinite(val)) return "---";
+  return val.toFixed(1);
+}
+
+function fmtInt(val: number): string {
+  return `${val}`;
+}
+
+function formatIP(outs: number): string {
+  const full = Math.floor(outs / 3);
+  const remainder = outs % 3;
+  if (remainder === 0) return `${full}`;
+  return `${full} ${remainder}/3`;
+}
+
+// ── Rank colors ──
+
+const RANK_COLORS = [
+  "text-yellow-400",
+  "text-gray-300",
+  "text-amber-600",
+];
+
+function RankCell({ rank }: { rank: number }) {
+  const color = rank <= 3 ? RANK_COLORS[rank - 1] : "text-gray-500";
+  return <td className={`py-2.5 px-3 font-bold ${color}`}>{rank}</td>;
+}
+
+// ── Main component ──
+
 export default function StatsPage() {
   const params = useParams();
+  const { game, loadGame } = useGameStore();
+  const [tab, setTab] = useState<"batting" | "pitching">("batting");
+  const [subTab, setSubTab] = useState<"basic" | "advanced">("basic");
+  const [leagueFilter, setLeagueFilter] = useState<LeagueFilter>("myTeam");
+  const [battingSort, setBattingSort] = useState<BattingSort>("avg");
+  const [pitchingSort, setPitchingSort] = useState<PitchingSort>("era");
+  const [qualifiedOnly, setQualifiedOnly] = useState(true);
+
+  useEffect(() => {
+    if (!game && params.id) loadGame(params.id as string);
+  }, [game, params.id, loadGame]);
+
+  // 自チームのリーグ
+  const myLeagueId = useMemo(() => {
+    if (!game) return "";
+    for (const league of game.currentSeason.leagues) {
+      if (league.teams.includes(game.myTeamId)) return league.id;
+    }
+    return "";
+  }, [game]);
+
+  const teamLeagueMap = useMemo(() => {
+    if (!game) return new Map<string, string>();
+    const map = new Map<string, string>();
+    for (const league of game.currentSeason.leagues) {
+      for (const teamId of league.teams) {
+        map.set(teamId, league.id);
+      }
+    }
+    return map;
+  }, [game]);
+
+  const teamGames = useMemo(() => {
+    if (!game) return new Map<string, number>();
+    const map = new Map<string, number>();
+    for (const [teamId, record] of Object.entries(
+      game.currentSeason.standings
+    )) {
+      map.set(teamId, record.wins + record.losses + record.draws);
+    }
+    return map;
+  }, [game]);
+
+  // ── Collect batting stats ──
+
+  const { batters, lgWoba, lgRunsPerPA } = useMemo(() => {
+    if (!game)
+      return { batters: [] as BatterRow[], lgWoba: 0, lgRunsPerPA: 0 };
+    const year = game.currentSeason.year;
+    const rows: BatterRow[] = [];
+
+    // First pass: collect raw data
+    let totalWobaNum = 0;
+    let totalPA = 0;
+
+    for (const [teamId, team] of Object.entries(game.teams)) {
+      for (const player of team.roster) {
+        const s = player.careerBattingStats[year];
+        if (!s || s.atBats === 0) continue;
+
+        const singles = s.hits - s.doubles - s.triples - s.homeRuns;
+        const pa = s.atBats + s.walks;
+        const totalBases =
+          singles + s.doubles * 2 + s.triples * 3 + s.homeRuns * 4;
+        const avg = s.hits / s.atBats;
+        const obp = pa > 0 ? (s.hits + s.walks) / pa : 0;
+        const slg = totalBases / s.atBats;
+        const ops = obp + slg;
+        const iso = slg - avg;
+        const babipDenom = s.atBats - s.strikeouts - s.homeRuns;
+        const babip =
+          babipDenom > 0 ? (s.hits - s.homeRuns) / babipDenom : 0;
+        const kPct = pa > 0 ? s.strikeouts / pa : 0;
+        const bbPct = pa > 0 ? s.walks / pa : 0;
+        const bbPerK = s.strikeouts > 0 ? s.walks / s.strikeouts : 0;
+
+        const wobaNum =
+          W_BB * s.walks +
+          W_1B * singles +
+          W_2B * s.doubles +
+          W_3B * s.triples +
+          W_HR * s.homeRuns;
+        const woba = pa > 0 ? wobaNum / pa : 0;
+
+        totalWobaNum += wobaNum;
+        totalPA += pa;
+
+        rows.push({
+          playerId: player.id,
+          name: player.name,
+          teamId,
+          teamShortName: team.shortName,
+          teamColor: team.color,
+          leagueId: teamLeagueMap.get(teamId) || "",
+          games: s.games,
+          pa,
+          atBats: s.atBats,
+          hits: s.hits,
+          doubles: s.doubles,
+          triples: s.triples,
+          homeRuns: s.homeRuns,
+          rbi: s.rbi,
+          walks: s.walks,
+          strikeouts: s.strikeouts,
+          stolenBases: s.stolenBases,
+          avg,
+          obp,
+          slg,
+          ops,
+          iso,
+          babip,
+          kPct,
+          bbPct,
+          bbPerK,
+          woba,
+          wrcPlus: 0, // computed below
+          war: 0, // computed below
+        });
+      }
+    }
+
+    // League averages
+    const lgW = totalPA > 0 ? totalWobaNum / totalPA : 0;
+    const lgRPA = lgW / WOBA_SCALE;
+
+    // Second pass: compute wRC+ and WAR
+    for (const r of rows) {
+      const wRAA = ((r.woba - lgW) / WOBA_SCALE) * r.pa;
+      r.wrcPlus =
+        lgRPA > 0
+          ? (((r.woba - lgW) / WOBA_SCALE + lgRPA) / lgRPA) * 100
+          : 100;
+      const replacement = (r.pa / 600) * 20;
+      r.war = (wRAA + replacement) / 10;
+    }
+
+    return { batters: rows, lgWoba: lgW, lgRunsPerPA: lgRPA };
+  }, [game, teamLeagueMap]);
+
+  // ── Collect pitching stats ──
+
+  const pitchers = useMemo(() => {
+    if (!game) return [] as PitcherRow[];
+    const year = game.currentSeason.year;
+    const rows: PitcherRow[] = [];
+
+    // First pass: league totals for FIP constant
+    let lgIP = 0;
+    let lgER = 0;
+    let lgHR = 0;
+    let lgBBp = 0;
+    let lgKp = 0;
+
+    for (const team of Object.values(game.teams)) {
+      for (const player of team.roster) {
+        const s = player.careerPitchingStats[year];
+        if (!s || s.games === 0) continue;
+        const ip = s.inningsPitched / 3;
+        lgIP += ip;
+        lgER += s.earnedRuns;
+        lgHR += s.homeRunsAllowed;
+        lgBBp += s.walks;
+        lgKp += s.strikeouts;
+      }
+    }
+
+    const lgERA = lgIP > 0 ? (lgER / lgIP) * 9 : 4.0;
+    const lgFIPraw =
+      lgIP > 0 ? (13 * lgHR + 3 * lgBBp - 2 * lgKp) / lgIP : 0;
+    const cFIP = lgERA - lgFIPraw;
+
+    // Second pass: compute per-pitcher stats
+    for (const [teamId, team] of Object.entries(game.teams)) {
+      for (const player of team.roster) {
+        const s = player.careerPitchingStats[year];
+        if (!s || s.games === 0) continue;
+        const ip = s.inningsPitched / 3;
+        const era = ip > 0 ? (s.earnedRuns / ip) * 9 : 0;
+        const whip = ip > 0 ? (s.walks + s.hits) / ip : 0;
+        const k9 = ip > 0 ? (s.strikeouts / ip) * 9 : 0;
+        const bb9 = ip > 0 ? (s.walks / ip) * 9 : 0;
+        const hr9 = ip > 0 ? (s.homeRunsAllowed / ip) * 9 : 0;
+        const kPerBb = s.walks > 0 ? s.strikeouts / s.walks : 0;
+        // Estimate TBF (total batters faced)
+        const tbf = s.inningsPitched + s.hits + s.walks;
+        const kPct = tbf > 0 ? s.strikeouts / tbf : 0;
+        const bbPct = tbf > 0 ? s.walks / tbf : 0;
+        const fipRaw =
+          ip > 0
+            ? (13 * s.homeRunsAllowed + 3 * s.walks - 2 * s.strikeouts) /
+              ip
+            : 0;
+        const fip = fipRaw + cFIP;
+        // Pitching WAR (simplified)
+        const repLevel = lgERA * 1.1;
+        const runsSaved = ip > 0 ? ((repLevel - fip) / 9) * ip : 0;
+        const war = runsSaved / 10;
+
+        rows.push({
+          playerId: player.id,
+          name: player.name,
+          teamId,
+          teamShortName: team.shortName,
+          teamColor: team.color,
+          leagueId: teamLeagueMap.get(teamId) || "",
+          games: s.games,
+          wins: s.wins,
+          losses: s.losses,
+          era,
+          outs: s.inningsPitched,
+          ipDisplay: formatIP(s.inningsPitched),
+          ip,
+          strikeouts: s.strikeouts,
+          walks: s.walks,
+          hits: s.hits,
+          homeRunsAllowed: s.homeRunsAllowed,
+          whip,
+          saves: s.saves,
+          k9,
+          bb9,
+          hr9,
+          kPerBb,
+          kPct,
+          bbPct,
+          fip,
+          war,
+        });
+      }
+    }
+    return rows;
+  }, [game, teamLeagueMap]);
+
+  // ── Qualification checks ──
+
+  const isQualifiedBatter = (r: BatterRow) => {
+    const g = teamGames.get(r.teamId) || 0;
+    return r.pa >= Math.floor(g * 3.1);
+  };
+
+  const isQualifiedPitcher = (r: PitcherRow) => {
+    const g = teamGames.get(r.teamId) || 0;
+    return r.outs >= g * 3;
+  };
+
+  // ── Filter & sort ──
+
+  const applyLeagueFilter = <T extends { teamId: string; leagueId: string }>(
+    rows: T[]
+  ): T[] => {
+    switch (leagueFilter) {
+      case "myTeam":
+        return rows.filter((r) => r.teamId === game?.myTeamId);
+      case "central":
+      case "pacific":
+        return rows.filter((r) => r.leagueId === leagueFilter);
+      default:
+        return rows;
+    }
+  };
+
+  const filteredBatters = useMemo(() => {
+    let rows = applyLeagueFilter(batters);
+    if (qualifiedOnly && (battingSort === "avg" || battingSort === "woba" || battingSort === "wrcPlus")) {
+      rows = rows.filter(isQualifiedBatter);
+    }
+    const asc = false; // all batting sorts are descending
+    return [...rows].sort((a, b) => {
+      const va = a[battingSort as keyof BatterRow] as number;
+      const vb = b[battingSort as keyof BatterRow] as number;
+      return asc ? va - vb : vb - va;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batters, leagueFilter, qualifiedOnly, battingSort, teamGames, game?.myTeamId]);
+
+  const filteredPitchers = useMemo(() => {
+    let rows = applyLeagueFilter(pitchers);
+    if (qualifiedOnly && (pitchingSort === "era" || pitchingSort === "fip")) {
+      rows = rows.filter(isQualifiedPitcher);
+    }
+    const ascending = pitchingSort === "era" || pitchingSort === "fip";
+    return [...rows].sort((a, b) => {
+      const va = a[pitchingSort as keyof PitcherRow] as number;
+      const vb = b[pitchingSort as keyof PitcherRow] as number;
+      return ascending ? va - vb : vb - va;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pitchers, leagueFilter, qualifiedOnly, pitchingSort, teamGames, game?.myTeamId]);
+
+  // ── Title leaders ──
+
+  const titles = useMemo(() => {
+    const qB = batters.filter(isQualifiedBatter);
+    const qP = pitchers.filter(isQualifiedPitcher);
+
+    const max = <T,>(arr: T[], key: (i: T) => number): T | null =>
+      arr.length === 0
+        ? null
+        : arr.reduce((b, r) => (key(r) > key(b) ? r : b));
+    const min = <T,>(arr: T[], key: (i: T) => number): T | null =>
+      arr.length === 0
+        ? null
+        : arr.reduce((b, r) => (key(r) < key(b) ? r : b));
+
+    const val = <T extends BatterRow | PitcherRow>(
+      leader: T | null,
+      fmt: (l: T) => string
+    ) => (leader ? fmt(leader) : "---");
+
+    return [
+      {
+        label: "首位打者",
+        player: max(qB, (r) => r.avg),
+        value: val(max(qB, (r) => r.avg), (l) => fmtRate(l.avg)),
+      },
+      {
+        label: "本塁打王",
+        player: max(batters, (r) => r.homeRuns),
+        value: val(max(batters, (r) => r.homeRuns), (l) => fmtInt(l.homeRuns)),
+      },
+      {
+        label: "打点王",
+        player: max(batters, (r) => r.rbi),
+        value: val(max(batters, (r) => r.rbi), (l) => fmtInt(l.rbi)),
+      },
+      {
+        label: "盗塁王",
+        player: max(batters, (r) => r.stolenBases),
+        value: val(max(batters, (r) => r.stolenBases), (l) =>
+          fmtInt(l.stolenBases)
+        ),
+      },
+      {
+        label: "最優秀防御率",
+        player: min(qP, (r) => r.era),
+        value: val(min(qP, (r) => r.era), (l) => fmtDec2(l.era)),
+      },
+      {
+        label: "最多勝",
+        player: max(pitchers, (r) => r.wins),
+        value: val(max(pitchers, (r) => r.wins), (l) => fmtInt(l.wins)),
+      },
+      {
+        label: "最多奪三振",
+        player: max(pitchers, (r) => r.strikeouts),
+        value: val(max(pitchers, (r) => r.strikeouts), (l) =>
+          fmtInt(l.strikeouts)
+        ),
+      },
+      {
+        label: "最多セーブ",
+        player: max(pitchers, (r) => r.saves),
+        value: val(max(pitchers, (r) => r.saves), (l) => fmtInt(l.saves)),
+      },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batters, pitchers, teamGames]);
+
+  // ── Sub-tab switch handler ──
+
+  const handleSubTab = (st: "basic" | "advanced") => {
+    setSubTab(st);
+    if (tab === "batting") {
+      setBattingSort(st === "basic" ? "avg" : "war");
+    } else {
+      setPitchingSort(st === "basic" ? "era" : "fip");
+    }
+  };
+
+  const handleMainTab = (t: "batting" | "pitching") => {
+    setTab(t);
+    setSubTab("basic");
+    if (t === "batting") setBattingSort("avg");
+    else setPitchingSort("era");
+  };
+
+  if (!game) return <div className="p-8 text-gray-400">読み込み中...</div>;
+
+  const hasStats = batters.length > 0 || pitchers.length > 0;
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
+    <div className="max-w-7xl mx-auto p-6">
+      {/* ヘッダー */}
       <div className="flex items-center gap-4 mb-6">
-        <Link href={`/game/${params.id}`} className="text-gray-400 hover:text-white">← 戻る</Link>
+        <Link
+          href={`/game/${params.id}`}
+          className="text-gray-400 hover:text-white"
+        >
+          &larr; 戻る
+        </Link>
         <h1 className="text-2xl font-bold">成績</h1>
+        <span className="text-gray-500 text-sm">
+          {game.currentSeason.year}年シーズン
+        </span>
       </div>
 
-      <div className="p-8 bg-gray-800/50 rounded-lg border border-dashed border-gray-600 text-center">
-        <p className="text-gray-400 text-lg mb-2">統計・成績画面</p>
-        <p className="text-gray-500 text-sm">
-          打率ランキング、本塁打ランキング、防御率ランキングなど
-          シーズン統計を表示する機能を実装予定。
-        </p>
-      </div>
+      {!hasStats ? (
+        <div className="p-8 bg-gray-800/50 rounded-lg border border-dashed border-gray-600 text-center">
+          <p className="text-gray-400 text-lg mb-2">データなし</p>
+          <p className="text-gray-500 text-sm">
+            シーズンが開始されると成績データが表示されます。
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* タイトル争い */}
+          <div className="mb-8">
+            <h2 className="text-lg font-semibold mb-3 text-yellow-400">
+              タイトル争い
+            </h2>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {titles.map((t) => {
+                const p = t.player as (BatterRow | PitcherRow) | null;
+                return (
+                  <div
+                    key={t.label}
+                    className="bg-gray-800 rounded-lg p-4 border border-gray-700"
+                  >
+                    <div className="text-xs text-gray-400 mb-2 tracking-wide">
+                      {t.label}
+                    </div>
+                    <div
+                      className="text-2xl font-bold text-white tracking-wider"
+                      style={{ fontVariantNumeric: "tabular-nums" }}
+                    >
+                      {t.value}
+                    </div>
+                    {p ? (
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: p.teamColor }}
+                        />
+                        <span className="text-sm text-gray-200 truncate">
+                          {p.name}
+                        </span>
+                        <span className="text-xs text-gray-500 ml-auto flex-shrink-0">
+                          {p.teamShortName}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-gray-500 mt-2">---</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* メインタブ */}
+          <div className="flex gap-1 mb-0">
+            {(
+              [
+                ["batting", "打撃成績"],
+                ["pitching", "投手成績"],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => handleMainTab(key)}
+                className={`px-5 py-2.5 rounded-t-lg font-semibold transition-colors ${
+                  tab === key
+                    ? "bg-gray-800 text-white border-t-2 border-x border-blue-400 border-x-gray-600"
+                    : "bg-gray-900 text-gray-400 hover:text-white"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* サブタブ + フィルター */}
+          <div className="bg-gray-800 border-x border-gray-600 px-4 pt-3 pb-3 flex flex-wrap items-center gap-3">
+            {/* 基本 / セイバー */}
+            <div className="flex bg-gray-900 rounded-lg p-0.5">
+              {(
+                [
+                  ["basic", "基本"],
+                  ["advanced", "セイバー"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => handleSubTab(key)}
+                  className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                    subTab === key
+                      ? "bg-gray-700 text-white"
+                      : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="w-px h-5 bg-gray-700" />
+
+            {/* リーグフィルター */}
+            <div className="flex gap-1">
+              {(
+                [
+                  ["myTeam", "自チーム"],
+                  ["central", "セ・リーグ"],
+                  ["pacific", "パ・リーグ"],
+                  ["all", "全体"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  onClick={() => setLeagueFilter(value)}
+                  className={`px-3 py-1 rounded text-sm transition-colors ${
+                    leagueFilter === value
+                      ? value === "myTeam"
+                        ? "bg-blue-600 text-white"
+                        : "bg-gray-600 text-white"
+                      : "bg-gray-900 text-gray-400 hover:text-white"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer ml-auto">
+              <input
+                type="checkbox"
+                checked={qualifiedOnly}
+                onChange={(e) => setQualifiedOnly(e.target.checked)}
+                className="rounded bg-gray-700 border-gray-600"
+              />
+              規定到達のみ
+            </label>
+          </div>
+
+          {/* テーブル */}
+          <div className="border-x border-b border-gray-600 rounded-b-lg overflow-hidden">
+            {tab === "batting" ? (
+              subTab === "basic" ? (
+                <BattingBasicTable
+                  rows={filteredBatters}
+                  sort={battingSort as BattingSortBasic}
+                  onSort={(s) => setBattingSort(s)}
+                  myTeamId={game.myTeamId}
+                />
+              ) : (
+                <BattingAdvTable
+                  rows={filteredBatters}
+                  sort={battingSort as BattingSortAdv}
+                  onSort={(s) => setBattingSort(s)}
+                  myTeamId={game.myTeamId}
+                />
+              )
+            ) : subTab === "basic" ? (
+              <PitchingBasicTable
+                rows={filteredPitchers}
+                sort={pitchingSort as PitchingSortBasic}
+                onSort={(s) => setPitchingSort(s)}
+                myTeamId={game.myTeamId}
+              />
+            ) : (
+              <PitchingAdvTable
+                rows={filteredPitchers}
+                sort={pitchingSort as PitchingSortAdv}
+                onSort={(s) => setPitchingSort(s)}
+                myTeamId={game.myTeamId}
+              />
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Shared table components ──
+
+function SortTh({
+  label,
+  sortKey,
+  current,
+  onSort,
+}: {
+  label: string;
+  sortKey: string;
+  current: string;
+  onSort: (k: string) => void;
+}) {
+  const active = current === sortKey;
+  return (
+    <th
+      className={`py-3 px-3 text-right cursor-pointer select-none transition-colors hover:text-blue-300 whitespace-nowrap ${
+        active ? "text-yellow-400 bg-yellow-400/5" : "text-gray-400"
+      }`}
+      onClick={() => onSort(sortKey)}
+    >
+      {label}
+      {active ? " \u25BC" : " \u25BD"}
+    </th>
+  );
+}
+
+function Th({ children, className = "" }: { children: string; className?: string }) {
+  return (
+    <th
+      className={`py-3 px-3 text-right text-gray-400 whitespace-nowrap ${className}`}
+    >
+      {children}
+    </th>
+  );
+}
+
+const N = "py-2.5 px-3 text-right text-gray-100";
+const NM = `${N} font-mono tracking-wide`;
+const HL = "bg-yellow-400/5 text-yellow-300 font-bold";
+
+function rowClass(i: number, isMyTeam: boolean): string {
+  return `border-b border-gray-700/30 transition-colors hover:bg-gray-700/40 ${
+    isMyTeam ? "bg-blue-950/40" : i % 2 === 1 ? "bg-gray-800/60" : ""
+  }`;
+}
+
+function TeamCell({ r }: { r: { teamColor: string; teamShortName: string } }) {
+  return (
+    <td className="py-2.5 px-3 text-center">
+      <span className="inline-flex items-center gap-1.5">
+        <span
+          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+          style={{ backgroundColor: r.teamColor }}
+        />
+        <span className="text-gray-300 text-sm">{r.teamShortName}</span>
+      </span>
+    </td>
+  );
+}
+
+function EmptyRow({ cols }: { cols: number }) {
+  return (
+    <tr>
+      <td colSpan={cols} className="text-center py-8 text-gray-500">
+        該当する選手がいません
+      </td>
+    </tr>
+  );
+}
+
+// ── Batting Basic ──
+
+function BattingBasicTable({
+  rows,
+  sort,
+  onSort,
+  myTeamId,
+}: {
+  rows: BatterRow[];
+  sort: BattingSortBasic;
+  onSort: (s: BattingSortBasic) => void;
+  myTeamId: string;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table
+        className="w-full whitespace-nowrap"
+        style={{ fontVariantNumeric: "tabular-nums" }}
+      >
+        <thead>
+          <tr className="border-b-2 border-gray-600 bg-gray-900 text-xs uppercase tracking-wider">
+            <th className="py-3 px-3 text-left text-gray-400 w-10">#</th>
+            <th className="py-3 px-3 text-left text-gray-400">選手名</th>
+            <th className="py-3 px-3 text-center text-gray-400">チーム</th>
+            <Th>試合</Th>
+            <Th>打席</Th>
+            <Th>打数</Th>
+            <Th>安打</Th>
+            <SortTh label="打率" sortKey="avg" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
+            <SortTh label="本塁打" sortKey="homeRuns" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
+            <SortTh label="打点" sortKey="rbi" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
+            <SortTh label="盗塁" sortKey="stolenBases" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
+            <Th>四球</Th>
+            <Th>三振</Th>
+            <Th>出塁率</Th>
+            <Th>長打率</Th>
+            <Th>OPS</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <EmptyRow cols={16} />
+          ) : (
+            rows.map((r, i) => (
+              <tr key={r.playerId} className={rowClass(i, r.teamId === myTeamId)}>
+                <RankCell rank={i + 1} />
+                <td className="py-2.5 px-3 font-medium text-white">{r.name}</td>
+                <TeamCell r={r} />
+                <td className={N}>{r.games}</td>
+                <td className={N}>{r.pa}</td>
+                <td className={N}>{r.atBats}</td>
+                <td className={N}>{r.hits}</td>
+                <td className={`${NM} ${sort === "avg" ? HL : ""}`}>{fmtRate(r.avg)}</td>
+                <td className={`${N} ${sort === "homeRuns" ? HL : ""}`}>{r.homeRuns}</td>
+                <td className={`${N} ${sort === "rbi" ? HL : ""}`}>{r.rbi}</td>
+                <td className={`${N} ${sort === "stolenBases" ? HL : ""}`}>{r.stolenBases}</td>
+                <td className={N}>{r.walks}</td>
+                <td className={N}>{r.strikeouts}</td>
+                <td className={NM}>{fmtRate(r.obp)}</td>
+                <td className={NM}>{fmtRate(r.slg)}</td>
+                <td className={NM}>{fmtRate(r.ops)}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Batting Advanced ──
+
+function BattingAdvTable({
+  rows,
+  sort,
+  onSort,
+  myTeamId,
+}: {
+  rows: BatterRow[];
+  sort: BattingSortAdv;
+  onSort: (s: BattingSortAdv) => void;
+  myTeamId: string;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table
+        className="w-full whitespace-nowrap"
+        style={{ fontVariantNumeric: "tabular-nums" }}
+      >
+        <thead>
+          <tr className="border-b-2 border-gray-600 bg-gray-900 text-xs uppercase tracking-wider">
+            <th className="py-3 px-3 text-left text-gray-400 w-10">#</th>
+            <th className="py-3 px-3 text-left text-gray-400">選手名</th>
+            <th className="py-3 px-3 text-center text-gray-400">チーム</th>
+            <Th>打席</Th>
+            <Th>K%</Th>
+            <Th>BB%</Th>
+            <Th>BB/K</Th>
+            <Th>ISO</Th>
+            <Th>BABIP</Th>
+            <SortTh label="OPS" sortKey="ops" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
+            <SortTh label="wOBA" sortKey="woba" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
+            <SortTh label="wRC+" sortKey="wrcPlus" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
+            <SortTh label="WAR" sortKey="war" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <EmptyRow cols={13} />
+          ) : (
+            rows.map((r, i) => (
+              <tr key={r.playerId} className={rowClass(i, r.teamId === myTeamId)}>
+                <RankCell rank={i + 1} />
+                <td className="py-2.5 px-3 font-medium text-white">{r.name}</td>
+                <TeamCell r={r} />
+                <td className={N}>{r.pa}</td>
+                <td className={N}>{fmtPct(r.kPct)}</td>
+                <td className={N}>{fmtPct(r.bbPct)}</td>
+                <td className={NM}>{fmtDec2(r.bbPerK)}</td>
+                <td className={NM}>{fmtRate(r.iso)}</td>
+                <td className={NM}>{fmtRate(r.babip)}</td>
+                <td className={`${NM} ${sort === "ops" ? HL : ""}`}>{fmtRate(r.ops)}</td>
+                <td className={`${NM} ${sort === "woba" ? HL : ""}`}>{fmtRate(r.woba)}</td>
+                <td className={`${N} ${sort === "wrcPlus" ? HL : ""}`}>{Math.round(r.wrcPlus)}</td>
+                <td className={`${NM} ${sort === "war" ? HL : ""}`}>{fmtWar(r.war)}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Pitching Basic ──
+
+function PitchingBasicTable({
+  rows,
+  sort,
+  onSort,
+  myTeamId,
+}: {
+  rows: PitcherRow[];
+  sort: PitchingSortBasic;
+  onSort: (s: PitchingSortBasic) => void;
+  myTeamId: string;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table
+        className="w-full whitespace-nowrap"
+        style={{ fontVariantNumeric: "tabular-nums" }}
+      >
+        <thead>
+          <tr className="border-b-2 border-gray-600 bg-gray-900 text-xs uppercase tracking-wider">
+            <th className="py-3 px-3 text-left text-gray-400 w-10">#</th>
+            <th className="py-3 px-3 text-left text-gray-400">選手名</th>
+            <th className="py-3 px-3 text-center text-gray-400">チーム</th>
+            <Th>試合</Th>
+            <SortTh label="勝" sortKey="wins" current={sort} onSort={(k) => onSort(k as PitchingSortBasic)} />
+            <Th>敗</Th>
+            <SortTh label="防御率" sortKey="era" current={sort} onSort={(k) => onSort(k as PitchingSortBasic)} />
+            <Th>投球回</Th>
+            <SortTh label="奪三振" sortKey="strikeouts" current={sort} onSort={(k) => onSort(k as PitchingSortBasic)} />
+            <Th>四球</Th>
+            <Th>被安打</Th>
+            <Th>被本塁打</Th>
+            <Th>WHIP</Th>
+            <SortTh label="セーブ" sortKey="saves" current={sort} onSort={(k) => onSort(k as PitchingSortBasic)} />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <EmptyRow cols={14} />
+          ) : (
+            rows.map((r, i) => (
+              <tr key={r.playerId} className={rowClass(i, r.teamId === myTeamId)}>
+                <RankCell rank={i + 1} />
+                <td className="py-2.5 px-3 font-medium text-white">{r.name}</td>
+                <TeamCell r={r} />
+                <td className={N}>{r.games}</td>
+                <td className={`${N} ${sort === "wins" ? HL : ""}`}>{r.wins}</td>
+                <td className={N}>{r.losses}</td>
+                <td className={`${NM} ${sort === "era" ? HL : ""}`}>{fmtDec2(r.era)}</td>
+                <td className={N}>{r.ipDisplay}</td>
+                <td className={`${N} ${sort === "strikeouts" ? HL : ""}`}>{r.strikeouts}</td>
+                <td className={N}>{r.walks}</td>
+                <td className={N}>{r.hits}</td>
+                <td className={N}>{r.homeRunsAllowed}</td>
+                <td className={NM}>{fmtDec2(r.whip)}</td>
+                <td className={`${N} ${sort === "saves" ? HL : ""}`}>{r.saves}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Pitching Advanced ──
+
+function PitchingAdvTable({
+  rows,
+  sort,
+  onSort,
+  myTeamId,
+}: {
+  rows: PitcherRow[];
+  sort: PitchingSortAdv;
+  onSort: (s: PitchingSortAdv) => void;
+  myTeamId: string;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table
+        className="w-full whitespace-nowrap"
+        style={{ fontVariantNumeric: "tabular-nums" }}
+      >
+        <thead>
+          <tr className="border-b-2 border-gray-600 bg-gray-900 text-xs uppercase tracking-wider">
+            <th className="py-3 px-3 text-left text-gray-400 w-10">#</th>
+            <th className="py-3 px-3 text-left text-gray-400">選手名</th>
+            <th className="py-3 px-3 text-center text-gray-400">チーム</th>
+            <Th>投球回</Th>
+            <SortTh label="K/9" sortKey="k9" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
+            <Th>BB/9</Th>
+            <Th>HR/9</Th>
+            <SortTh label="K/BB" sortKey="kPerBb" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
+            <Th>K%</Th>
+            <Th>BB%</Th>
+            <SortTh label="FIP" sortKey="fip" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
+            <Th>WHIP</Th>
+            <SortTh label="WAR" sortKey="war" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <EmptyRow cols={13} />
+          ) : (
+            rows.map((r, i) => (
+              <tr key={r.playerId} className={rowClass(i, r.teamId === myTeamId)}>
+                <RankCell rank={i + 1} />
+                <td className="py-2.5 px-3 font-medium text-white">{r.name}</td>
+                <TeamCell r={r} />
+                <td className={N}>{r.ipDisplay}</td>
+                <td className={`${NM} ${sort === "k9" ? HL : ""}`}>{fmtDec2(r.k9)}</td>
+                <td className={NM}>{fmtDec2(r.bb9)}</td>
+                <td className={NM}>{fmtDec2(r.hr9)}</td>
+                <td className={`${NM} ${sort === "kPerBb" ? HL : ""}`}>{fmtDec2(r.kPerBb)}</td>
+                <td className={N}>{fmtPct(r.kPct)}</td>
+                <td className={N}>{fmtPct(r.bbPct)}</td>
+                <td className={`${NM} ${sort === "fip" ? HL : ""}`}>{fmtDec2(r.fip)}</td>
+                <td className={NM}>{fmtDec2(r.whip)}</td>
+                <td className={`${NM} ${sort === "war" ? HL : ""}`}>{fmtWar(r.war)}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }

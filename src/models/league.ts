@@ -36,6 +36,31 @@ export interface ScheduleEntry {
   result: GameResult | null;
 }
 
+/** 選手の1試合の打撃成績 */
+export interface PlayerGameStats {
+  playerId: string;
+  atBats: number;
+  hits: number;
+  doubles: number;
+  triples: number;
+  homeRuns: number;
+  rbi: number;
+  runs: number;
+  walks: number;
+  strikeouts: number;
+}
+
+/** 投手の1試合の成績 */
+export interface PitcherGameLog {
+  playerId: string;
+  inningsPitched: number; // アウト数 (3で1イニング)
+  hits: number;
+  earnedRuns: number;
+  walks: number;
+  strikeouts: number;
+  homeRunsAllowed: number;
+}
+
 /** 試合結果 */
 export interface GameResult {
   homeScore: number;
@@ -48,6 +73,10 @@ export interface GameResult {
   losingPitcherId: string | null;
   /** セーブ投手ID */
   savePitcherId: string | null;
+  /** 各選手の打撃成績 */
+  playerStats: PlayerGameStats[];
+  /** 投手成績 */
+  pitcherStats: PitcherGameLog[];
 }
 
 /** 1イニングのスコア */

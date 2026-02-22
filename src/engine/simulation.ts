@@ -1,6 +1,6 @@
 import type { Team } from "@/models/team";
-import type { GameResult, InningScore } from "@/models/league";
-import type { Player, BatterSeasonStats, PitcherSeasonStats } from "@/models/player";
+import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog } from "@/models/league";
+import type { Player } from "@/models/player";
 
 /**
  * 試合シミュレーションエンジン
@@ -121,11 +121,37 @@ function advanceRunners(
   return { bases: newBases, runsScored: runs };
 }
 
+/** 個人成績マップを取得・初期化するヘルパー */
+function getOrCreateBatterStats(
+  map: Map<string, PlayerGameStats>,
+  playerId: string
+): PlayerGameStats {
+  let stats = map.get(playerId);
+  if (!stats) {
+    stats = {
+      playerId,
+      atBats: 0,
+      hits: 0,
+      doubles: 0,
+      triples: 0,
+      homeRuns: 0,
+      rbi: 0,
+      runs: 0,
+      walks: 0,
+      strikeouts: 0,
+    };
+    map.set(playerId, stats);
+  }
+  return stats;
+}
+
 /** 1イニングの半分 (表 or 裏) をシミュレート */
 function simulateHalfInning(
   battingTeam: Player[],
   pitcher: Player,
-  batterIndex: number
+  batterIndex: number,
+  batterStatsMap: Map<string, PlayerGameStats>,
+  pitcherLog: PitcherGameLog
 ): { runs: number; hits: number; nextBatterIndex: number } {
   let outs = 0;
   let runs = 0;
@@ -136,20 +162,67 @@ function simulateHalfInning(
   while (outs < 3) {
     const batter = battingTeam[idx % battingTeam.length];
     const result = simulateAtBat(batter, pitcher);
+    const bs = getOrCreateBatterStats(batterStatsMap, batter.id);
 
     if (result === "strikeout" || result === "groundout" || result === "flyout") {
       outs++;
-    } else {
-      if (["single", "double", "triple", "homerun", "error"].includes(result)) {
-        hits++;
+      if (result === "strikeout") {
+        bs.strikeouts++;
+        pitcherLog.strikeouts++;
       }
+      // groundout/flyout は打数にカウント
+      bs.atBats++;
+    } else if (result === "walk") {
+      bs.walks++;
+      pitcherLog.walks++;
       const advance = advanceRunners(bases, result);
       bases = advance.bases;
-      runs += advance.runsScored;
+      const scored = advance.runsScored;
+      runs += scored;
+      bs.rbi += scored;
+      pitcherLog.earnedRuns += scored;
+    } else {
+      // ヒット系 (single, double, triple, homerun, error)
+      bs.atBats++;
+      if (result !== "error") {
+        bs.hits++;
+        hits++;
+        pitcherLog.hits++;
+      }
+      if (result === "double") bs.doubles++;
+      if (result === "triple") bs.triples++;
+      if (result === "homerun") {
+        bs.homeRuns++;
+        pitcherLog.homeRunsAllowed++;
+      }
+
+      const advance = advanceRunners(bases, result);
+      bases = advance.bases;
+      const scored = advance.runsScored;
+      runs += scored;
+      bs.rbi += scored;
+      pitcherLog.earnedRuns += scored;
+
+      // ホームランの場合、打者自身も得点
+      if (result === "homerun") {
+        bs.runs++;
+      }
     }
 
     idx++;
+    pitcherLog.inningsPitched++; // 打者1人分 = 暫定カウント（後で補正）
   }
+
+  // 3アウトで1イニング分 = outsの数だけinningsPitchedをカウント
+  // 上のループで全打者分カウントしてしまっているので補正
+  // 正確にはアウト数だけカウントすべき
+  // → ループ内のカウントを削除し、ここで3アウト分を加算
+  // 上でinningsPitchedを打者数分足してしまったので、リセットして正しくする
+  const totalBatters = idx - batterIndex;
+  pitcherLog.inningsPitched -= totalBatters; // 打者分のカウントを取り消し
+  pitcherLog.inningsPitched += 3; // 3アウト = 1イニング分
+
+  // 得点した走者の runs を追加 (簡易: ホームラン以外の得点はランナーに帰属しにくいので省略)
 
   return { runs, hits, nextBatterIndex: idx };
 }
@@ -183,6 +256,27 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
   const homeBatters = getBattingOrder(homeTeam);
   const awayBatters = getBattingOrder(awayTeam);
 
+  // 個人成績マップ
+  const batterStatsMap = new Map<string, PlayerGameStats>();
+  const homePitcherLog: PitcherGameLog = {
+    playerId: homePitcher.id,
+    inningsPitched: 0,
+    hits: 0,
+    earnedRuns: 0,
+    walks: 0,
+    strikeouts: 0,
+    homeRunsAllowed: 0,
+  };
+  const awayPitcherLog: PitcherGameLog = {
+    playerId: awayPitcher.id,
+    inningsPitched: 0,
+    hits: 0,
+    earnedRuns: 0,
+    walks: 0,
+    strikeouts: 0,
+    homeRunsAllowed: 0,
+  };
+
   const innings: InningScore[] = [];
   let homeScore = 0;
   let awayScore = 0;
@@ -192,7 +286,9 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
   // 9イニング
   for (let i = 0; i < 9; i++) {
     // 表 (アウェイチームの攻撃)
-    const topResult = simulateHalfInning(awayBatters, homePitcher, awayBatterIdx);
+    const topResult = simulateHalfInning(
+      awayBatters, homePitcher, awayBatterIdx, batterStatsMap, homePitcherLog
+    );
     awayScore += topResult.runs;
     awayBatterIdx = topResult.nextBatterIndex;
 
@@ -200,7 +296,9 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
     // 9回裏でホームチームがリードしていたらスキップ
     let bottomRuns = 0;
     if (!(i === 8 && homeScore > awayScore)) {
-      const bottomResult = simulateHalfInning(homeBatters, awayPitcher, homeBatterIdx);
+      const bottomResult = simulateHalfInning(
+        homeBatters, awayPitcher, homeBatterIdx, batterStatsMap, awayPitcherLog
+      );
       bottomRuns = bottomResult.runs;
       homeScore += bottomRuns;
       homeBatterIdx = bottomResult.nextBatterIndex;
@@ -214,23 +312,34 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
 
   // 延長 (最大12回まで)
   while (homeScore === awayScore && innings.length < 12) {
-    const topResult = simulateHalfInning(awayBatters, homePitcher, awayBatterIdx);
+    const topResult = simulateHalfInning(
+      awayBatters, homePitcher, awayBatterIdx, batterStatsMap, homePitcherLog
+    );
     awayScore += topResult.runs;
     awayBatterIdx = topResult.nextBatterIndex;
 
-    const bottomResult = simulateHalfInning(homeBatters, awayPitcher, homeBatterIdx);
+    const bottomResult = simulateHalfInning(
+      homeBatters, awayPitcher, homeBatterIdx, batterStatsMap, awayPitcherLog
+    );
     homeScore += bottomResult.runs;
     homeBatterIdx = bottomResult.nextBatterIndex;
 
     innings.push({ top: topResult.runs, bottom: bottomResult.runs });
   }
 
+  // 打者の出場試合数を記録
+  for (const stats of batterStatsMap.values()) {
+    (stats as PlayerGameStats & { games?: number }).games = 1;
+  }
+
   return {
     homeScore,
     awayScore,
     innings,
-    winningPitcherId: homeScore > awayScore ? homePitcher.id : awayPitcher.id,
-    losingPitcherId: homeScore > awayScore ? awayPitcher.id : homePitcher.id,
+    winningPitcherId: homeScore > awayScore ? homePitcher.id : awayScore > homeScore ? awayPitcher.id : null,
+    losingPitcherId: homeScore > awayScore ? awayPitcher.id : awayScore > homeScore ? homePitcher.id : null,
     savePitcherId: null,
+    playerStats: Array.from(batterStatsMap.values()),
+    pitcherStats: [homePitcherLog, awayPitcherLog],
   };
 }

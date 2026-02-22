@@ -10,7 +10,7 @@ export default function TradePage() {
   return (
     <div className="max-w-4xl mx-auto p-6">
       <div className="flex items-center gap-4 mb-6">
-        <Link href={`/game/${params.id}`} className="text-gray-400 hover:text-white">← 戻る</Link>
+        <Link href={`/game/${params.id}`} className="text-gray-400 hover:text-white">&larr; 戻る</Link>
         <h1 className="text-2xl font-bold">トレード</h1>
       </div>
 
