@@ -51,21 +51,32 @@ export function simulateNextGame(state: GameState): GameState {
   // 選手成績更新
   const newTeams = updatePlayerStats(state.teams, result, season.year);
 
+  // ローテーションインデックスを進める
+  const teamsWithRotation = advanceRotation(newTeams, entry.homeTeamId, entry.awayTeamId);
+
   const newIndex = season.currentGameIndex + 1;
   const isSeasonOver = newIndex >= season.schedule.length;
 
-  return {
+  let newState: GameState = {
     ...state,
-    teams: newTeams,
+    teams: teamsWithRotation,
     currentSeason: {
       ...season,
       schedule: newSchedule,
       standings: newStandings,
       currentGameIndex: newIndex,
-      phase: isSeasonOver ? "offseason" : season.phase,
+      phase: isSeasonOver ? "regular_season" : season.phase,
     },
     updatedAt: new Date().toISOString(),
   };
+
+  // レギュラーシーズン終了 → CS 1stステージに遷移
+  if (isSeasonOver) {
+    const { initClimaxFirst } = require("./playoffs");
+    newState = initClimaxFirst(newState);
+  }
+
+  return newState;
 }
 
 /** N試合をまとめてシミュレーションする */
@@ -153,6 +164,29 @@ function updateStandings(
   return newStandings;
 }
 
+/** ローテーションインデックスを進める */
+function advanceRotation(
+  teams: Record<string, Team>,
+  homeTeamId: string,
+  awayTeamId: string
+): Record<string, Team> {
+  const newTeams = { ...teams };
+  for (const teamId of [homeTeamId, awayTeamId]) {
+    const team = newTeams[teamId];
+    if (team?.lineupConfig?.startingRotation?.length) {
+      const rotLen = team.lineupConfig.startingRotation.length;
+      newTeams[teamId] = {
+        ...team,
+        lineupConfig: {
+          ...team.lineupConfig,
+          rotationIndex: (team.lineupConfig.rotationIndex + 1) % rotLen,
+        },
+      };
+    }
+  }
+  return newTeams;
+}
+
 /** 選手の成績を更新する */
 function updatePlayerStats(
   teams: Record<string, Team>,
@@ -220,8 +254,8 @@ function updatePlayerStats(
               runs: existing.runs + bs.runs,
               walks: existing.walks + bs.walks,
               strikeouts: existing.strikeouts + bs.strikeouts,
-              stolenBases: existing.stolenBases,
-              caughtStealing: existing.caughtStealing,
+              stolenBases: existing.stolenBases + (bs.stolenBases || 0),
+              caughtStealing: existing.caughtStealing + (bs.caughtStealing || 0),
               errors: existing.errors,
             },
           },

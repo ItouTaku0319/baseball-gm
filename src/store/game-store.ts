@@ -7,6 +7,11 @@ import {
   simulateWeek as simulateWeekEngine,
   simulateToNextMyGame as simulateToNextMyGameEngine,
 } from "@/engine/season-advancement";
+import { autoConfigureLineup, autoAssignRosterLevels } from "@/engine/lineup";
+import {
+  simulatePlayoffGame,
+  simulateAllPlayoffGames,
+} from "@/engine/playoffs";
 
 /**
  * ゲーム全体の状態管理
@@ -40,6 +45,10 @@ interface GameStore {
   simWeek: () => void;
   /** 自チームの次の試合まで進める */
   simToMyGame: () => void;
+  /** ポストシーズン: 次の1試合 */
+  simPlayoffGame: () => void;
+  /** ポストシーズン: 全試合一括 */
+  simAllPlayoffs: () => void;
 }
 
 const SAVE_PREFIX = "baseball-gm-save-";
@@ -80,7 +89,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
   loadGame: (id) => {
     const data = localStorage.getItem(SAVE_PREFIX + id);
     if (data) {
-      set({ game: JSON.parse(data) });
+      const game: GameState = JSON.parse(data);
+      // セーブ互換: lineupConfig / rosterLevels が未設定のチームを自動設定
+      const newTeams = { ...game.teams };
+      for (const [teamId, team] of Object.entries(newTeams)) {
+        let updated = team;
+        if (!updated.lineupConfig) {
+          updated = { ...updated, lineupConfig: autoConfigureLineup(updated) };
+        }
+        if (!updated.rosterLevels) {
+          // 旧25人セーブは全員1軍扱い
+          const levels: Record<string, "ichi_gun" | "ni_gun"> = {};
+          for (const p of updated.roster) {
+            levels[p.id] = "ichi_gun";
+          }
+          updated = { ...updated, rosterLevels: levels };
+        }
+        if (updated !== team) newTeams[teamId] = updated;
+      }
+      // セーブ互換: 旧 SeasonPhase "playoffs" を "climax_first" に変換
+      let season = game.currentSeason;
+      if ((season.phase as string) === "playoffs") {
+        season = { ...season, phase: "offseason" };
+      }
+      set({ game: { ...game, teams: newTeams, currentSeason: season } });
     }
   },
 
@@ -133,6 +165,26 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const { game } = get();
     if (!game || game.currentSeason.phase !== "regular_season") return;
     const newGame = simulateToNextMyGameEngine(game);
+    set({ game: newGame });
+    get().saveGame();
+  },
+
+  simPlayoffGame: () => {
+    const { game } = get();
+    if (!game) return;
+    const phase = game.currentSeason.phase;
+    if (phase !== "climax_first" && phase !== "climax_final" && phase !== "japan_series") return;
+    const newGame = simulatePlayoffGame(game);
+    set({ game: newGame });
+    get().saveGame();
+  },
+
+  simAllPlayoffs: () => {
+    const { game } = get();
+    if (!game) return;
+    const phase = game.currentSeason.phase;
+    if (phase !== "climax_first" && phase !== "climax_final" && phase !== "japan_series") return;
+    const newGame = simulateAllPlayoffGames(game);
     set({ game: newGame });
     get().saveGame();
   },

@@ -133,17 +133,142 @@ function formatIP(outs: number): string {
   return `${full} ${remainder}/3`;
 }
 
-// ── Rank colors ──
+// ══════════════════════════════════════════════════════════
+// テーブルスタイル一元管理
+// ここだけ変えれば 打撃(基本/応用)・投手(基本/応用) 全テーブルに反映
+// ══════════════════════════════════════════════════════════
 
-const RANK_COLORS = [
-  "text-yellow-400",
-  "text-gray-300",
-  "text-amber-600",
-];
+const S = {
+  // ── ヘッダー ──
+  thBase:
+    "py-2 px-2 whitespace-nowrap text-xs sticky top-0 z-10 border-b-2 border-gray-600",
+  thBg: "bg-gray-900",
+  thSortActiveBg: "bg-gray-800",
+  headerRow: "text-xs uppercase tracking-wider",
+
+  // ── データセル ──
+  cell: "py-1.5 px-2 text-right text-gray-100 text-sm",
+  cellMono:
+    "py-1.5 px-2 text-right text-gray-100 text-sm font-mono tracking-wide",
+  highlight: "bg-yellow-400/5 text-yellow-300 font-bold",
+
+  // ── 固定カラム (順位・選手名・チーム) ──
+  rankCell: "py-1.5 px-2 font-bold text-sm",
+  nameCell: "py-1.5 px-2 font-medium text-white text-sm",
+  teamCell: "py-1.5 px-2 text-center text-sm",
+  rankColors: ["text-yellow-400", "text-blue-300", "text-amber-600"] as const,
+  rankDefault: "text-gray-400",
+
+  // ── 行 ──
+  myTeamRow: "bg-blue-900/60 border-l-2 border-l-blue-400",
+  evenRow: "bg-gray-900",
+  oddRow: "bg-gray-800/70",
+  rowBorder: "border-b border-gray-700/30",
+  rowBorder5: "border-b-2 border-gray-600/60",
+  rowHover: "transition-colors hover:bg-gray-700/50",
+
+  // ── コンテナ ──
+  wrapper: "overflow-auto max-h-[600px]",
+  table: "w-full whitespace-nowrap",
+  empty: "text-center py-8 text-gray-500",
+};
+
+/** 行クラスを生成 */
+function rowCls(i: number, isMyTeam: boolean): string {
+  const bg = isMyTeam ? S.myTeamRow : i % 2 === 1 ? S.oddRow : S.evenRow;
+  const border = (i + 1) % 5 === 0 ? S.rowBorder5 : S.rowBorder;
+  return `${border} ${S.rowHover} ${bg}`;
+}
+
+// ── 共通セルコンポーネント ──
+
+function SortTh({
+  label,
+  sortKey,
+  current,
+  onSort,
+}: {
+  label: string;
+  sortKey: string;
+  current: string;
+  onSort: (k: string) => void;
+}) {
+  const active = current === sortKey;
+  return (
+    <th
+      className={`${S.thBase} text-right cursor-pointer select-none hover:text-blue-300 ${
+        active
+          ? `${S.thSortActiveBg} text-yellow-400`
+          : `${S.thBg} text-gray-400`
+      }`}
+      onClick={() => onSort(sortKey)}
+    >
+      {label}
+      {active ? " \u25BC" : " \u25BD"}
+    </th>
+  );
+}
+
+function Th({
+  children,
+  className = "",
+}: {
+  children: string;
+  className?: string;
+}) {
+  return (
+    <th
+      className={`${S.thBase} ${S.thBg} text-right text-gray-400 ${className}`}
+    >
+      {children}
+    </th>
+  );
+}
+
+function RankTh() {
+  return <th className={`${S.thBase} ${S.thBg} text-left w-8`}>#</th>;
+}
+
+function NameTh() {
+  return <th className={`${S.thBase} ${S.thBg} text-left`}>選手名</th>;
+}
+
+function TeamTh() {
+  return <th className={`${S.thBase} ${S.thBg} text-center`}>チーム</th>;
+}
 
 function RankCell({ rank }: { rank: number }) {
-  const color = rank <= 3 ? RANK_COLORS[rank - 1] : "text-gray-500";
-  return <td className={`py-2.5 px-3 font-bold ${color}`}>{rank}</td>;
+  const color =
+    rank <= 3 ? S.rankColors[rank - 1] : S.rankDefault;
+  return <td className={`${S.rankCell} ${color}`}>{rank}</td>;
+}
+
+function TeamCell({
+  r,
+}: {
+  r: { teamColor: string; teamShortName: string };
+}) {
+  return (
+    <td className={S.teamCell}>
+      <span className="inline-flex items-center gap-1.5">
+        <span
+          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+          style={{ backgroundColor: r.teamColor }}
+        />
+        <span className="text-gray-300 text-sm">{r.teamShortName}</span>
+      </span>
+    </td>
+  );
+}
+
+function EmptyRow({ cols }: { cols: number }) {
+  return (
+    <tr>
+      <td colSpan={cols} className={S.empty}>
+        該当する選手がいません
+      </td>
+    </tr>
+  );
 }
 
 // ── Main component ──
@@ -723,78 +848,7 @@ export default function StatsPage() {
   );
 }
 
-// ── Shared table components ──
-
-function SortTh({
-  label,
-  sortKey,
-  current,
-  onSort,
-}: {
-  label: string;
-  sortKey: string;
-  current: string;
-  onSort: (k: string) => void;
-}) {
-  const active = current === sortKey;
-  return (
-    <th
-      className={`py-3 px-3 text-right cursor-pointer select-none transition-colors hover:text-blue-300 whitespace-nowrap ${
-        active ? "text-yellow-400 bg-yellow-400/5" : "text-gray-400"
-      }`}
-      onClick={() => onSort(sortKey)}
-    >
-      {label}
-      {active ? " \u25BC" : " \u25BD"}
-    </th>
-  );
-}
-
-function Th({ children, className = "" }: { children: string; className?: string }) {
-  return (
-    <th
-      className={`py-3 px-3 text-right text-gray-400 whitespace-nowrap ${className}`}
-    >
-      {children}
-    </th>
-  );
-}
-
-const N = "py-2.5 px-3 text-right text-gray-100";
-const NM = `${N} font-mono tracking-wide`;
-const HL = "bg-yellow-400/5 text-yellow-300 font-bold";
-
-function rowClass(i: number, isMyTeam: boolean): string {
-  return `border-b border-gray-700/30 transition-colors hover:bg-gray-700/40 ${
-    isMyTeam ? "bg-blue-950/40" : i % 2 === 1 ? "bg-gray-800/60" : ""
-  }`;
-}
-
-function TeamCell({ r }: { r: { teamColor: string; teamShortName: string } }) {
-  return (
-    <td className="py-2.5 px-3 text-center">
-      <span className="inline-flex items-center gap-1.5">
-        <span
-          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-          style={{ backgroundColor: r.teamColor }}
-        />
-        <span className="text-gray-300 text-sm">{r.teamShortName}</span>
-      </span>
-    </td>
-  );
-}
-
-function EmptyRow({ cols }: { cols: number }) {
-  return (
-    <tr>
-      <td colSpan={cols} className="text-center py-8 text-gray-500">
-        該当する選手がいません
-      </td>
-    </tr>
-  );
-}
-
-// ── Batting Basic ──
+// ── 打撃成績 (基本) ──
 
 function BattingBasicTable({
   rows,
@@ -808,16 +862,13 @@ function BattingBasicTable({
   myTeamId: string;
 }) {
   return (
-    <div className="overflow-x-auto">
-      <table
-        className="w-full whitespace-nowrap"
-        style={{ fontVariantNumeric: "tabular-nums" }}
-      >
+    <div className={S.wrapper}>
+      <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
         <thead>
-          <tr className="border-b-2 border-gray-600 bg-gray-900 text-xs uppercase tracking-wider">
-            <th className="py-3 px-3 text-left text-gray-400 w-10">#</th>
-            <th className="py-3 px-3 text-left text-gray-400">選手名</th>
-            <th className="py-3 px-3 text-center text-gray-400">チーム</th>
+          <tr className={S.headerRow}>
+            <RankTh />
+            <NameTh />
+            <TeamTh />
             <Th>試合</Th>
             <Th>打席</Th>
             <Th>打数</Th>
@@ -838,23 +889,23 @@ function BattingBasicTable({
             <EmptyRow cols={16} />
           ) : (
             rows.map((r, i) => (
-              <tr key={r.playerId} className={rowClass(i, r.teamId === myTeamId)}>
+              <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
                 <RankCell rank={i + 1} />
-                <td className="py-2.5 px-3 font-medium text-white">{r.name}</td>
+                <td className={S.nameCell}>{r.name}</td>
                 <TeamCell r={r} />
-                <td className={N}>{r.games}</td>
-                <td className={N}>{r.pa}</td>
-                <td className={N}>{r.atBats}</td>
-                <td className={N}>{r.hits}</td>
-                <td className={`${NM} ${sort === "avg" ? HL : ""}`}>{fmtRate(r.avg)}</td>
-                <td className={`${N} ${sort === "homeRuns" ? HL : ""}`}>{r.homeRuns}</td>
-                <td className={`${N} ${sort === "rbi" ? HL : ""}`}>{r.rbi}</td>
-                <td className={`${N} ${sort === "stolenBases" ? HL : ""}`}>{r.stolenBases}</td>
-                <td className={N}>{r.walks}</td>
-                <td className={N}>{r.strikeouts}</td>
-                <td className={NM}>{fmtRate(r.obp)}</td>
-                <td className={NM}>{fmtRate(r.slg)}</td>
-                <td className={NM}>{fmtRate(r.ops)}</td>
+                <td className={S.cell}>{r.games}</td>
+                <td className={S.cell}>{r.pa}</td>
+                <td className={S.cell}>{r.atBats}</td>
+                <td className={S.cell}>{r.hits}</td>
+                <td className={`${S.cellMono} ${sort === "avg" ? S.highlight : ""}`}>{fmtRate(r.avg)}</td>
+                <td className={`${S.cell} ${sort === "homeRuns" ? S.highlight : ""}`}>{r.homeRuns}</td>
+                <td className={`${S.cell} ${sort === "rbi" ? S.highlight : ""}`}>{r.rbi}</td>
+                <td className={`${S.cell} ${sort === "stolenBases" ? S.highlight : ""}`}>{r.stolenBases}</td>
+                <td className={S.cell}>{r.walks}</td>
+                <td className={S.cell}>{r.strikeouts}</td>
+                <td className={S.cellMono}>{fmtRate(r.obp)}</td>
+                <td className={S.cellMono}>{fmtRate(r.slg)}</td>
+                <td className={S.cellMono}>{fmtRate(r.ops)}</td>
               </tr>
             ))
           )}
@@ -864,7 +915,7 @@ function BattingBasicTable({
   );
 }
 
-// ── Batting Advanced ──
+// ── 打撃成績 (セイバー) ──
 
 function BattingAdvTable({
   rows,
@@ -878,16 +929,13 @@ function BattingAdvTable({
   myTeamId: string;
 }) {
   return (
-    <div className="overflow-x-auto">
-      <table
-        className="w-full whitespace-nowrap"
-        style={{ fontVariantNumeric: "tabular-nums" }}
-      >
+    <div className={S.wrapper}>
+      <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
         <thead>
-          <tr className="border-b-2 border-gray-600 bg-gray-900 text-xs uppercase tracking-wider">
-            <th className="py-3 px-3 text-left text-gray-400 w-10">#</th>
-            <th className="py-3 px-3 text-left text-gray-400">選手名</th>
-            <th className="py-3 px-3 text-center text-gray-400">チーム</th>
+          <tr className={S.headerRow}>
+            <RankTh />
+            <NameTh />
+            <TeamTh />
             <Th>打席</Th>
             <Th>K%</Th>
             <Th>BB%</Th>
@@ -905,20 +953,20 @@ function BattingAdvTable({
             <EmptyRow cols={13} />
           ) : (
             rows.map((r, i) => (
-              <tr key={r.playerId} className={rowClass(i, r.teamId === myTeamId)}>
+              <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
                 <RankCell rank={i + 1} />
-                <td className="py-2.5 px-3 font-medium text-white">{r.name}</td>
+                <td className={S.nameCell}>{r.name}</td>
                 <TeamCell r={r} />
-                <td className={N}>{r.pa}</td>
-                <td className={N}>{fmtPct(r.kPct)}</td>
-                <td className={N}>{fmtPct(r.bbPct)}</td>
-                <td className={NM}>{fmtDec2(r.bbPerK)}</td>
-                <td className={NM}>{fmtRate(r.iso)}</td>
-                <td className={NM}>{fmtRate(r.babip)}</td>
-                <td className={`${NM} ${sort === "ops" ? HL : ""}`}>{fmtRate(r.ops)}</td>
-                <td className={`${NM} ${sort === "woba" ? HL : ""}`}>{fmtRate(r.woba)}</td>
-                <td className={`${N} ${sort === "wrcPlus" ? HL : ""}`}>{Math.round(r.wrcPlus)}</td>
-                <td className={`${NM} ${sort === "war" ? HL : ""}`}>{fmtWar(r.war)}</td>
+                <td className={S.cell}>{r.pa}</td>
+                <td className={S.cell}>{fmtPct(r.kPct)}</td>
+                <td className={S.cell}>{fmtPct(r.bbPct)}</td>
+                <td className={S.cellMono}>{fmtDec2(r.bbPerK)}</td>
+                <td className={S.cellMono}>{fmtRate(r.iso)}</td>
+                <td className={S.cellMono}>{fmtRate(r.babip)}</td>
+                <td className={`${S.cellMono} ${sort === "ops" ? S.highlight : ""}`}>{fmtRate(r.ops)}</td>
+                <td className={`${S.cellMono} ${sort === "woba" ? S.highlight : ""}`}>{fmtRate(r.woba)}</td>
+                <td className={`${S.cell} ${sort === "wrcPlus" ? S.highlight : ""}`}>{Math.round(r.wrcPlus)}</td>
+                <td className={`${S.cellMono} ${sort === "war" ? S.highlight : ""}`}>{fmtWar(r.war)}</td>
               </tr>
             ))
           )}
@@ -928,7 +976,7 @@ function BattingAdvTable({
   );
 }
 
-// ── Pitching Basic ──
+// ── 投手成績 (基本) ──
 
 function PitchingBasicTable({
   rows,
@@ -942,16 +990,13 @@ function PitchingBasicTable({
   myTeamId: string;
 }) {
   return (
-    <div className="overflow-x-auto">
-      <table
-        className="w-full whitespace-nowrap"
-        style={{ fontVariantNumeric: "tabular-nums" }}
-      >
+    <div className={S.wrapper}>
+      <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
         <thead>
-          <tr className="border-b-2 border-gray-600 bg-gray-900 text-xs uppercase tracking-wider">
-            <th className="py-3 px-3 text-left text-gray-400 w-10">#</th>
-            <th className="py-3 px-3 text-left text-gray-400">選手名</th>
-            <th className="py-3 px-3 text-center text-gray-400">チーム</th>
+          <tr className={S.headerRow}>
+            <RankTh />
+            <NameTh />
+            <TeamTh />
             <Th>試合</Th>
             <SortTh label="勝" sortKey="wins" current={sort} onSort={(k) => onSort(k as PitchingSortBasic)} />
             <Th>敗</Th>
@@ -970,21 +1015,21 @@ function PitchingBasicTable({
             <EmptyRow cols={14} />
           ) : (
             rows.map((r, i) => (
-              <tr key={r.playerId} className={rowClass(i, r.teamId === myTeamId)}>
+              <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
                 <RankCell rank={i + 1} />
-                <td className="py-2.5 px-3 font-medium text-white">{r.name}</td>
+                <td className={S.nameCell}>{r.name}</td>
                 <TeamCell r={r} />
-                <td className={N}>{r.games}</td>
-                <td className={`${N} ${sort === "wins" ? HL : ""}`}>{r.wins}</td>
-                <td className={N}>{r.losses}</td>
-                <td className={`${NM} ${sort === "era" ? HL : ""}`}>{fmtDec2(r.era)}</td>
-                <td className={N}>{r.ipDisplay}</td>
-                <td className={`${N} ${sort === "strikeouts" ? HL : ""}`}>{r.strikeouts}</td>
-                <td className={N}>{r.walks}</td>
-                <td className={N}>{r.hits}</td>
-                <td className={N}>{r.homeRunsAllowed}</td>
-                <td className={NM}>{fmtDec2(r.whip)}</td>
-                <td className={`${N} ${sort === "saves" ? HL : ""}`}>{r.saves}</td>
+                <td className={S.cell}>{r.games}</td>
+                <td className={`${S.cell} ${sort === "wins" ? S.highlight : ""}`}>{r.wins}</td>
+                <td className={S.cell}>{r.losses}</td>
+                <td className={`${S.cellMono} ${sort === "era" ? S.highlight : ""}`}>{fmtDec2(r.era)}</td>
+                <td className={S.cell}>{r.ipDisplay}</td>
+                <td className={`${S.cell} ${sort === "strikeouts" ? S.highlight : ""}`}>{r.strikeouts}</td>
+                <td className={S.cell}>{r.walks}</td>
+                <td className={S.cell}>{r.hits}</td>
+                <td className={S.cell}>{r.homeRunsAllowed}</td>
+                <td className={S.cellMono}>{fmtDec2(r.whip)}</td>
+                <td className={`${S.cell} ${sort === "saves" ? S.highlight : ""}`}>{r.saves}</td>
               </tr>
             ))
           )}
@@ -994,7 +1039,7 @@ function PitchingBasicTable({
   );
 }
 
-// ── Pitching Advanced ──
+// ── 投手成績 (セイバー) ──
 
 function PitchingAdvTable({
   rows,
@@ -1008,16 +1053,13 @@ function PitchingAdvTable({
   myTeamId: string;
 }) {
   return (
-    <div className="overflow-x-auto">
-      <table
-        className="w-full whitespace-nowrap"
-        style={{ fontVariantNumeric: "tabular-nums" }}
-      >
+    <div className={S.wrapper}>
+      <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
         <thead>
-          <tr className="border-b-2 border-gray-600 bg-gray-900 text-xs uppercase tracking-wider">
-            <th className="py-3 px-3 text-left text-gray-400 w-10">#</th>
-            <th className="py-3 px-3 text-left text-gray-400">選手名</th>
-            <th className="py-3 px-3 text-center text-gray-400">チーム</th>
+          <tr className={S.headerRow}>
+            <RankTh />
+            <NameTh />
+            <TeamTh />
             <Th>投球回</Th>
             <SortTh label="K/9" sortKey="k9" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
             <Th>BB/9</Th>
@@ -1035,20 +1077,20 @@ function PitchingAdvTable({
             <EmptyRow cols={13} />
           ) : (
             rows.map((r, i) => (
-              <tr key={r.playerId} className={rowClass(i, r.teamId === myTeamId)}>
+              <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
                 <RankCell rank={i + 1} />
-                <td className="py-2.5 px-3 font-medium text-white">{r.name}</td>
+                <td className={S.nameCell}>{r.name}</td>
                 <TeamCell r={r} />
-                <td className={N}>{r.ipDisplay}</td>
-                <td className={`${NM} ${sort === "k9" ? HL : ""}`}>{fmtDec2(r.k9)}</td>
-                <td className={NM}>{fmtDec2(r.bb9)}</td>
-                <td className={NM}>{fmtDec2(r.hr9)}</td>
-                <td className={`${NM} ${sort === "kPerBb" ? HL : ""}`}>{fmtDec2(r.kPerBb)}</td>
-                <td className={N}>{fmtPct(r.kPct)}</td>
-                <td className={N}>{fmtPct(r.bbPct)}</td>
-                <td className={`${NM} ${sort === "fip" ? HL : ""}`}>{fmtDec2(r.fip)}</td>
-                <td className={NM}>{fmtDec2(r.whip)}</td>
-                <td className={`${NM} ${sort === "war" ? HL : ""}`}>{fmtWar(r.war)}</td>
+                <td className={S.cell}>{r.ipDisplay}</td>
+                <td className={`${S.cellMono} ${sort === "k9" ? S.highlight : ""}`}>{fmtDec2(r.k9)}</td>
+                <td className={S.cellMono}>{fmtDec2(r.bb9)}</td>
+                <td className={S.cellMono}>{fmtDec2(r.hr9)}</td>
+                <td className={`${S.cellMono} ${sort === "kPerBb" ? S.highlight : ""}`}>{fmtDec2(r.kPerBb)}</td>
+                <td className={S.cell}>{fmtPct(r.kPct)}</td>
+                <td className={S.cell}>{fmtPct(r.bbPct)}</td>
+                <td className={`${S.cellMono} ${sort === "fip" ? S.highlight : ""}`}>{fmtDec2(r.fip)}</td>
+                <td className={S.cellMono}>{fmtDec2(r.whip)}</td>
+                <td className={`${S.cellMono} ${sort === "war" ? S.highlight : ""}`}>{fmtWar(r.war)}</td>
               </tr>
             ))
           )}

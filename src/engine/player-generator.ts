@@ -165,12 +165,46 @@ export function generateDraftClass(count: number): Player[] {
 }
 
 /** チーム用のロスターを生成 */
-export function generateRoster(size = 25): Player[] {
-  const pitchers = Array.from({ length: 11 }, () =>
-    generatePlayer({ forcePitcher: true, overallRange: [35, 75] })
-  );
-  const batters = Array.from({ length: size - 11 }, () =>
-    generatePlayer({ forcePitcher: false, overallRange: [35, 75] })
-  );
-  return [...pitchers, ...batters];
+export function generateRoster(size = 65): Player[] {
+  if (size <= 25) {
+    // 旧互換: 25人
+    const pitchers = Array.from({ length: 11 }, () =>
+      generatePlayer({ forcePitcher: true, overallRange: [35, 75] })
+    );
+    const batters = Array.from({ length: size - 11 }, () =>
+      generatePlayer({ forcePitcher: false, overallRange: [35, 75] })
+    );
+    return [...pitchers, ...batters];
+  }
+
+  // 65人ロスター: 主力層 + 育成層
+  const players: Player[] = [];
+
+  // 主力投手 (12人: 先発6 + リリーフ6)
+  for (let i = 0; i < 12; i++) {
+    players.push(
+      generatePlayer({ forcePitcher: true, overallRange: [50, 80], ageRange: [22, 34] })
+    );
+  }
+  // 主力野手 (16人)
+  for (let i = 0; i < 16; i++) {
+    players.push(
+      generatePlayer({ forcePitcher: false, overallRange: [50, 80], ageRange: [22, 34] })
+    );
+  }
+  // 2軍投手 (14人: 若手中心)
+  for (let i = 0; i < 14; i++) {
+    players.push(
+      generatePlayer({ forcePitcher: true, overallRange: [25, 55], ageRange: [18, 28] })
+    );
+  }
+  // 2軍野手 (残り)
+  const remaining = size - players.length;
+  for (let i = 0; i < remaining; i++) {
+    players.push(
+      generatePlayer({ forcePitcher: false, overallRange: [25, 55], ageRange: [18, 28] })
+    );
+  }
+
+  return players;
 }

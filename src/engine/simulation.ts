@@ -85,20 +85,21 @@ function simulateAtBat(batter: Player, pitcher: Player): AtBatResult {
   return Math.random() < 0.5 ? "groundout" : "flyout";
 }
 
-/** 走者の状態 */
+/** 走者の状態 (Player を追跡して盗塁時に走力を参照) */
 interface BaseRunners {
-  first: boolean;
-  second: boolean;
-  third: boolean;
+  first: Player | null;
+  second: Player | null;
+  third: Player | null;
 }
 
 /** 打席結果に応じて走者を進塁させ、得点を計算する (簡易版) */
 function advanceRunners(
   bases: BaseRunners,
-  result: AtBatResult
+  result: AtBatResult,
+  batter: Player
 ): { bases: BaseRunners; runsScored: number } {
   let runs = 0;
-  const newBases: BaseRunners = { first: false, second: false, third: false };
+  const newBases: BaseRunners = { first: null, second: null, third: null };
 
   switch (result) {
     case "homerun":
@@ -106,29 +107,31 @@ function advanceRunners(
       break;
     case "triple":
       runs = (bases.first ? 1 : 0) + (bases.second ? 1 : 0) + (bases.third ? 1 : 0);
-      newBases.third = true;
+      newBases.third = batter;
       break;
     case "double":
       runs = (bases.second ? 1 : 0) + (bases.third ? 1 : 0);
-      if (bases.first) newBases.third = true;
-      newBases.second = true;
+      if (bases.first) newBases.third = bases.first;
+      newBases.second = batter;
       break;
     case "single":
     case "error":
       runs = bases.third ? 1 : 0;
-      if (bases.second) newBases.third = true;
-      if (bases.first) newBases.second = true;
-      newBases.first = true;
+      if (bases.second) newBases.third = bases.second;
+      if (bases.first) newBases.second = bases.first;
+      newBases.first = batter;
       break;
-    case "walk":
+    case "walk": {
+      // 押し出し: フォースされた走者のみ進塁
       if (bases.first && bases.second && bases.third) runs = 1;
-      if (bases.first && bases.second) newBases.third = true;
-      if (bases.first) newBases.second = true;
-      newBases.first = true;
-      // 元の走者がいたところを維持
-      if (bases.third && !(bases.first && bases.second)) newBases.third = true;
-      if (bases.second && !bases.first) newBases.second = true;
+      if (bases.first && bases.second) newBases.third = bases.second;
+      if (bases.first) newBases.second = bases.first;
+      newBases.first = batter;
+      // フォースされない走者はそのまま
+      if (bases.third && !(bases.first && bases.second)) newBases.third = bases.third;
+      if (bases.second && !bases.first) newBases.second = bases.second;
       break;
+    }
     default:
       // アウト: 走者はそのまま (簡易版)
       return { bases, runsScored: 0 };
@@ -155,10 +158,99 @@ function getOrCreateBatterStats(
       runs: 0,
       walks: 0,
       strikeouts: 0,
+      stolenBases: 0,
+      caughtStealing: 0,
     };
     map.set(playerId, stats);
   }
   return stats;
+}
+
+/**
+ * 盗塁を試みる
+ *
+ * 走力が高い走者ほど盗塁を試み、成功率は走力 vs 捕手の肩力で決まる。
+ * - 1塁→2塁: 走力50以上で試行の可能性あり
+ * - 2塁→3塁: 走力65以上で試行（頻度低め）
+ * - 2アウト時は試行率が下がる
+ */
+function attemptStolenBases(
+  bases: BaseRunners,
+  outs: number,
+  catcher: Player,
+  batterStatsMap: Map<string, PlayerGameStats>
+): { bases: BaseRunners; additionalOuts: number } {
+  const newBases = { ...bases };
+  let additionalOuts = 0;
+
+  const outsFactor = outs === 2 ? 0.3 : 1.0;
+  const catcherArm = catcher.batting.arm;
+
+  // 1塁走者 → 2塁盗塁 (2塁が空いている場合のみ)
+  if (newBases.first && !newBases.second) {
+    const runner = newBases.first;
+    const speed = runner.batting.speed;
+
+    let attemptRate = 0;
+    if (speed >= 80) attemptRate = 0.20;
+    else if (speed >= 70) attemptRate = 0.12;
+    else if (speed >= 60) attemptRate = 0.05;
+    else if (speed >= 50) attemptRate = 0.02;
+
+    if (attemptRate > 0 && Math.random() < attemptRate * outsFactor) {
+      const baseRate = 0.65;
+      const speedBonus = (speed - 50) * 0.005;
+      const armPenalty = (catcherArm - 50) * 0.004;
+      const successRate = Math.min(0.95, Math.max(0.30, baseRate + speedBonus - armPenalty));
+
+      const bs = getOrCreateBatterStats(batterStatsMap, runner.id);
+      if (Math.random() < successRate) {
+        newBases.second = runner;
+        newBases.first = null;
+        bs.stolenBases++;
+      } else {
+        newBases.first = null;
+        bs.caughtStealing++;
+        additionalOuts++;
+      }
+    }
+  }
+
+  // 2塁走者 → 3塁盗塁 (3塁が空いている場合のみ、頻度低め)
+  if (newBases.second && !newBases.third && additionalOuts === 0) {
+    const runner = newBases.second;
+    const speed = runner.batting.speed;
+
+    let attemptRate = 0;
+    if (speed >= 85) attemptRate = 0.08;
+    else if (speed >= 75) attemptRate = 0.04;
+    else if (speed >= 65) attemptRate = 0.01;
+
+    if (attemptRate > 0 && Math.random() < attemptRate * outsFactor) {
+      const baseRate = 0.60;
+      const speedBonus = (speed - 50) * 0.005;
+      const armPenalty = (catcherArm - 50) * 0.005;
+      const successRate = Math.min(0.90, Math.max(0.25, baseRate + speedBonus - armPenalty));
+
+      const bs = getOrCreateBatterStats(batterStatsMap, runner.id);
+      if (Math.random() < successRate) {
+        newBases.third = runner;
+        newBases.second = null;
+        bs.stolenBases++;
+      } else {
+        newBases.second = null;
+        bs.caughtStealing++;
+        additionalOuts++;
+      }
+    }
+  }
+
+  return { bases: newBases, additionalOuts };
+}
+
+/** 捕手を取得 (position === "C" の選手、いなければ最初の野手) */
+function getCatcher(team: Team): Player {
+  return team.roster.find((p) => p.position === "C") || team.roster[0];
 }
 
 /** 1イニングの半分 (表 or 裏) をシミュレート */
@@ -167,15 +259,24 @@ function simulateHalfInning(
   pitcher: Player,
   batterIndex: number,
   batterStatsMap: Map<string, PlayerGameStats>,
-  pitcherLog: PitcherGameLog
+  pitcherLog: PitcherGameLog,
+  catcher: Player
 ): { runs: number; hits: number; nextBatterIndex: number } {
   let outs = 0;
   let runs = 0;
   let hits = 0;
-  let bases: BaseRunners = { first: false, second: false, third: false };
+  let bases: BaseRunners = { first: null, second: null, third: null };
   let idx = batterIndex;
 
   while (outs < 3) {
+    // 盗塁試行 (打席前)
+    if (bases.first || bases.second) {
+      const stealResult = attemptStolenBases(bases, outs, catcher, batterStatsMap);
+      bases = stealResult.bases;
+      outs += stealResult.additionalOuts;
+      if (outs >= 3) break;
+    }
+
     const batter = battingTeam[idx % battingTeam.length];
     const result = simulateAtBat(batter, pitcher);
     const bs = getOrCreateBatterStats(batterStatsMap, batter.id);
@@ -191,7 +292,7 @@ function simulateHalfInning(
     } else if (result === "walk") {
       bs.walks++;
       pitcherLog.walks++;
-      const advance = advanceRunners(bases, result);
+      const advance = advanceRunners(bases, result, batter);
       bases = advance.bases;
       const scored = advance.runsScored;
       runs += scored;
@@ -212,7 +313,7 @@ function simulateHalfInning(
         pitcherLog.homeRunsAllowed++;
       }
 
-      const advance = advanceRunners(bases, result);
+      const advance = advanceRunners(bases, result, batter);
       bases = advance.bases;
       const scored = advance.runsScored;
       runs += scored;
@@ -226,33 +327,50 @@ function simulateHalfInning(
     }
 
     idx++;
-    pitcherLog.inningsPitched++; // 打者1人分 = 暫定カウント（後で補正）
   }
 
-  // 3アウトで1イニング分 = outsの数だけinningsPitchedをカウント
-  // 上のループで全打者分カウントしてしまっているので補正
-  // 正確にはアウト数だけカウントすべき
-  // → ループ内のカウントを削除し、ここで3アウト分を加算
-  // 上でinningsPitchedを打者数分足してしまったので、リセットして正しくする
-  const totalBatters = idx - batterIndex;
-  pitcherLog.inningsPitched -= totalBatters; // 打者分のカウントを取り消し
-  pitcherLog.inningsPitched += 3; // 3アウト = 1イニング分
-
-  // 得点した走者の runs を追加 (簡易: ホームラン以外の得点はランナーに帰属しにくいので省略)
+  // 3アウトで1イニング分 (outs数 = 投球回としてカウント)
+  pitcherLog.inningsPitched += 3;
 
   return { runs, hits, nextBatterIndex: idx };
 }
 
-/** 先発投手を取得 (ロスターの投手から適当に選ぶ) */
+/** 1軍選手のみ取得 */
+function getActivePlayers(team: Team): Player[] {
+  if (!team.rosterLevels) return team.roster;
+  return team.roster.filter(
+    (p) => !team.rosterLevels || team.rosterLevels[p.id] === "ichi_gun"
+  );
+}
+
+/** 先発投手を取得 (lineupConfig参照、未設定ならフォールバック) */
 function getStartingPitcher(team: Team): Player {
-  const pitchers = team.roster.filter((p) => p.isPitcher);
+  const active = getActivePlayers(team);
+  const pitchers = active.filter((p) => p.isPitcher);
+
+  if (team.lineupConfig?.startingRotation?.length) {
+    const rotation = team.lineupConfig.startingRotation;
+    const idx = team.lineupConfig.rotationIndex % rotation.length;
+    const pitcher = active.find((p) => p.id === rotation[idx]);
+    if (pitcher) return pitcher;
+  }
+
   return pitchers[Math.floor(Math.random() * Math.min(5, pitchers.length))];
 }
 
-/** 打順を取得 (投手以外のレギュラー9人) */
+/** 打順を取得 (lineupConfig参照、未設定ならフォールバック) */
 function getBattingOrder(team: Team): Player[] {
-  const batters = team.roster.filter((p) => !p.isPitcher);
-  // 能力値の高い順にソートして上位9人
+  const active = getActivePlayers(team);
+
+  if (team.lineupConfig?.battingOrder?.length) {
+    const order = team.lineupConfig.battingOrder
+      .map((id) => active.find((p) => p.id === id))
+      .filter((p): p is Player => p !== undefined);
+    if (order.length >= 9) return order.slice(0, 9);
+  }
+
+  // フォールバック: 能力値の高い順にソートして上位9人
+  const batters = active.filter((p) => !p.isPitcher);
   return batters
     .sort((a, b) => {
       const aOvr = a.batting.contact + a.batting.power + a.batting.speed;
@@ -271,6 +389,8 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
   const awayPitcher = getStartingPitcher(awayTeam);
   const homeBatters = getBattingOrder(homeTeam);
   const awayBatters = getBattingOrder(awayTeam);
+  const homeCatcher = getCatcher(homeTeam);
+  const awayCatcher = getCatcher(awayTeam);
 
   // 個人成績マップ
   const batterStatsMap = new Map<string, PlayerGameStats>();
@@ -301,19 +421,19 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
 
   // 9イニング
   for (let i = 0; i < 9; i++) {
-    // 表 (アウェイチームの攻撃)
+    // 表 (アウェイチームの攻撃 → ホームチームが守備 → homeCatcher)
     const topResult = simulateHalfInning(
-      awayBatters, homePitcher, awayBatterIdx, batterStatsMap, homePitcherLog
+      awayBatters, homePitcher, awayBatterIdx, batterStatsMap, homePitcherLog, homeCatcher
     );
     awayScore += topResult.runs;
     awayBatterIdx = topResult.nextBatterIndex;
 
-    // 裏 (ホームチームの攻撃)
+    // 裏 (ホームチームの攻撃 → アウェイチームが守備 → awayCatcher)
     // 9回裏でホームチームがリードしていたらスキップ
     let bottomRuns = 0;
     if (!(i === 8 && homeScore > awayScore)) {
       const bottomResult = simulateHalfInning(
-        homeBatters, awayPitcher, homeBatterIdx, batterStatsMap, awayPitcherLog
+        homeBatters, awayPitcher, homeBatterIdx, batterStatsMap, awayPitcherLog, awayCatcher
       );
       bottomRuns = bottomResult.runs;
       homeScore += bottomRuns;
@@ -329,13 +449,13 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
   // 延長 (最大12回まで)
   while (homeScore === awayScore && innings.length < 12) {
     const topResult = simulateHalfInning(
-      awayBatters, homePitcher, awayBatterIdx, batterStatsMap, homePitcherLog
+      awayBatters, homePitcher, awayBatterIdx, batterStatsMap, homePitcherLog, homeCatcher
     );
     awayScore += topResult.runs;
     awayBatterIdx = topResult.nextBatterIndex;
 
     const bottomResult = simulateHalfInning(
-      homeBatters, awayPitcher, homeBatterIdx, batterStatsMap, awayPitcherLog
+      homeBatters, awayPitcher, homeBatterIdx, batterStatsMap, awayPitcherLog, awayCatcher
     );
     homeScore += bottomResult.runs;
     homeBatterIdx = bottomResult.nextBatterIndex;

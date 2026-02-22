@@ -26,8 +26,8 @@ export {
   emptyPitcherStats,
 } from "./player";
 
-export type { Team, TeamRecord } from "./team";
-export { calcWinPct } from "./team";
+export type { Team, TeamRecord, TeamLineupConfig, PitcherRole, RosterLevel } from "./team";
+export { calcWinPct, ICHI_GUN_MAX, ROSTER_MAX, ROSTER_DEFAULT } from "./team";
 
 export type {
   League,
@@ -36,6 +36,8 @@ export type {
   ScheduleEntry,
   GameResult,
   InningScore,
+  PlayoffSeries,
+  PlayoffSeriesType,
 } from "./league";
 
 export type { GameState } from "./game-state";

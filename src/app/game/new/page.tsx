@@ -6,6 +6,7 @@ import { TEAM_TEMPLATES } from "@/data/teams";
 import { useGameStore } from "@/store/game-store";
 import { generateRoster } from "@/engine/player-generator";
 import { createSeason } from "@/engine/season";
+import { autoConfigureLineup, autoAssignRosterLevels } from "@/engine/lineup";
 import type { Team } from "@/models/team";
 import type { League } from "@/models/league";
 import type { GameState } from "@/models/game-state";
@@ -23,16 +24,21 @@ export default function NewGamePage() {
 
     const teams: Record<string, Team> = {};
     for (const template of TEAM_TEMPLATES) {
-      teams[template.id] = {
+      const roster = generateRoster(65);
+      const partialTeam: Team = {
         id: template.id,
         name: template.name,
         shortName: template.shortName,
         color: template.color,
-        roster: generateRoster(25),
+        roster,
         budget: 500000,
         fanBase: 50 + Math.floor(Math.random() * 30),
         homeBallpark: template.homeBallpark,
       };
+      const rosterLevels = autoAssignRosterLevels(partialTeam);
+      const teamWithLevels = { ...partialTeam, rosterLevels };
+      const lineupConfig = autoConfigureLineup(teamWithLevels);
+      teams[template.id] = { ...teamWithLevels, lineupConfig };
     }
 
     const leagues: League[] = [

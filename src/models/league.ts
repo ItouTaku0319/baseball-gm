@@ -19,13 +19,17 @@ export interface Season {
   currentGameIndex: number;
   /** シーズンフェーズ */
   phase: SeasonPhase;
+  /** ポストシーズンシリーズ (optional) */
+  playoffs?: PlayoffSeries[];
 }
 
 export type SeasonPhase =
-  | "preseason"      // オフシーズン (ドラフト, FA, トレード)
-  | "regular_season" // レギュラーシーズン
-  | "playoffs"       // プレーオフ (クライマックスシリーズ的な)
-  | "offseason";     // シーズン終了後
+  | "preseason"        // プレシーズン
+  | "regular_season"   // レギュラーシーズン
+  | "climax_first"     // CS 1stステージ
+  | "climax_final"     // CS Finalステージ
+  | "japan_series"     // 日本シリーズ
+  | "offseason";       // シーズン終了後
 
 /** 試合スケジュールの1エントリ */
 export interface ScheduleEntry {
@@ -48,6 +52,8 @@ export interface PlayerGameStats {
   runs: number;
   walks: number;
   strikeouts: number;
+  stolenBases: number;
+  caughtStealing: number;
 }
 
 /** 投手の1試合の成績 */
@@ -83,4 +89,34 @@ export interface GameResult {
 export interface InningScore {
   top: number;    // 表 (先攻) の得点
   bottom: number; // 裏 (後攻) の得点
+}
+
+/** ポストシーズンシリーズの種類 */
+export type PlayoffSeriesType =
+  | "climax_first_central"
+  | "climax_first_pacific"
+  | "climax_final_central"
+  | "climax_final_pacific"
+  | "japan_series";
+
+/** ポストシーズンの1シリーズ */
+export interface PlayoffSeries {
+  id: string;
+  type: PlayoffSeriesType;
+  /** 上位チームID */
+  team1Id: string;
+  /** 下位チームID */
+  team2Id: string;
+  /** 上位チームのアドバンテージ勝利数 */
+  team1Advantage: number;
+  /** シリーズの試合 */
+  games: ScheduleEntry[];
+  /** チーム1の勝利数 (アドバンテージ含む) */
+  team1Wins: number;
+  /** チーム2の勝利数 */
+  team2Wins: number;
+  /** 勝利に必要な勝利数 */
+  winsNeeded: number;
+  /** 勝者チームID (確定していなければnull) */
+  winnerId: string | null;
 }
