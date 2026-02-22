@@ -1,5 +1,6 @@
 import type { Player } from "@/models/player";
 import type { Team } from "@/models/team";
+import { calcBreakingPower } from "./simulation";
 
 /**
  * トレードシステム
@@ -23,18 +24,26 @@ export function evaluatePlayerValue(player: Player): number {
   let value = 0;
 
   if (player.isPitcher && player.pitching) {
+    // velocity (120-165) を 0-100 スケールに変換
+    const velocityScaled = ((player.pitching.velocity - 120) / 45) * 100;
+    const breakingPower = calcBreakingPower(player.pitching?.pitches);
     value =
-      player.pitching.velocity * 1.2 +
+      velocityScaled * 1.2 +
       player.pitching.control * 1.0 +
-      player.pitching.breaking * 1.1 +
+      breakingPower * 1.1 +
       player.pitching.stamina * 0.5 +
-      player.pitching.mentalToughness * 0.3;
+      player.pitching.mentalToughness * 0.3 +
+      (player.pitching.arm ?? 50) * 0.1 +
+      player.pitching.fielding * 0.1 +
+      (player.pitching.catching ?? 50) * 0.05;
   } else {
     value =
       player.batting.contact * 1.0 +
       player.batting.power * 1.2 +
       player.batting.speed * 0.6 +
+      player.batting.arm * 0.3 +
       player.batting.fielding * 0.4 +
+      player.batting.catching * 0.2 +
       player.batting.eye * 0.8;
   }
 

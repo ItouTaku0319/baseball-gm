@@ -1,6 +1,6 @@
 import type { Team } from "@/models/team";
 import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog } from "@/models/league";
-import type { Player } from "@/models/player";
+import type { Player, PitchRepertoire } from "@/models/player";
 
 /**
  * 試合シミュレーションエンジン
@@ -8,6 +8,14 @@ import type { Player } from "@/models/player";
  * 投手の能力 vs 打者の能力に基づいて、1打席ごとの結果を確率で決定する。
  * パワプロのペナント自動進行のように、結果だけを高速に算出する。
  */
+
+/** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
+export function calcBreakingPower(pitches: PitchRepertoire[] | undefined): number {
+  if (!pitches || pitches.length === 0) return 30; // 旧データ互換用デフォルト
+  const total = pitches.reduce((sum, p) => sum + p.level * p.level, 0);
+  // 理論最大: 5球種 × 49(=7²) = 245
+  return Math.min(100, (total / 245) * 130);
+}
 
 /** 打席結果の種類 */
 type AtBatResult =
@@ -27,10 +35,13 @@ function simulateAtBat(batter: Player, pitcher: Player): AtBatResult {
   const pit = pitcher.pitching!;
 
   // 各能力値の対決から確率を算出 (簡易版)
-  const contactFactor = (bat.contact - pit.breaking * 0.5) / 100;
+  const breakingPower = calcBreakingPower(pit.pitches);
+  const contactFactor = (bat.contact - breakingPower * 0.5) / 100;
   const powerFactor = bat.power / 100;
   const eyeFactor = (bat.eye - pit.control * 0.3) / 100;
-  const velocityFactor = pit.velocity / 100;
+  // 旧データ(1-100)と新データ(120-165)の互換: 100以下なら旧スケールとみなす
+  const vel = pit.velocity <= 100 ? 120 + (pit.velocity / 100) * 45 : pit.velocity;
+  const velocityFactor = (vel - 120) / 45; // 120-165を0-1に正規化
 
   const roll = Math.random();
   let cumulative = 0;
@@ -42,11 +53,16 @@ function simulateAtBat(batter: Player, pitcher: Player): AtBatResult {
 
   // 三振率: 球速が高くミートが低いほど高い
   const strikeoutRate = 0.15 + velocityFactor * 0.08 - contactFactor * 0.06;
-  cumulative += Math.max(0.05, strikeoutRate);
+  // 決め球ボーナス: 最大変化量の球種が三振率を押し上げ
+  const maxPitchLevel = pit.pitches && pit.pitches.length > 0
+    ? Math.max(...pit.pitches.map(p => p.level))
+    : 0;
+  const finisherBonus = maxPitchLevel >= 5 ? (maxPitchLevel - 4) * 0.015 : 0;
+  cumulative += Math.max(0.05, strikeoutRate + finisherBonus);
   if (roll < cumulative) return "strikeout";
 
   // ヒット判定
-  const hitRate = 0.22 + contactFactor * 0.08 - pit.breaking * 0.001;
+  const hitRate = 0.22 + contactFactor * 0.08 - breakingPower * 0.001;
   cumulative += Math.max(0.10, hitRate);
   if (roll < cumulative) {
     // ヒットの種類を決定

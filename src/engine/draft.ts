@@ -1,6 +1,7 @@
 import type { Player } from "@/models/player";
 import type { TeamRecord } from "@/models/team";
 import { generateDraftClass } from "./player-generator";
+import { calcBreakingPower } from "./simulation";
 
 /**
  * ドラフトシステム
@@ -92,11 +93,11 @@ export function autoPickForCPU(draft: DraftState): DraftState {
   // 最も能力値の高い選手を選ぶ
   const best = [...draft.prospects].sort((a, b) => {
     const aScore = a.isPitcher
-      ? (a.pitching?.velocity ?? 0) + (a.pitching?.control ?? 0) + (a.pitching?.breaking ?? 0)
-      : a.batting.contact + a.batting.power + a.batting.speed;
+      ? (((a.pitching?.velocity ?? 120) - 120) / 45) * 100 + (a.pitching?.control ?? 0) + calcBreakingPower(a.pitching?.pitches ?? [])
+      : a.batting.contact + a.batting.power + a.batting.speed + a.batting.eye * 0.5;
     const bScore = b.isPitcher
-      ? (b.pitching?.velocity ?? 0) + (b.pitching?.control ?? 0) + (b.pitching?.breaking ?? 0)
-      : b.batting.contact + b.batting.power + b.batting.speed;
+      ? (((b.pitching?.velocity ?? 120) - 120) / 45) * 100 + (b.pitching?.control ?? 0) + calcBreakingPower(b.pitching?.pitches ?? [])
+      : b.batting.contact + b.batting.power + b.batting.speed + b.batting.eye * 0.5;
     return bScore - aScore;
   })[0];
 

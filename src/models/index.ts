@@ -1,4 +1,6 @@
 export type {
+  PitchType,
+  PitchRepertoire,
   Position,
   ThrowHand,
   BatSide,
@@ -11,6 +13,13 @@ export type {
 } from "./player";
 
 export {
+  PITCH_TYPE_NAMES,
+  PITCH_SHORT_NAMES,
+  PITCH_DIR_ARROWS,
+  PITCH_DIR_ORDER,
+  POSITION_NAMES,
+  THROW_HAND_NAMES,
+  BAT_SIDE_NAMES,
   calcBattingAverage,
   calcERA,
   emptyBatterStats,

@@ -5,6 +5,7 @@ import type {
   BatSide,
   BatterAbilities,
   PitcherAbilities,
+  PitchType,
   PlayerPotential,
 } from "@/models";
 
@@ -43,18 +44,64 @@ function generateBatterAbilities(overall: number): BatterAbilities {
     contact: randomAbility(overall, 15),
     power: randomAbility(overall, 15),
     speed: randomAbility(overall, 15),
+    arm: randomAbility(overall, 15),
     fielding: randomAbility(overall, 10),
+    catching: randomAbility(overall, 10),
     eye: randomAbility(overall, 15),
   };
 }
 
+function generateVelocity(overall: number): number {
+  const base = 120 + (overall / 100) * 35;
+  const raw = base + randomInt(-8, 8);
+  return Math.max(120, Math.min(165, Math.round(raw)));
+}
+
+const PITCH_WEIGHTS: { type: PitchType; weight: number }[] = [
+  { type: "slider",    weight: 25 },
+  { type: "curve",     weight: 15 },
+  { type: "fork",      weight: 15 },
+  { type: "changeup",  weight: 10 },
+  { type: "sinker",    weight: 8  },
+  { type: "cutter",    weight: 10 },
+  { type: "shoot",     weight: 5  },
+  { type: "knuckle",   weight: 1  },
+  { type: "screwball", weight: 1  },
+  { type: "splitter",  weight: 10 },
+];
+
+function generatePitches(overall: number) {
+  const count = randomInt(2, 5);
+  const selected: PitchType[] = [];
+
+  const pool = [...PITCH_WEIGHTS];
+  while (selected.length < count && pool.length > 0) {
+    let r = Math.random() * pool.reduce((sum, p) => sum + p.weight, 0);
+    for (let i = 0; i < pool.length; i++) {
+      r -= pool[i].weight;
+      if (r <= 0) {
+        selected.push(pool[i].type);
+        pool.splice(i, 1);
+        break;
+      }
+    }
+  }
+  return selected.map((type) => ({
+    type,
+    level: Math.max(1, Math.min(7, Math.round(1 + (overall / 100) * 4 + randomInt(-1, 1)))),
+  }));
+}
+
 function generatePitcherAbilities(overall: number): PitcherAbilities {
   return {
-    velocity: randomAbility(overall, 15),
+    velocity: generateVelocity(overall),
     control: randomAbility(overall, 15),
-    breaking: randomAbility(overall, 15),
+    pitches: generatePitches(overall),
     stamina: randomAbility(overall, 15),
     mentalToughness: randomAbility(overall, 10),
+    arm: randomAbility(overall, 15),
+    fielding: randomAbility(overall, 10),
+    catching: randomAbility(overall, 10),
   };
 }
 

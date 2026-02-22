@@ -10,13 +10,105 @@ export type Position =
   | "CF"
   | "RF";
 
+/** 守備位置の日本語表記 */
+export const POSITION_NAMES: Record<Position, string> = {
+  P: "投",
+  C: "捕",
+  "1B": "一",
+  "2B": "二",
+  "3B": "三",
+  SS: "遊",
+  LF: "左",
+  CF: "中",
+  RF: "右",
+};
+
 /** 投球の利き手 */
 export type ThrowHand = "L" | "R";
+
+/** 投球利き手の日本語表記 */
+export const THROW_HAND_NAMES: Record<ThrowHand, string> = {
+  L: "左",
+  R: "右",
+};
 
 /** 打席の利き手 */
 export type BatSide = "L" | "R" | "S"; // S = Switch
 
-/** 選手の能力値 (1-100) */
+/** 打席利き手の日本語表記 */
+export const BAT_SIDE_NAMES: Record<BatSide, string> = {
+  L: "左",
+  R: "右",
+  S: "両",
+};
+
+/** 球種タイプ */
+export type PitchType =
+  | "slider"
+  | "curve"
+  | "fork"
+  | "changeup"
+  | "sinker"
+  | "cutter"
+  | "shoot"
+  | "knuckle"
+  | "screwball"
+  | "splitter";
+
+/** 球種の日本語名 */
+export const PITCH_TYPE_NAMES: Record<PitchType, string> = {
+  slider: "スライダー",
+  curve: "カーブ",
+  fork: "フォーク",
+  changeup: "チェンジアップ",
+  sinker: "シンカー",
+  cutter: "カットボール",
+  shoot: "シュート",
+  knuckle: "ナックル",
+  screwball: "スクリュー",
+  splitter: "スプリット",
+};
+
+/** 球種の略称 */
+export const PITCH_SHORT_NAMES: Record<PitchType, string> = {
+  slider: "スラ",
+  curve: "カーブ",
+  fork: "フォーク",
+  changeup: "チェンジ",
+  sinker: "シンカー",
+  cutter: "カット",
+  shoot: "シュート",
+  knuckle: "ナックル",
+  screwball: "スクリュー",
+  splitter: "スプリット",
+};
+
+/** 球種→方向矢印 */
+export const PITCH_DIR_ARROWS: Record<PitchType, string> = {
+  slider: "←", cutter: "←",
+  curve: "↙", screwball: "↙",
+  fork: "↓", changeup: "↓", splitter: "↓", knuckle: "↓",
+  sinker: "↘",
+  shoot: "→",
+};
+
+/** 球種の表示順 (方向順) */
+export const PITCH_DIR_ORDER: Record<PitchType, number> = {
+  slider: 0, cutter: 1,
+  curve: 10, screwball: 11,
+  fork: 20, changeup: 21, splitter: 22, knuckle: 23,
+  sinker: 30,
+  shoot: 40,
+};
+
+/** 球種と変化量 */
+export interface PitchRepertoire {
+  type: PitchType;
+  /** 変化量 (1-7) */
+  level: number;
+}
+
+/** 野手の能力値 (1-100) */
 export interface BatterAbilities {
   /** ミート力 (打率に影響) */
   contact: number;
@@ -24,23 +116,33 @@ export interface BatterAbilities {
   power: number;
   /** 走力 (盗塁・内野安打に影響) */
   speed: number;
+  /** 肩力 (送球に影響) */
+  arm: number;
   /** 守備力 */
   fielding: number;
+  /** 捕球 (エラー率に影響) */
+  catching: number;
   /** 選球眼 (四球率に影響) */
   eye: number;
 }
 
 export interface PitcherAbilities {
-  /** 球速 (奪三振に影響) */
+  /** 球速 (120-165 km/h) */
   velocity: number;
-  /** コントロール (四球率に影響) */
+  /** 制球 (1-100、四球率に影響) */
   control: number;
-  /** 変化球 (被打率に影響) */
-  breaking: number;
-  /** スタミナ (先発の持続力に影響) */
+  /** 球種リスト */
+  pitches: PitchRepertoire[];
+  /** スタミナ (1-100、先発の持続力に影響) */
   stamina: number;
-  /** 対左打者/右打者 */
+  /** 精神力 (1-100) */
   mentalToughness: number;
+  /** 肩力 (1-100) */
+  arm: number;
+  /** 守備力 (1-100) */
+  fielding: number;
+  /** 捕球 (1-100) */
+  catching: number;
 }
 
 /** 選手のポテンシャル (成長可能な上限) */
