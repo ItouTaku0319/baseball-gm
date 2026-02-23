@@ -59,22 +59,22 @@ function PlayerNode({
     >
       {/* 選択時の青いリング */}
       {isSelected && (
-        <circle r={18} fill="none" stroke="#3b82f6" strokeWidth={3} />
+        <circle r={20} fill="none" stroke="#3b82f6" strokeWidth={2} strokeOpacity={0.6} />
       )}
       {/* 背景円 */}
       <circle
-        r={16}
-        fill="white"
-        fillOpacity={isSelected ? 0.95 : 0.8}
-        stroke={isSelected ? "#3b82f6" : "#6b7280"}
-        strokeWidth={isSelected ? 2 : 1}
+        r={17}
+        fill={isSelected ? "#1e3a5f" : "#1e293b"}
+        fillOpacity={isSelected ? 0.95 : 0.9}
+        stroke={isSelected ? "#3b82f6" : "#475569"}
+        strokeWidth={isSelected ? 2.5 : 1.5}
       />
       {/* ポジション略称 */}
       <text
         textAnchor="middle"
         y={-4}
         fontSize={8}
-        fill="#374151"
+        fill="#94a3b8"
         fontWeight="bold"
       >
         {posLabel}
@@ -82,9 +82,9 @@ function PlayerNode({
       {/* 選手名 */}
       <text
         textAnchor="middle"
-        y={6}
+        y={7}
         fontSize={10}
-        fill="#111827"
+        fill="#e2e8f0"
         fontWeight="500"
       >
         {displayName}
@@ -105,18 +105,66 @@ export function LineupField({ players, selectedId, onPlayerClick }: LineupFieldP
       className="w-full"
       style={{ userSelect: "none" }}
     >
-      {/* 外野芝（扇形背景） */}
+      <defs>
+        {/* 芝グラデーション */}
+        <radialGradient id="grass" cx="50%" cy="90%" r="70%">
+          <stop offset="0%" stopColor="#2d8c4e" />
+          <stop offset="100%" stopColor="#1a5c2a" />
+        </radialGradient>
+        {/* 内野ダートグラデーション */}
+        <radialGradient id="dirt" cx="50%" cy="40%" r="60%">
+          <stop offset="0%" stopColor="#c4a46c" />
+          <stop offset="100%" stopColor="#8b7355" />
+        </radialGradient>
+        {/* マウンドグラデーション */}
+        <radialGradient id="mound" cx="50%" cy="40%" r="50%">
+          <stop offset="0%" stopColor="#b89c6b" />
+          <stop offset="100%" stopColor="#8b7355" />
+        </radialGradient>
+      </defs>
+
+      {/* 1. 外野芝（扇形背景） */}
       <path
         d="M 150 290 L 10 100 A 180 180 0 0 1 290 100 Z"
-        fill="#1a5c2a"
-      />
-      {/* 内野土（ダイヤモンド周辺） */}
-      <polygon
-        points="150,165 225,215 150,280 75,215"
-        fill="#8b7355"
+        fill="url(#grass)"
       />
 
-      {/* ファウルライン（左） */}
+      {/* 2. ウォーニングトラック */}
+      <path
+        d="M 18 105 A 172 172 0 0 1 282 105"
+        fill="none"
+        stroke="#6b5b3a"
+        strokeWidth={8}
+        strokeOpacity={0.4}
+      />
+
+      {/* 3. フェンス（外壁） */}
+      <path
+        d="M 10 100 A 180 180 0 0 1 290 100"
+        fill="none"
+        stroke="#1a3a1a"
+        strokeWidth={6}
+      />
+
+      {/* 4. 芝刈りパターン（薄い同心円弧） */}
+      {[0.3, 0.5, 0.7].map((r, i) => (
+        <path
+          key={i}
+          d={`M ${150 - 180 * r} ${290 - 190 * r} A ${180 * r} ${180 * r} 0 0 1 ${150 + 180 * r} ${290 - 190 * r}`}
+          fill="none"
+          stroke="#2d8c4e"
+          strokeWidth={12}
+          strokeOpacity={0.15}
+        />
+      ))}
+
+      {/* 5. 内野土（ダイヤモンド周辺） */}
+      <polygon
+        points="150,165 225,215 150,280 75,215"
+        fill="url(#dirt)"
+      />
+
+      {/* 6. ファウルライン（左） */}
       <line
         x1="150" y1="290"
         x2="10" y2="100"
@@ -133,7 +181,7 @@ export function LineupField({ players, selectedId, onPlayerClick }: LineupFieldP
         strokeOpacity={0.7}
       />
 
-      {/* 内野ダイヤモンドライン */}
+      {/* 7. 内野ダイヤモンドライン */}
       <polygon
         points="150,165 220,210 150,270 80,210"
         fill="none"
@@ -142,21 +190,25 @@ export function LineupField({ players, selectedId, onPlayerClick }: LineupFieldP
         strokeOpacity={0.8}
       />
 
-      {/* ベース（白い四角） */}
-      {/* ホームプレート */}
-      <rect x={145} y={265} width={10} height={10} fill="white" opacity={0.9} />
+      {/* 8. バッターボックス */}
+      <rect x={138} y={259} width={6} height={16} fill="none" stroke="white" strokeWidth={0.8} strokeOpacity={0.5} />
+      <rect x={156} y={259} width={6} height={16} fill="none" stroke="white" strokeWidth={0.8} strokeOpacity={0.5} />
+
+      {/* 9. ベース（菱形） */}
+      {/* ホームプレート（五角形） */}
+      <polygon points="150,275 145,270 145,264 155,264 155,270" fill="white" opacity={0.95} />
       {/* 1B */}
-      <rect x={215} y={205} width={10} height={10} fill="white" opacity={0.9} />
+      <polygon points="220,210 215,205 220,200 225,205" fill="white" opacity={0.95} />
       {/* 2B */}
-      <rect x={145} y={160} width={10} height={10} fill="white" opacity={0.9} />
+      <polygon points="150,165 145,160 150,155 155,160" fill="white" opacity={0.95} />
       {/* 3B */}
-      <rect x={75} y={205} width={10} height={10} fill="white" opacity={0.9} />
+      <polygon points="80,210 75,205 80,200 85,205" fill="white" opacity={0.95} />
 
-      {/* 投手マウンド */}
-      <circle cx={150} cy={222} r={8} fill="#9c8a6b" opacity={0.8} />
-      <circle cx={150} cy={222} r={3} fill="#8b7355" />
+      {/* 10. 投手マウンド */}
+      <ellipse cx={150} cy={222} rx={10} ry={8} fill="url(#mound)" />
+      <rect x={146} y={221} width={8} height={2} rx={1} fill="white" opacity={0.9} />
 
-      {/* 選手ノード */}
+      {/* 11. 選手ノード */}
       {(Object.keys(POSITION_COORDS) as Position[]).map((pos) => {
         const player = players.find((p) => p.position === pos);
         if (!player) return null;

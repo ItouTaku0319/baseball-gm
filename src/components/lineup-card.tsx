@@ -98,11 +98,14 @@ export function LineupCard({
 
       {/* 選手情報 */}
       <div className="flex-1 px-3 py-2 min-w-0">
-        {/* 1行目: 選手名・ポジション・年齢・打投 */}
+        {/* 1行目: 守備位置・選手名・年齢・打投 */}
         <div className="flex items-center gap-2 mb-1 flex-wrap">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded bg-gray-700 text-xs font-bold text-gray-200 shrink-0">
+            {posJa}
+          </span>
           <span className="font-bold text-white">{player.name}</span>
           <span className="text-gray-400 text-xs whitespace-nowrap">
-            {posJa}&nbsp;{player.age}歳&nbsp;{batJa}打{throwJa}投
+            {player.age}歳&nbsp;{batJa}打{throwJa}投
           </span>
         </div>
 
