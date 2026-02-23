@@ -34,7 +34,8 @@ export function simulateNextGame(state: GameState): GameState {
   const homeTeam = state.teams[entry.homeTeamId];
   const awayTeam = state.teams[entry.awayTeamId];
 
-  const result = simulateGame(homeTeam, awayTeam);
+  const isMyGame = entry.homeTeamId === state.myTeamId || entry.awayTeamId === state.myTeamId;
+  const result = simulateGame(homeTeam, awayTeam, isMyGame ? { collectAtBatLogs: true } : undefined);
 
   // スケジュール更新
   const newSchedule = [...season.schedule];

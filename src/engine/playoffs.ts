@@ -175,7 +175,8 @@ export function simulatePlayoffGame(state: GameState): GameState {
   const gameEntry = activeSeries.games[nextGameIndex];
   const homeTeam = state.teams[gameEntry.homeTeamId];
   const awayTeam = state.teams[gameEntry.awayTeamId];
-  const result = simulateGame(homeTeam, awayTeam);
+  const isMyGame = gameEntry.homeTeamId === state.myTeamId || gameEntry.awayTeamId === state.myTeamId;
+  const result = simulateGame(homeTeam, awayTeam, isMyGame ? { collectAtBatLogs: true } : undefined);
 
   // 試合結果を更新
   const newGames = [...activeSeries.games];

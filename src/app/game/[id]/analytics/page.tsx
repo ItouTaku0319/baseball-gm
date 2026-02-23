@@ -6,17 +6,267 @@ import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
 import { simulateGame } from "@/engine/simulation";
 import type { AtBatLog, GameResult } from "@/models/league";
+import type { Player, PitchRepertoire } from "@/models/player";
+import {
+  PITCH_TYPE_NAMES,
+  POSITION_NAMES,
+  THROW_HAND_NAMES,
+  BAT_SIDE_NAMES,
+} from "@/models/player";
 
-const posNames: Record<number, string> = {
-  1: "P", 2: "C", 3: "1B", 4: "2B", 5: "3B", 6: "SS", 7: "LF", 8: "CF", 9: "RF",
+// ---- 共有定数・ユーティリティ ----
+
+const resultNamesJa: Record<string, string> = {
+  single: "ヒット",
+  double: "ツーベース",
+  triple: "スリーベース",
+  homerun: "ホームラン",
+  strikeout: "三振",
+  walk: "四球",
+  hitByPitch: "死球",
+  groundout: "ゴロアウト",
+  flyout: "フライアウト",
+  lineout: "ライナーアウト",
+  popout: "ポップアウト",
+  doublePlay: "併殺打",
+  sacrificeFly: "犠牲フライ",
+  fieldersChoice: "フィルダースチョイス",
+  infieldHit: "内野安打",
+  error: "エラー出塁",
 };
+
+const battedBallNamesJa: Record<string, string> = {
+  ground_ball: "ゴロ",
+  fly_ball: "フライ",
+  line_drive: "ライナー",
+  popup: "ポップフライ",
+};
+
+const posNamesJa: Record<number, string> = {
+  1: "投", 2: "捕", 3: "一", 4: "二", 5: "三", 6: "遊", 7: "左", 8: "中", 9: "右",
+};
+
+function resultColor(result: string): string {
+  switch (result) {
+    case "homerun": return "text-red-500 font-bold";
+    case "triple": return "text-orange-400 font-semibold";
+    case "double": return "text-orange-300";
+    case "single": case "infieldHit": return "text-yellow-300";
+    case "walk": return "text-blue-400";
+    case "hitByPitch": return "text-cyan-400";
+    case "error": return "text-purple-400";
+    case "doublePlay": return "text-gray-600";
+    default: return "text-gray-500";
+  }
+}
 
 function isHit(result: string): boolean {
   return ["single", "double", "triple", "homerun", "infieldHit"].includes(result);
 }
 
-function isAtBat(result: string): boolean {
-  return !["walk", "hitByPitch", "sacrificeFly"].includes(result);
+function isHitOrError(result: string): boolean {
+  return ["single", "double", "triple", "homerun", "infieldHit", "error"].includes(result);
+}
+
+function isOut(result: string): boolean {
+  return ["groundout", "flyout", "lineout", "popout", "doublePlay", "sacrificeFly", "fieldersChoice"].includes(result);
+}
+
+// ---- 能力値表示ユーティリティ ----
+
+function abilityGrade(val: number): string {
+  if (val >= 90) return "S";
+  if (val >= 80) return "A";
+  if (val >= 70) return "B";
+  if (val >= 60) return "C";
+  if (val >= 50) return "D";
+  if (val >= 40) return "E";
+  if (val >= 30) return "F";
+  return "G";
+}
+
+function gradeColor(grade: string): string {
+  switch (grade) {
+    case "S": return "text-red-500 font-bold";
+    case "A": return "text-red-400";
+    case "B": return "text-orange-400";
+    case "C": return "text-yellow-400";
+    case "D": return "text-lime-400";
+    case "E": return "text-green-500";
+    case "F": return "text-blue-400";
+    default:  return "text-gray-500";
+  }
+}
+
+function velocityGrade(v: number): string {
+  if (v >= 155) return "S";
+  if (v >= 150) return "A";
+  if (v >= 145) return "B";
+  if (v >= 140) return "C";
+  if (v >= 135) return "D";
+  if (v >= 130) return "E";
+  if (v >= 125) return "F";
+  return "G";
+}
+
+function AbilityCell({ val }: { val: number }) {
+  const grade = abilityGrade(val);
+  return (
+    <span className="inline-flex items-baseline gap-1">
+      <span className="text-gray-100">{val}</span>
+      <span className={`text-xs ${gradeColor(grade)}`}>{grade}</span>
+    </span>
+  );
+}
+
+function VelocityCell({ val }: { val: number }) {
+  const grade = velocityGrade(val);
+  return <span className={gradeColor(grade)}>{val}km</span>;
+}
+
+function pitchLevelColor(level: number): string {
+  if (level >= 6) return "text-red-400 font-bold";
+  if (level >= 5) return "text-orange-400";
+  if (level >= 4) return "text-yellow-400";
+  if (level >= 3) return "text-lime-400";
+  if (level >= 2) return "text-cyan-400";
+  return "text-cyan-300";
+}
+
+function PitchList({ pitches }: { pitches: PitchRepertoire[] }) {
+  if (pitches.length === 0) return <span className="text-gray-600">-</span>;
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
+      {pitches.map((p) => (
+        <span key={p.type} className="whitespace-nowrap">
+          <span className="text-gray-400">{PITCH_TYPE_NAMES[p.type]}</span>
+          <span className={`ml-0.5 ${pitchLevelColor(p.level)}`}>{p.level}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ---- 能力値カード ----
+
+function PlayerAbilityCard({ player }: { player: Player }) {
+  const posJa = POSITION_NAMES[player.position];
+  const throwJa = THROW_HAND_NAMES[player.throwHand];
+  const batJa = BAT_SIDE_NAMES[player.batSide];
+
+  if (player.isPitcher && player.pitching) {
+    return (
+      <div className="bg-gray-700/50 rounded-lg p-4 border border-gray-600">
+        <div className="flex items-center gap-3 mb-3">
+          <span className="text-blue-400 font-bold text-lg">{player.name}</span>
+          <span className="text-gray-400 text-sm">{posJa} {player.age}歳 {throwJa}投</span>
+        </div>
+        <div className="grid grid-cols-4 gap-3 text-sm mb-2">
+          <div><span className="text-gray-400">球速 </span><VelocityCell val={player.pitching.velocity} /></div>
+          <div><span className="text-gray-400">制球 </span><AbilityCell val={player.pitching.control} /></div>
+          <div><span className="text-gray-400">スタ </span><AbilityCell val={player.pitching.stamina} /></div>
+          <div><span className="text-gray-400">精神 </span><AbilityCell val={player.pitching.mentalToughness} /></div>
+        </div>
+        <div className="text-sm">
+          <span className="text-gray-400 mr-2">球種:</span>
+          <PitchList pitches={player.pitching.pitches} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-gray-700/50 rounded-lg p-4 border border-gray-600">
+      <div className="flex items-center gap-3 mb-3">
+        <span className="text-blue-400 font-bold text-lg">{player.name}</span>
+        <span className="text-gray-400 text-sm">{posJa} {player.age}歳 {batJa}打{throwJa}投</span>
+      </div>
+      <div className="grid grid-cols-7 gap-3 text-sm">
+        <div><span className="text-gray-400">ミ </span><AbilityCell val={player.batting.contact} /></div>
+        <div><span className="text-gray-400">パ </span><AbilityCell val={player.batting.power} /></div>
+        <div><span className="text-gray-400">走 </span><AbilityCell val={player.batting.speed} /></div>
+        <div><span className="text-gray-400">眼 </span><AbilityCell val={player.batting.eye} /></div>
+        <div><span className="text-gray-400">肩 </span><AbilityCell val={player.batting.arm ?? 50} /></div>
+        <div><span className="text-gray-400">守 </span><AbilityCell val={player.batting.fielding} /></div>
+        <div><span className="text-gray-400">捕 </span><AbilityCell val={player.batting.catching} /></div>
+      </div>
+    </div>
+  );
+}
+
+// ---- 打席ログテーブル (共有コンポーネント) ----
+
+function AtBatLogTable({
+  logs,
+  getName,
+  maxRows = 500,
+}: {
+  logs: AtBatLog[];
+  getName: (id: string) => string;
+  maxRows?: number;
+}) {
+  return (
+    <div className="max-h-[600px] overflow-y-auto">
+      <table className="w-full text-xs" style={{ fontVariantNumeric: "tabular-nums" }}>
+        <thead className="sticky top-0 bg-gray-800">
+          <tr className="text-gray-400 border-b border-gray-700">
+            <th className="text-right py-2 px-2">回</th>
+            <th className="text-center py-2 px-2">半</th>
+            <th className="text-left py-2 px-2">打者</th>
+            <th className="text-left py-2 px-2">投手</th>
+            <th className="text-left py-2 px-2">結果</th>
+            <th className="text-left py-2 px-2">打球</th>
+            <th className="text-right py-2 px-2">方向°</th>
+            <th className="text-right py-2 px-2">角度°</th>
+            <th className="text-right py-2 px-2">速度</th>
+            <th className="text-center py-2 px-2">守備</th>
+          </tr>
+        </thead>
+        <tbody>
+          {logs.slice(0, maxRows).map((log, i) => (
+            <tr
+              key={i}
+              className={`border-b border-gray-700/20 ${i % 2 === 1 ? "bg-gray-700/10" : ""}`}
+            >
+              <td className="py-1 px-2 text-right text-gray-400">{log.inning}</td>
+              <td className="py-1 px-2 text-center text-gray-400">
+                {log.halfInning === "top" ? "表" : "裏"}
+              </td>
+              <td className="py-1 px-2 text-gray-200">{getName(log.batterId)}</td>
+              <td className="py-1 px-2 text-gray-400">{getName(log.pitcherId)}</td>
+              <td className={`py-1 px-2 ${resultColor(log.result)}`}>
+                {resultNamesJa[log.result] ?? log.result}
+              </td>
+              <td className="py-1 px-2 text-gray-400">
+                {log.battedBallType ? (battedBallNamesJa[log.battedBallType] ?? log.battedBallType) : "-"}
+              </td>
+              <td className="py-1 px-2 text-right text-gray-300">
+                {log.direction !== null ? log.direction.toFixed(1) : "-"}
+              </td>
+              <td className="py-1 px-2 text-right text-gray-300">
+                {log.launchAngle !== null ? log.launchAngle.toFixed(1) : "-"}
+              </td>
+              <td className="py-1 px-2 text-right text-gray-300">
+                {log.exitVelocity !== null ? log.exitVelocity.toFixed(1) : "-"}
+              </td>
+              <td className="py-1 px-2 text-center text-blue-400">
+                {log.result === "homerun"
+                  ? "-"
+                  : log.fielderPosition !== null
+                    ? (posNamesJa[log.fielderPosition] ?? log.fielderPosition)
+                    : "-"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {logs.length > maxRows && (
+        <p className="text-center text-gray-500 text-xs py-2">
+          最大{maxRows}件表示 (全{logs.length.toLocaleString()}件)
+        </p>
+      )}
+    </div>
+  );
 }
 
 // ---- シーズンデータタブ ----
@@ -26,9 +276,27 @@ function SeasonDataTab() {
 
   const [leagueFilter, setLeagueFilter] = useState<string>("all");
   const [rangeFilter, setRangeFilter] = useState<string>("all");
+  const [playerFilter, setPlayerFilter] = useState<string>("all");
+  const [outcomeFilter, setOutcomeFilter] = useState<"all" | "hit" | "out">("all");
 
   const allTeams = useMemo(() => game ? Object.values(game.teams) : [], [game]);
   const leagues = game?.currentSeason.leagues ?? [];
+
+  // プレイヤーマップ（ID → Player）
+  const playerMap = useMemo(() => {
+    const map = new Map<string, Player>();
+    for (const team of allTeams)
+      for (const p of team.roster) map.set(p.id, p);
+    return map;
+  }, [allTeams]);
+
+  // プレイヤー→チームIDマップ
+  const playerTeamMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const team of allTeams)
+      for (const p of team.roster) map.set(p.id, team.id);
+    return map;
+  }, [allTeams]);
 
   // フィルタ対象のチームIDセット
   const filteredTeamIds = useMemo(() => {
@@ -37,6 +305,29 @@ function SeasonDataTab() {
     if (league) return new Set(league.teams);
     return new Set([leagueFilter]);
   }, [leagueFilter, allTeams, leagues]);
+
+  // チーム変更時にプレイヤーフィルタをリセット
+  useEffect(() => {
+    setPlayerFilter("all");
+    setOutcomeFilter("all");
+  }, [leagueFilter]);
+
+  // フィルタ対象の選手リスト
+  const filteredPlayers = useMemo(() => {
+    const players: { player: Player; teamShortName: string }[] = [];
+    for (const team of allTeams) {
+      if (!filteredTeamIds.has(team.id)) continue;
+      for (const p of team.roster) {
+        players.push({ player: p, teamShortName: team.shortName });
+      }
+    }
+    return players;
+  }, [allTeams, filteredTeamIds]);
+
+  const selectedPlayer = useMemo(() => {
+    if (playerFilter === "all") return null;
+    return playerMap.get(playerFilter) ?? null;
+  }, [playerFilter, playerMap]);
 
   // 消化済み試合を取得
   const playedEntries = useMemo(() => {
@@ -48,45 +339,86 @@ function SeasonDataTab() {
     return played;
   }, [game, rangeFilter]);
 
-  // 打球タイプ集計（フィルタ済みチームの投手成績から）
-  const battedBallStats = useMemo(() => {
-    let gb = 0, fb = 0, ld = 0, pu = 0;
+  // シーズンatBatLogs（自チーム試合のみ存在）
+  const seasonAtBatLogs = useMemo(() => {
+    const logs: AtBatLog[] = [];
     for (const entry of playedEntries) {
-      if (!entry.result) continue;
-      for (const ps of entry.result.pitcherStats) {
-        let pitcherTeamId: string | null = null;
-        for (const team of allTeams) {
-          if (team.roster.some((p) => p.id === ps.playerId)) {
-            pitcherTeamId = team.id;
-            break;
+      if (!entry.result?.atBatLogs) continue;
+      for (const log of entry.result.atBatLogs) {
+        // プレイヤーフィルタ優先
+        if (playerFilter !== "all" && selectedPlayer) {
+          if (selectedPlayer.isPitcher) {
+            if (log.pitcherId !== playerFilter) continue;
+          } else {
+            if (log.batterId !== playerFilter) continue;
           }
+        } else {
+          // チームフィルタ: 打者のチームが対象
+          const batterTeam = playerTeamMap.get(log.batterId);
+          if (!batterTeam || !filteredTeamIds.has(batterTeam)) continue;
         }
-        if (!pitcherTeamId || !filteredTeamIds.has(pitcherTeamId)) continue;
-        gb += ps.groundBalls ?? 0;
-        fb += ps.flyBalls ?? 0;
-        ld += ps.lineDrives ?? 0;
-        pu += ps.popups ?? 0;
+        logs.push(log);
       }
     }
-    const total = gb + fb + ld + pu;
-    return { gb, fb, ld, pu, total };
-  }, [playedEntries, allTeams, filteredTeamIds]);
+    return logs;
+  }, [playedEntries, playerTeamMap, filteredTeamIds, playerFilter, selectedPlayer]);
 
-  // 打撃結果サマリー（フィルタ済みチームの打者成績から）
+  // atBatLogsが存在するか
+  const hasAtBatLogs = useMemo(() => {
+    return playedEntries.some((e) => e.result?.atBatLogs && e.result.atBatLogs.length > 0);
+  }, [playedEntries]);
+
+  // 打球タイプ集計
+  const battedBallStats = useMemo(() => {
+    // pitcherStatsから集計可能なケース
+    const canUsePitcherStats = outcomeFilter === "all" &&
+      (playerFilter === "all" || (selectedPlayer?.isPitcher ?? false));
+
+    if (canUsePitcherStats) {
+      let gb = 0, fb = 0, ld = 0, pu = 0;
+      for (const entry of playedEntries) {
+        if (!entry.result) continue;
+        for (const ps of entry.result.pitcherStats) {
+          const pitcherTeam = playerTeamMap.get(ps.playerId);
+          if (!pitcherTeam || !filteredTeamIds.has(pitcherTeam)) continue;
+          if (playerFilter !== "all" && ps.playerId !== playerFilter) continue;
+          gb += ps.groundBalls ?? 0;
+          fb += ps.flyBalls ?? 0;
+          ld += ps.lineDrives ?? 0;
+          pu += ps.popups ?? 0;
+        }
+      }
+      return { gb, fb, ld, pu, total: gb + fb + ld + pu };
+    }
+
+    // atBatLogsから集計
+    let targetLogs = seasonAtBatLogs;
+    if (outcomeFilter === "hit") {
+      targetLogs = targetLogs.filter((l) => isHitOrError(l.result));
+    } else if (outcomeFilter === "out") {
+      targetLogs = targetLogs.filter((l) => isOut(l.result));
+    }
+    let gb = 0, fb = 0, ld = 0, pu = 0;
+    for (const l of targetLogs) {
+      switch (l.battedBallType) {
+        case "ground_ball": gb++; break;
+        case "fly_ball": fb++; break;
+        case "line_drive": ld++; break;
+        case "popup": pu++; break;
+      }
+    }
+    return { gb, fb, ld, pu, total: gb + fb + ld + pu };
+  }, [playedEntries, seasonAtBatLogs, playerTeamMap, filteredTeamIds, playerFilter, selectedPlayer, outcomeFilter]);
+
+  // 打撃結果サマリー
   const battingStats = useMemo(() => {
     let atBats = 0, hits = 0, hr = 0, strikeouts = 0, walks = 0, doubles = 0, triples = 0;
-    let bip = 0;
     for (const entry of playedEntries) {
       if (!entry.result) continue;
       for (const ps of entry.result.playerStats) {
-        let batterTeamId: string | null = null;
-        for (const team of allTeams) {
-          if (team.roster.some((p) => p.id === ps.playerId)) {
-            batterTeamId = team.id;
-            break;
-          }
-        }
-        if (!batterTeamId || !filteredTeamIds.has(batterTeamId)) continue;
+        const batterTeam = playerTeamMap.get(ps.playerId);
+        if (!batterTeam || !filteredTeamIds.has(batterTeam)) continue;
+        if (playerFilter !== "all" && ps.playerId !== playerFilter) continue;
         atBats += ps.atBats;
         hits += ps.hits;
         hr += ps.homeRuns;
@@ -96,7 +428,7 @@ function SeasonDataTab() {
         triples += ps.triples;
       }
     }
-    bip = atBats - strikeouts - hr;
+    const bip = atBats - strikeouts - hr;
     const babipHits = hits - hr;
     const avg = atBats > 0 ? hits / atBats : 0;
     const kPct = atBats > 0 ? strikeouts / atBats : 0;
@@ -107,7 +439,7 @@ function SeasonDataTab() {
       : 0;
     const obp = (atBats + walks) > 0 ? (hits + walks) / (atBats + walks) : 0;
     return { atBats, hits, hr, strikeouts, walks, avg, kPct, bbPct, babip, obp, slg, ops: obp + slg };
-  }, [playedEntries, allTeams, filteredTeamIds]);
+  }, [playedEntries, playerTeamMap, filteredTeamIds, playerFilter]);
 
   // ポジション別守備機会
   const fieldingByPos = useMemo(() => {
@@ -118,27 +450,29 @@ function SeasonDataTab() {
     for (const entry of playedEntries) {
       if (!entry.result) continue;
       for (const ps of entry.result.playerStats) {
-        let teamId: string | null = null;
-        for (const team of allTeams) {
-          const player = team.roster.find((p) => p.id === ps.playerId);
-          if (player) {
-            teamId = team.id;
-            const posMap: Record<string, number> = {
-              P: 1, C: 2, "1B": 3, "2B": 4, "3B": 5, SS: 6, LF: 7, CF: 8, RF: 9,
-            };
-            const posNum = posMap[player.position];
-            if (posNum && filteredTeamIds.has(teamId)) {
-              map[posNum].po += ps.putOuts ?? 0;
-              map[posNum].a += ps.assists ?? 0;
-              map[posNum].e += ps.errors ?? 0;
-            }
-            break;
-          }
+        const player = playerMap.get(ps.playerId);
+        if (!player) continue;
+        const teamId = playerTeamMap.get(ps.playerId);
+        if (!teamId || !filteredTeamIds.has(teamId)) continue;
+        if (playerFilter !== "all" && ps.playerId !== playerFilter) continue;
+        const posMap: Record<string, number> = {
+          P: 1, C: 2, "1B": 3, "2B": 4, "3B": 5, SS: 6, LF: 7, CF: 8, RF: 9,
+        };
+        const posNum = posMap[player.position];
+        if (posNum) {
+          map[posNum].po += ps.putOuts ?? 0;
+          map[posNum].a += ps.assists ?? 0;
+          map[posNum].e += ps.errors ?? 0;
         }
       }
     }
     return map;
-  }, [playedEntries, allTeams, filteredTeamIds]);
+  }, [playedEntries, playerMap, playerTeamMap, filteredTeamIds, playerFilter]);
+
+  // 名前解決関数
+  const getName = useCallback((id: string) => {
+    return playerMap.get(id)?.name ?? id;
+  }, [playerMap]);
 
   if (!game) return null;
 
@@ -176,10 +510,28 @@ function SeasonDataTab() {
             <option value="last1">直近1試合</option>
           </select>
         </div>
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-400">選手:</label>
+          <select
+            value={playerFilter}
+            onChange={(e) => setPlayerFilter(e.target.value)}
+            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white max-w-[220px]"
+          >
+            <option value="all">全選手</option>
+            {filteredPlayers.map(({ player, teamShortName }) => (
+              <option key={player.id} value={player.id}>
+                {teamShortName} - {player.name} ({POSITION_NAMES[player.position]})
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="text-sm text-gray-400 self-center">
           対象試合数: <span className="text-white" style={{ fontVariantNumeric: "tabular-nums" }}>{playedEntries.length}</span>
         </div>
       </div>
+
+      {/* 能力値カード */}
+      {selectedPlayer && <PlayerAbilityCard player={selectedPlayer} />}
 
       {playedEntries.length === 0 ? (
         <div className="text-center text-gray-400 py-12">
@@ -189,7 +541,26 @@ function SeasonDataTab() {
         <>
           {/* 打球タイプ分布 */}
           <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
-            <h3 className="text-base font-semibold mb-4 text-gray-200">打球タイプ分布</h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold text-gray-200">打球タイプ分布</h3>
+              {hasAtBatLogs && (
+                <div className="flex gap-1">
+                  {(["all", "hit", "out"] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setOutcomeFilter(f)}
+                      className={`px-3 py-1 rounded text-xs font-semibold transition-colors ${
+                        outcomeFilter === f
+                          ? "bg-blue-600 text-white"
+                          : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+                      }`}
+                    >
+                      {f === "all" ? "全体" : f === "hit" ? "ヒット" : "アウト"}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             {battedBallStats.total === 0 ? (
               <p className="text-gray-500 text-sm">データなし</p>
             ) : (
@@ -271,7 +642,7 @@ function SeasonDataTab() {
                   const fpct = tc > 0 ? ((f.po + f.a) / tc).toFixed(3).replace(/^0/, "") : "-.---";
                   return (
                     <tr key={pos} className="border-b border-gray-700/30">
-                      <td className="py-2 px-3 text-blue-400 font-semibold">{posNames[pos]}</td>
+                      <td className="py-2 px-3 text-blue-400 font-semibold">{posNamesJa[pos]}</td>
                       <td className="py-2 px-3 text-right text-gray-200">{f.po.toLocaleString()}</td>
                       <td className="py-2 px-3 text-right text-gray-200">{f.a.toLocaleString()}</td>
                       <td className="py-2 px-3 text-right text-red-400">{f.e.toLocaleString()}</td>
@@ -282,6 +653,20 @@ function SeasonDataTab() {
                 })}
               </tbody>
             </table>
+          </div>
+
+          {/* 打席詳細ログ */}
+          <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+            <h3 className="text-base font-semibold mb-4 text-gray-200">
+              打席詳細ログ ({seasonAtBatLogs.length.toLocaleString()}件)
+            </h3>
+            {seasonAtBatLogs.length === 0 ? (
+              <p className="text-gray-500 text-sm">
+                自チームの試合のみ打席データを記録しています
+              </p>
+            ) : (
+              <AtBatLogTable logs={seasonAtBatLogs} getName={getName} />
+            )}
           </div>
         </>
       )}
@@ -331,6 +716,19 @@ function DiagnosticTab() {
   const { game } = useGameStore();
 
   const allTeams = useMemo(() => game ? Object.values(game.teams) : [], [game]);
+
+  // プレイヤーマップ（ID → Player）
+  const playerMap = useMemo(() => {
+    const map = new Map<string, Player>();
+    for (const team of allTeams)
+      for (const p of team.roster) map.set(p.id, p);
+    return map;
+  }, [allTeams]);
+
+  const getName = useCallback((id: string) => {
+    return playerMap.get(id)?.name ?? id;
+  }, [playerMap]);
+
   const [homeTeamId, setHomeTeamId] = useState<string>("");
   const [awayTeamId, setAwayTeamId] = useState<string>("");
   const [numGames, setNumGames] = useState<number>(10);
@@ -384,7 +782,6 @@ function DiagnosticTab() {
     if (simResults.length === 0 || !game) return null;
     const n = simResults.length;
 
-    // ホームチームの打者統計集計
     const homeRoster = new Set(game.teams[homeTeamId]?.roster.map((p) => p.id) ?? []);
     const awayRoster = new Set(game.teams[awayTeamId]?.roster.map((p) => p.id) ?? []);
 
@@ -446,12 +843,10 @@ function DiagnosticTab() {
     const avgAngle = balls.reduce((s, l) => s + (l.launchAngle ?? 0), 0) / n;
     const avgDirection = balls.reduce((s, l) => s + (l.direction ?? 0), 0) / n;
 
-    // 方向分布: Pull(<30°), Center(30-60°), Oppo(>60°)
     const pull = balls.filter((l) => (l.direction ?? 0) < 30).length;
     const center = balls.filter((l) => (l.direction ?? 0) >= 30 && (l.direction ?? 0) <= 60).length;
     const oppo = balls.filter((l) => (l.direction ?? 0) > 60).length;
 
-    // バレルゾーン: 速度158km/h以上 & 角度22-38°
     const barrels = balls.filter((l) =>
       (l.exitVelocity ?? 0) >= 158 && (l.launchAngle ?? 0) >= 22 && (l.launchAngle ?? 0) <= 38
     );
@@ -507,7 +902,6 @@ function DiagnosticTab() {
     if (!game || simResults.length === 0) return map;
     for (const r of simResults) {
       for (const ps of r.playerStats) {
-        // 全チームのプレイヤーからポジションを解決
         for (const team of Object.values(game.teams)) {
           const player = team.roster.find((p) => p.id === ps.playerId);
           if (player) {
@@ -534,7 +928,6 @@ function DiagnosticTab() {
     if (!simSummary || !game) return;
     const home = game.teams[homeTeamId];
     const away = game.teams[awayTeamId];
-    const n = simResults.length;
 
     const rows = [
       ["項目", "ホーム(" + home.shortName + ")", "アウェイ(" + away.shortName + ")"],
@@ -577,14 +970,18 @@ function DiagnosticTab() {
     const rows = atBatLogs.map((l) => [
       l.inning,
       l.halfInning === "top" ? "表" : "裏",
-      l.batterName,
-      l.pitcherName,
-      l.result,
-      l.battedBallType ?? "",
+      getName(l.batterId),
+      getName(l.pitcherId),
+      resultNamesJa[l.result] ?? l.result,
+      l.battedBallType ? (battedBallNamesJa[l.battedBallType] ?? l.battedBallType) : "",
       l.direction !== null ? l.direction.toFixed(1) : "",
       l.launchAngle !== null ? l.launchAngle.toFixed(1) : "",
       l.exitVelocity !== null ? l.exitVelocity.toFixed(1) : "",
-      l.fielderPosition !== null ? (posNames[l.fielderPosition] ?? l.fielderPosition) : "",
+      l.result === "homerun"
+        ? "-"
+        : l.fielderPosition !== null
+          ? (posNamesJa[l.fielderPosition] ?? l.fielderPosition)
+          : "",
     ]);
     const csvContent = [headers, ...rows].map((r) => r.join(",")).join("\n");
     const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8" });
@@ -810,7 +1207,7 @@ function DiagnosticTab() {
                   const fpct = f.tc > 0 ? ((f.po + f.a) / f.tc).toFixed(3).replace(/^0/, "") : "-.---";
                   return (
                     <tr key={pos} className="border-b border-gray-700/30">
-                      <td className="py-2 px-3 text-blue-400 font-semibold">{posNames[pos]}</td>
+                      <td className="py-2 px-3 text-blue-400 font-semibold">{posNamesJa[pos]}</td>
                       <td className="py-2 px-3 text-right text-gray-200">{f.po.toLocaleString()}</td>
                       <td className="py-2 px-3 text-right text-gray-200">{f.a.toLocaleString()}</td>
                       <td className="py-2 px-3 text-right text-red-400">{f.e.toLocaleString()}</td>
@@ -844,63 +1241,7 @@ function DiagnosticTab() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[600px] overflow-y-auto">
-              <table
-                className="w-full text-xs"
-                style={{ fontVariantNumeric: "tabular-nums" }}
-              >
-                <thead className="sticky top-0 bg-gray-800">
-                  <tr className="text-gray-400 border-b border-gray-700">
-                    <th className="text-right py-2 px-2">回</th>
-                    <th className="text-center py-2 px-2">半</th>
-                    <th className="text-left py-2 px-2">打者</th>
-                    <th className="text-left py-2 px-2">投手</th>
-                    <th className="text-left py-2 px-2">結果</th>
-                    <th className="text-left py-2 px-2">打球</th>
-                    <th className="text-right py-2 px-2">方向°</th>
-                    <th className="text-right py-2 px-2">角度°</th>
-                    <th className="text-right py-2 px-2">速度</th>
-                    <th className="text-center py-2 px-2">守備</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {atBatLogs.slice(0, 500).map((log, i) => (
-                    <tr
-                      key={i}
-                      className={`border-b border-gray-700/20 ${i % 2 === 1 ? "bg-gray-700/10" : ""}`}
-                    >
-                      <td className="py-1 px-2 text-right text-gray-400">{log.inning}</td>
-                      <td className="py-1 px-2 text-center text-gray-400">
-                        {log.halfInning === "top" ? "表" : "裏"}
-                      </td>
-                      <td className="py-1 px-2 text-gray-200">{log.batterName}</td>
-                      <td className="py-1 px-2 text-gray-400">{log.pitcherName}</td>
-                      <td className={`py-1 px-2 ${isHit(log.result) ? "text-green-400" : log.result === "strikeout" ? "text-red-400" : log.result === "walk" || log.result === "hitByPitch" ? "text-blue-400" : "text-gray-300"}`}>
-                        {log.result}
-                      </td>
-                      <td className="py-1 px-2 text-gray-400">{log.battedBallType ?? "-"}</td>
-                      <td className="py-1 px-2 text-right text-gray-300">
-                        {log.direction !== null ? log.direction.toFixed(1) : "-"}
-                      </td>
-                      <td className="py-1 px-2 text-right text-gray-300">
-                        {log.launchAngle !== null ? log.launchAngle.toFixed(1) : "-"}
-                      </td>
-                      <td className="py-1 px-2 text-right text-gray-300">
-                        {log.exitVelocity !== null ? log.exitVelocity.toFixed(1) : "-"}
-                      </td>
-                      <td className="py-1 px-2 text-center text-blue-400">
-                        {log.fielderPosition !== null ? (posNames[log.fielderPosition] ?? log.fielderPosition) : "-"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {atBatLogs.length > 500 && (
-                <p className="text-center text-gray-500 text-xs py-2">
-                  最大500件表示 (全{atBatLogs.length.toLocaleString()}件)
-                </p>
-              )}
-            </div>
+            <AtBatLogTable logs={atBatLogs} getName={getName} />
           </div>
         </>
       )}
