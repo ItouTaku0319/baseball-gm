@@ -43,44 +43,119 @@ PMはこのファイルを参照して、ゲームバランスに影響する実
 ```
 打席開始
   ↓
+死球判定 → 死球なら出塁
+  ↓
 四球判定 → 四球なら出塁
   ↓
 三振判定 → 三振ならアウト
   ↓
-安打判定 → 安打なら打球種別判定へ
+インプレー → 打球物理エンジンへ
   ↓
-エラー判定 → エラーなら出塁
+打球生成 (方向・角度・速度) → 打球タイプ分類
   ↓
-凡打（ゴロ50% / フライ50%）
+フィールダー決定 (ゾーンベース)
+  ↓
+結果判定 (HR/安打/アウト/エラー)
 ```
 
-### 確率計算式
+### 確率計算式（打席結果判定）
 
 ```
-contactFactor = (batter.contact - pitcher.breaking * 0.5) / 100
-powerFactor   = batter.power / 100
-eyeFactor     = (batter.eye - pitcher.control * 0.3) / 100
-velocityFactor = pitcher.velocity / 100
+contactFactor  = (batter.contact - breakingPower * 0.5) / 100
+eyeFactor      = (batter.eye - pitcher.control * 0.3) / 100
+velocityFactor = (velocity - 120) / 45
+controlFactor  = pitcher.control / 100
 ```
 
 | 結果 | 確率 | 最低保証 |
 |---|---|---|
-| 四球 | 0.08 + eyeFactor × 0.06 - control × 0.0005 | 2% |
-| 三振 | 0.15 + velocityFactor × 0.08 - contactFactor × 0.06 | 5% |
-| 安打 | 0.22 + contactFactor × 0.08 - breaking × 0.001 | 10% |
-| エラー | 固定 0.02 | 2% |
-| 凡打 | 残りの確率 | - |
+| 死球 | 0.008 + (1 - controlFactor) × 0.007 | 0.3% |
+| 四球 | 0.075 + eyeFactor × 0.05 - controlFactor × 0.04 | 2% |
+| 三振 | 0.14 + velocityFactor × 0.08 - contactFactor × 0.06 + finisherBonus | 5% |
+| インプレー | 残りの確率 | - |
 
-### 安打の打球種別
+### 打球物理エンジン
 
-安打が発生した場合の内訳:
+インプレー時に打球の物理データ（方向・角度・速度）を生成し、ゾーンベースでフィールダーを決定する。
 
-| 種別 | 確率 |
+#### BattedBall（打球データ）
+| プロパティ | 範囲 | 説明 |
+|---|---|---|
+| direction | 0°〜90° | 打球方向（0=レフト線, 45=センター, 90=ライト線） |
+| launchAngle | -15°〜70° | 打球角度（負=ゴロ, 10-20=ライナー, 20-50=フライ, 50+=ポップ） |
+| exitVelocity | 80〜185 km/h | 打球速度 |
+| type | BattedBallType | 後方互換用の分類 |
+
+#### 打球方向の生成
+```
+基本: 右打者=38°, 左打者=52°, 両打ち=45°
+プル補正: (power - 50) × 0.08 (パワーが高いとプル傾向が強まる)
+分布: ガウス乱数 (σ=18°)
+```
+
+#### 打球角度の生成
+```
+基本: 12° + (power - 50) × 0.08 - (contact - 50) × 0.04
+シンカーボーナス: sinker.level × 0.6 + shoot.level × 0.4 (最大5°低下)
+分布: ガウス乱数 (σ=16°)
+```
+
+#### 打球速度の生成
+```
+基本: 120 + (power - 50) × 0.5 + (contact - 50) × 0.15
+変化球ペナルティ: (breakingPower - 50) × 0.15
+分布: ガウス乱数 (σ=18 km/h)
+```
+
+#### 打球タイプ分類
+| 条件 | 分類 |
 |---|---|
-| 本塁打 | 0.03 + powerFactor × 0.06 |
-| 三塁打 | 0.005 + (speed / 100) × 0.01 |
-| 二塁打 | 0.06 + powerFactor × 0.04 |
-| 単打 | 残り |
+| launchAngle ≥ 50° | popup |
+| launchAngle < 5° | ground_ball |
+| 5° ≤ launchAngle < 20° かつ exitVelocity < 100 | ground_ball |
+| 5° ≤ launchAngle < 20° かつ exitVelocity ≥ 100 | line_drive |
+| 20° ≤ launchAngle < 50° | fly_ball |
+
+#### フィールドゾーンマッピング
+
+**内野ゾーン（ゴロ・低速ライナー）**
+```
+方向  0°──18°──40°──55°──72°──90°
+      | 3B  | SS  | 2B  |   1B   |
+※中央(30-60°)+低速(<110km/h)でP返し(12%)
+```
+
+**外野ゾーン（フライ・高速ライナー）**
+```
+方向  0°──────30°──────60°──────90°
+      |  LF   |   CF   |   RF   |
+```
+
+**ポップフライ**: C=15%, P=中央5%, 残りは内野ゾーンと同様
+
+**ライナーの振り分け**: exitVelocity > 140 または launchAngle > 14° → 外野、それ以外 → 内野
+
+#### バレルゾーン（本塁打判定）
+```
+条件: exitVelocity ≥ 150 km/h かつ 22° ≤ launchAngle ≤ 38°
+バレル時HR率: 0.35 + powerFactor × 0.15
+通常フライHR率: 0.05 + powerFactor × 0.08 + (exitVelocity - 120) × 0.001
+ライナーHR率: 0.02 + powerFactor × 0.03 + max(0, exitVelocity - 145) × 0.002
+```
+
+### 安打の長打タイプ
+
+安打が発生した場合の内訳（determineHitType）:
+
+| 打球タイプ | 種別 | 確率 |
+|---|---|---|
+| fly_ball | 三塁打 | 0.06 + speedFactor × 0.04 |
+| fly_ball | 二塁打 | 残り |
+| line_drive | 二塁打 | 0.20 + powerFactor × 0.08 |
+| line_drive | 三塁打 | 0.02 + speedFactor × 0.02 |
+| line_drive | 単打 | 残り |
+| ground_ball | 二塁打 | 0.08 + speedFactor × 0.03 |
+| ground_ball | 単打 | 残り |
 
 ### 走塁ルール
 

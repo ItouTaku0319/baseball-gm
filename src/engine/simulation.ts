@@ -109,87 +109,223 @@ function createDummyFielder(): Player {
   };
 }
 
-/** 打球タイプを決定する */
-function determineBattedBallType(batter: Player, pitcher: Player): BattedBallType {
-  const powerFactor = batter.batting.power / 100;
-  const contactFactor = batter.batting.contact / 100;
+/** 打球の物理データ */
+interface BattedBall {
+  /** 方向角 (度): 0=レフト線, 45=センター, 90=ライト線 */
+  direction: number;
+  /** 打球角度 (度): 負=ゴロ, 0-10=低い打球, 10-25=ライナー, 25-50=フライ, 50+=ポップフライ */
+  launchAngle: number;
+  /** 打球速度 (km/h): 80-185 */
+  exitVelocity: number;
+  /** 後方互換用の打球タイプ分類 */
+  type: BattedBallType;
+}
 
-  // シンカー系球種のゴロ率ボーナスを計算
+/** ガウス乱数 (Box-Muller法) */
+export function gaussianRandom(mean: number, stdDev: number): number {
+  const u1 = Math.random();
+  const u2 = Math.random();
+  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  return mean + z * stdDev;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+/** 打球角度と速度から打球タイプを分類する */
+export function classifyBattedBallType(launchAngle: number, exitVelocity: number): BattedBallType {
+  if (launchAngle >= 50) return "popup";
+  if (launchAngle < 5) return "ground_ball";
+  if (launchAngle < 20) {
+    if (exitVelocity < 100) return "ground_ball";
+    return "line_drive";
+  }
+  return "fly_ball";
+}
+
+/** 打球の物理データを生成する */
+export function generateBattedBall(batter: Player, pitcher: Player): BattedBall {
+  const power = batter.batting.power;
+  const contact = batter.batting.contact;
+  const breakingPower = calcBreakingPower(pitcher.pitching?.pitches);
+
+  // --- 1. 打球方向 (0-90°) ---
+  let dirMean = 45;
+  if (batter.batSide === "R") dirMean = 38;
+  if (batter.batSide === "L") dirMean = 52;
+  const pullShift = (power - 50) * 0.08;
+  if (batter.batSide === "R") dirMean -= pullShift;
+  else if (batter.batSide === "L") dirMean += pullShift;
+
+  const direction = clamp(gaussianRandom(dirMean, 18), 0, 90);
+
+  // --- 2. 打球角度 (-15° ~ 70°) ---
+  let angleMean = 12 + (power - 50) * 0.08 - (contact - 50) * 0.04;
   let sinkerBonus = 0;
   if (pitcher.pitching?.pitches) {
     for (const pitch of pitcher.pitching.pitches) {
       if (pitch.type === "sinker" || pitch.type === "shoot") {
-        sinkerBonus += pitch.level * (pitch.type === "sinker" ? 0.8 : 0.5);
+        sinkerBonus += pitch.level * (pitch.type === "sinker" ? 0.6 : 0.4);
       }
     }
-    sinkerBonus = Math.min(7, sinkerBonus); // 最大+7%
+    sinkerBonus = Math.min(5, sinkerBonus);
   }
+  angleMean -= sinkerBonus;
 
-  let groundBallRate = 0.44 - powerFactor * 0.06 + sinkerBonus * 0.01;
-  let flyBallRate = 0.34 + powerFactor * 0.06;
-  const lineDriveRate = 0.20 + contactFactor * 0.02;
-  let popupRate = 0.02 + (1 - contactFactor) * 0.02;
+  const launchAngle = clamp(gaussianRandom(angleMean, 16), -15, 70);
 
-  // 合計が1になるよう正規化
-  const total = groundBallRate + flyBallRate + lineDriveRate + popupRate;
-  groundBallRate /= total;
-  flyBallRate /= total;
-  const normalizedLineRate = lineDriveRate / total;
-  popupRate /= total;
+  // --- 3. 打球速度 (80-185 km/h) ---
+  const velMean = 120 + (power - 50) * 0.5 + (contact - 50) * 0.15;
+  const breakingPenalty = (breakingPower - 50) * 0.15;
+  const exitVelocity = clamp(gaussianRandom(velMean - breakingPenalty, 18), 80, 185);
 
-  const roll = Math.random();
-  if (roll < groundBallRate) return "ground_ball";
-  if (roll < groundBallRate + flyBallRate) return "fly_ball";
-  if (roll < groundBallRate + flyBallRate + normalizedLineRate) return "line_drive";
-  return "popup";
+  // --- 4. 打球タイプ分類 (後方互換) ---
+  const type = classifyBattedBallType(launchAngle, exitVelocity);
+
+  return { direction, launchAngle, exitVelocity, type };
 }
 
-/** 打球タイプに応じて処理する野手を決定する */
-function assignFielder(battedBallType: BattedBallType): FielderPosition {
-  const roll = Math.random();
-
-  if (battedBallType === "ground_ball") {
-    // 内野手に重み付き
-    if (roll < 0.10) return 1; // P
-    if (roll < 0.25) return 3; // 1B
-    if (roll < 0.50) return 4; // 2B
-    if (roll < 0.70) return 5; // 3B
-    return 6; // SS
+/** 内野手をゾーンベースで決定 */
+function assignInfielder(direction: number, exitVelocity: number): FielderPosition {
+  // 投手は低速ゴロのみ（ピッチャー返し）
+  if (direction > 30 && direction < 60 && exitVelocity < 110) {
+    if (Math.random() < 0.12) return 1;
   }
 
-  if (battedBallType === "fly_ball") {
-    // 外野手に重み付き
-    if (roll < 0.30) return 7; // LF
-    if (roll < 0.70) return 8; // CF
-    return 9; // RF
+  const noise = gaussianRandom(0, 5);
+  const adj = direction + noise;
+
+  if (adj < 18) return 5;       // 3B
+  if (adj < 40) return 6;       // SS
+  if (adj < 55) return 4;       // 2B
+  return 3;                     // 1B
+}
+
+/** 外野手をゾーンベースで決定 */
+function assignOutfielder(direction: number): FielderPosition {
+  const noise = gaussianRandom(0, 4);
+  const adj = direction + noise;
+
+  if (adj < 30) return 7;    // LF
+  if (adj < 60) return 8;    // CF
+  return 9;                  // RF
+}
+
+/** ポップフライの処理野手を決定 */
+function assignPopupFielder(direction: number): FielderPosition {
+  if (Math.random() < 0.15) return 2;  // C
+  if (direction > 35 && direction < 55 && Math.random() < 0.05) return 1; // P
+
+  const noise = gaussianRandom(0, 5);
+  const adj = direction + noise;
+  if (adj < 22) return 5;    // 3B
+  if (adj < 44) return 6;    // SS
+  if (adj < 66) return 4;    // 2B
+  return 3;                  // 1B
+}
+
+/** 打球物理データからフィールダーを決定する */
+export function determineFielderFromBall(ball: BattedBall): FielderPosition {
+  if (ball.type === "popup") {
+    return assignPopupFielder(ball.direction);
   }
 
-  if (battedBallType === "line_drive") {
-    // 内野30% / 外野70%
-    if (roll < 0.30) {
-      // 内野
-      const innerRoll = Math.random();
-      if (innerRoll < 0.05) return 1; // P
-      if (innerRoll < 0.25) return 3; // 1B
-      if (innerRoll < 0.50) return 4; // 2B
-      if (innerRoll < 0.70) return 5; // 3B
-      return 6; // SS
+  if (ball.type === "fly_ball") {
+    return assignOutfielder(ball.direction);
+  }
+
+  if (ball.type === "ground_ball") {
+    return assignInfielder(ball.direction, ball.exitVelocity);
+  }
+
+  // ライナー: 方向と速度で内野/外野を振り分け
+  if (ball.exitVelocity > 140 || ball.launchAngle > 14) {
+    return assignOutfielder(ball.direction);
+  }
+  return assignInfielder(ball.direction, ball.exitVelocity);
+}
+
+/** 打球物理ベースでインプレーの結果を判定する */
+function resolveInPlayFromBall(
+  ball: BattedBall,
+  fielderPos: FielderPosition,
+  batter: Player,
+  _pitcher: Player,
+  fielderMap: Map<FielderPosition, Player>,
+  bases: BaseRunners,
+  outs: number
+): AtBatResult {
+  const fielder = fielderMap.get(fielderPos) ?? createDummyFielder();
+  const { fielding, catching } = getFieldingAbility(fielder, fielderPos);
+  const fieldingFactor = fielding / 100;
+  const catchingFactor = catching / 100;
+
+  // ポップフライ → 常にアウト
+  if (ball.type === "popup") return "popout";
+
+  // --- 本塁打判定 ---
+  if (ball.type === "fly_ball" || ball.type === "line_drive") {
+    const isBarrel = ball.exitVelocity >= 150 && ball.launchAngle >= 22 && ball.launchAngle <= 38;
+    const powerFactor = batter.batting.power / 100;
+    let hrRate: number;
+    if (isBarrel) {
+      hrRate = 0.35 + powerFactor * 0.15;
+    } else if (ball.type === "fly_ball") {
+      hrRate = 0.05 + powerFactor * 0.08 + (ball.exitVelocity - 120) * 0.001;
     } else {
-      // 外野
-      const outerRoll = Math.random();
-      if (outerRoll < 0.30) return 7; // LF
-      if (outerRoll < 0.70) return 8; // CF
-      return 9; // RF
+      hrRate = 0.02 + powerFactor * 0.03 + Math.max(0, (ball.exitVelocity - 145)) * 0.002;
     }
+    if (Math.random() < Math.max(0.01, hrRate)) return "homerun";
   }
 
-  // popup: 内野手+捕手+投手
-  if (roll < 0.05) return 1; // P
-  if (roll < 0.20) return 2; // C
-  if (roll < 0.40) return 3; // 1B
-  if (roll < 0.60) return 4; // 2B
-  if (roll < 0.80) return 5; // 3B
-  return 6; // SS
+  // --- ゴロ処理 ---
+  if (ball.type === "ground_ball") {
+    if (bases.first && outs < 2) {
+      const dpRate = 0.12 + (1 - batter.batting.speed / 100) * 0.06;
+      if (Math.random() < dpRate) return "doublePlay";
+    }
+
+    const speedBonus = batter.batting.speed / 100;
+    const velPenalty = Math.max(0, (ball.exitVelocity - 100)) * 0.001;
+    const infieldHitRate = 0.04 + speedBonus * 0.08 - fieldingFactor * 0.03 - velPenalty;
+    if (Math.random() < Math.max(0.01, infieldHitRate)) return "infieldHit";
+
+    const velErrorBonus = Math.max(0, (ball.exitVelocity - 130)) * 0.0005;
+    const errorRate = 0.03 - fieldingFactor * 0.015 - catchingFactor * 0.01 + velErrorBonus;
+    if (Math.random() < Math.max(0.005, errorRate)) return "error";
+
+    if (bases.first || bases.second || bases.third) {
+      if (Math.random() < 0.05) return "fieldersChoice";
+    }
+
+    return "groundout";
+  }
+
+  // --- フライ処理 ---
+  if (ball.type === "fly_ball") {
+    const hitRate = 0.14 - fieldingFactor * 0.03 + (ball.exitVelocity - 120) * 0.0005;
+    if (Math.random() < Math.max(0.05, hitRate)) {
+      return determineHitType(ball.type, batter);
+    }
+
+    if (bases.third && outs < 2) {
+      if (Math.random() < 0.50) return "sacrificeFly";
+    }
+
+    const errorRate = 0.015 - fieldingFactor * 0.008;
+    if (Math.random() < Math.max(0.002, errorRate)) return "error";
+
+    return "flyout";
+  }
+
+  // --- ライナー処理 ---
+  const hitRate = 0.68 + (batter.batting.contact / 100) * 0.05 - fieldingFactor * 0.03;
+  if (Math.random() < Math.max(0.50, hitRate)) {
+    return determineHitType(ball.type, batter);
+  }
+
+  return "lineout";
 }
 
 /** 安打時の長打タイプを決定する */
@@ -219,91 +355,6 @@ function determineHitType(
   const doubleRate = 0.08 + speedFactor * 0.03;
   if (roll < doubleRate) return "double";
   return "single";
-}
-
-/** インプレー打球の結果を判定する */
-function resolveInPlay(
-  battedBallType: BattedBallType,
-  fielderPos: FielderPosition,
-  batter: Player,
-  pitcher: Player,
-  fielderMap: Map<FielderPosition, Player>,
-  bases: BaseRunners,
-  outs: number
-): AtBatResult {
-  const fielder = fielderMap.get(fielderPos) ?? createDummyFielder();
-  const { fielding, catching } = getFieldingAbility(fielder, fielderPos);
-  const fieldingFactor = fielding / 100;
-  const catchingFactor = catching / 100;
-
-  // ポップフライは常にアウト
-  if (battedBallType === "popup") {
-    return "popout";
-  }
-
-  if (battedBallType === "ground_ball") {
-    // 併殺判定 (1塁に走者がいて2アウト未満)
-    if (bases.first && outs < 2) {
-      const dpRate = 0.12 + (1 - batter.batting.speed / 100) * 0.06;
-      if (Math.random() < dpRate) return "doublePlay";
-    }
-
-    // 内野安打判定
-    const infieldHitRate = 0.04 + (batter.batting.speed / 100) * 0.08 - fieldingFactor * 0.03;
-    if (Math.random() < Math.max(0.01, infieldHitRate)) return "infieldHit";
-
-    // エラー判定
-    const errorRate = 0.03 - fieldingFactor * 0.015 - catchingFactor * 0.01;
-    if (Math.random() < Math.max(0.005, errorRate)) return "error";
-
-    // FC判定 (走者あり)
-    if (bases.first || bases.second || bases.third) {
-      if (Math.random() < 0.05) return "fieldersChoice";
-    }
-
-    return "groundout";
-  }
-
-  if (battedBallType === "fly_ball") {
-    // 本塁打判定
-    const powerFactor = batter.batting.power / 100;
-    const hrRate = 0.08 + powerFactor * 0.12;
-    if (Math.random() < hrRate) return "homerun";
-
-    // 安打判定
-    const hitRate = 0.14 - fieldingFactor * 0.03 - (getFieldingAbility(fielder, fielderPos).arm / 100) * 0.01;
-    if (Math.random() < Math.max(0.05, hitRate)) {
-      const hitType = determineHitType(battedBallType, batter);
-      // 犠飛判定 (3塁に走者がいて2アウト未満、かつアウトになる場合のみ)
-      // フライ安打の場合は犠飛にならない
-      return hitType;
-    }
-
-    // アウト確定後の犠飛判定 (3塁に走者がいて2アウト未満)
-    if (bases.third && outs < 2) {
-      if (Math.random() < 0.50) return "sacrificeFly";
-    }
-
-    // エラー判定
-    const errorRate = 0.015 - fieldingFactor * 0.008;
-    if (Math.random() < Math.max(0.002, errorRate)) return "error";
-
-    return "flyout";
-  }
-
-  // line_drive
-  // 本塁打判定
-  const powerFactor = batter.batting.power / 100;
-  const hrRate = 0.03 + powerFactor * 0.04;
-  if (Math.random() < hrRate) return "homerun";
-
-  // 安打判定 (ライナーはBABIP高い)
-  const hitRate = 0.68 + (batter.batting.contact / 100) * 0.05 - fieldingFactor * 0.03;
-  if (Math.random() < Math.max(0.50, hitRate)) {
-    return determineHitType(battedBallType, batter);
-  }
-
-  return "lineout";
 }
 
 /** 1打席の結果を決定する */
@@ -353,12 +404,12 @@ function simulateAtBat(
     return { result: "strikeout", battedBallType: null, fielderPosition: null };
   }
 
-  // インプレー: 打球タイプと野手を決定してから結果を判定
-  const battedBallType = determineBattedBallType(batter, pitcher);
-  const fielderPos = assignFielder(battedBallType);
-  const result = resolveInPlay(battedBallType, fielderPos, batter, pitcher, fielderMap, bases, outs);
+  // インプレー: 打球物理データを生成 → フィールダーを幾何学的に決定 → 結果判定
+  const ball = generateBattedBall(batter, pitcher);
+  const fielderPos = determineFielderFromBall(ball);
+  const result = resolveInPlayFromBall(ball, fielderPos, batter, pitcher, fielderMap, bases, outs);
 
-  return { result, battedBallType, fielderPosition: fielderPos };
+  return { result, battedBallType: ball.type, fielderPosition: fielderPos };
 }
 
 /** 個人成績マップを取得・初期化するヘルパー */
@@ -675,28 +726,80 @@ function simulateHalfInning(
         bs.atBats++;
         pitcherLog.groundBallOuts = (pitcherLog.groundBallOuts ?? 0) + 1;
         if (detail.fielderPosition) {
-          recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "assist");
-          recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          const fp = detail.fielderPosition;
+          if (bases.first && Math.random() < 0.95) {
+            // 2塁フォースアウト: 走者1塁時の95%
+            if (fp === 6) {
+              // SS自身が2塁ベースを踏む → 無補殺刺殺
+              recordFielding(batterStatsMap, fielderMap, 6, "putOut");
+            } else if (fp === 4) {
+              // 2B自身が2塁ベースを踏む → 無補殺刺殺
+              recordFielding(batterStatsMap, fielderMap, 4, "putOut");
+            } else {
+              // 他の内野手 → 2塁送球 → 処理野手A + SS(85%) or 2B(15%)が刺殺
+              recordFielding(batterStatsMap, fielderMap, fp, "assist");
+              const coverPos: FielderPosition = Math.random() < 0.85 ? 6 : 4;
+              recordFielding(batterStatsMap, fielderMap, coverPos, "putOut");
+            }
+          } else if (!bases.first && (bases.second || bases.third) && Math.random() < 0.35) {
+            // 走者2B/3Bで1B空き: 他塁への送球 (35%)
+            recordFielding(batterStatsMap, fielderMap, fp, "assist");
+            if (bases.third && Math.random() < 0.40) {
+              // 本塁送球 → 捕手PO
+              recordFielding(batterStatsMap, fielderMap, 2, "putOut");
+            } else {
+              // 2塁/3塁タッチプレー → SS(70%) or 3B(30%) PO
+              const tagPos: FielderPosition = Math.random() < 0.70 ? 6 : 5;
+              recordFielding(batterStatsMap, fielderMap, tagPos, "putOut");
+            }
+          } else if (fp !== 6 && fp !== 4 && Math.random() < 0.12) {
+            // SSタグプレー: SS(70%) or 2B(30%)が2塁ベースカバーでPO
+            recordFielding(batterStatsMap, fielderMap, fp, "assist");
+            const tagCoverPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
+            recordFielding(batterStatsMap, fielderMap, tagCoverPos, "putOut");
+          } else {
+            // 従来通り: 1塁送球
+            recordFielding(batterStatsMap, fielderMap, fp, "assist");
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          }
         }
         break;
 
       case "flyout":
-      case "popout":
+      case "popout": {
         outs++;
         bs.atBats++;
         pitcherLog.flyBallOuts = (pitcherLog.flyBallOuts ?? 0) + 1;
         if (detail.fielderPosition) {
           recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "putOut");
+          // 外野フライでの中継/カットオフ補殺 (走者ありの場合)
+          const fp = detail.fielderPosition;
+          if (fp >= 7 && fp <= 9 && (bases.first || bases.second || bases.third)) {
+            if (Math.random() < 0.20) {
+              const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
+              recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
+            }
+          }
         }
         break;
+      }
 
-      case "lineout":
+      case "lineout": {
         outs++;
         bs.atBats++;
         if (detail.fielderPosition) {
           recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "putOut");
+          // 外野ライナーでの中継補殺 (走者ありの場合)
+          const fp = detail.fielderPosition;
+          if (fp >= 7 && fp <= 9 && (bases.first || bases.second || bases.third)) {
+            if (Math.random() < 0.18) {
+              const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
+              recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
+            }
+          }
         }
         break;
+      }
 
       case "doublePlay": {
         outs += 2;
@@ -707,17 +810,20 @@ function simulateHalfInning(
           const dpPos = detail.fielderPosition;
           recordFielding(batterStatsMap, fielderMap, dpPos, "assist");
           if (dpPos === 4) {
-            // 4-6-3: 2B→SSにPO(フォースアウト)→1BにPO
+            // 4-6-3: 2B(A)→SS: PO(2塁フォース)+A(1塁送球)→1B: PO
             recordFielding(batterStatsMap, fielderMap, 6, "putOut");
+            recordFielding(batterStatsMap, fielderMap, 6, "assist");
             recordFielding(batterStatsMap, fielderMap, 3, "putOut");
           } else if (dpPos === 6) {
-            // 6-4-3: SS→2BにPO(フォースアウト)→1BにPO
+            // 6-4-3: SS(A)→2B: PO(2塁フォース)+A(1塁送球)→1B: PO
             recordFielding(batterStatsMap, fielderMap, 4, "putOut");
+            recordFielding(batterStatsMap, fielderMap, 4, "assist");
             recordFielding(batterStatsMap, fielderMap, 3, "putOut");
           } else {
-            // その他(5-6-3等): 処理野手A→SSにA→2BにPO→1BにPO
-            recordFielding(batterStatsMap, fielderMap, 6, "assist");
-            recordFielding(batterStatsMap, fielderMap, 4, "putOut");
+            // 5-6-3等: 処理野手(A)→SS or 2B: PO+A→1B: PO
+            const pivotPos: FielderPosition = Math.random() < 0.65 ? 6 : 4;
+            recordFielding(batterStatsMap, fielderMap, pivotPos, "putOut");
+            recordFielding(batterStatsMap, fielderMap, pivotPos, "assist");
             recordFielding(batterStatsMap, fielderMap, 3, "putOut");
           }
         }
@@ -733,6 +839,13 @@ function simulateHalfInning(
         pitcherLog.flyBallOuts = (pitcherLog.flyBallOuts ?? 0) + 1;
         if (detail.fielderPosition) {
           recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "putOut");
+          // 犠飛での中継補殺
+          if (detail.fielderPosition >= 7 && detail.fielderPosition <= 9) {
+            if (Math.random() < 0.25) {
+              const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
+              recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
+            }
+          }
         }
         const sfAdvance = advanceRunners(bases, result, batter);
         bases = sfAdvance.bases;
@@ -963,3 +1076,4 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
     pitcherStats: [homePitcherLog, awayPitcherLog],
   };
 }
+

@@ -260,6 +260,7 @@ PMは常に人間に状況が伝わる状態を維持すること。
 - **守備成績(PO/A/E)**: 各打席結果に応じて守備側選手にPO(刺殺)/A(補殺)/E(失策)を記録。三振→捕手PO、ゴロアウト→処理野手A+1BにPO、フライ系→処理野手PO、併殺→処理野手A+中継パターンに応じたPO×2、盗塁死→捕手A+該当塁野手PO。守備率=(PO+A)/(PO+A+E)、RF=(PO+A)/G*9。
 - **簡易UZR/DRS**: ポジション別平均との対比で算出。`rangeRuns = ((PO+A)/Gの差) * 0.8 * G`、`errorRuns = (E/Gの差) * 0.7 * G`。UZR = rangeRuns + errorRuns。プラス=平均以上の守備貢献。
 - **投手打球系指標**: PitcherGameLog/PitcherSeasonStatsに全打球タイプ(groundBalls/flyBalls/lineDrives/popups)を記録。GB%/FB%/LD%は全打球(BIP)に対する割合。IFFB%=popup/(flyBalls+popups)。HR/FB=HR/flyBalls。
+- **打球物理エンジン**: インプレー時に打球の方向(0-90°)・角度(-15~70°)・速度(80-185km/h)をガウス乱数で生成。打球方向はbatSide（左右打席）によるプル傾向あり。フィールダーはゾーンベースで幾何学的に決定（内野: 3B→SS→2B→1B、外野: LF→CF→RF）。本塁打はバレルゾーン（150km/h+, 22-38°）で高確率。旧`determineBattedBallType`+`assignFielder`+`resolveInPlay`を置き換え。
 
 ## 既知の問題
 <!-- 今は直さないが把握しておくべき問題を記録する。 -->
