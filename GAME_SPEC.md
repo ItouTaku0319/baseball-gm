@@ -137,10 +137,16 @@ controlFactor  = pitcher.control / 100
 
 #### バレルゾーン（本塁打判定）
 ```
-条件: exitVelocity ≥ 150 km/h かつ 22° ≤ launchAngle ≤ 38°
-バレル時HR率: 0.35 + powerFactor × 0.15
-通常フライHR率: 0.05 + powerFactor × 0.08 + (exitVelocity - 120) × 0.001
-ライナーHR率: 0.02 + powerFactor × 0.03 + max(0, exitVelocity - 145) × 0.002
+条件: exitVelocity ≥ 158 km/h かつ 22° ≤ launchAngle ≤ 38°
+バレル時HR率: 0.25 + powerFactor × 0.10
+通常フライHR率: 0.03 + powerFactor × 0.06 + (exitVelocity - 120) × 0.001
+ライナーHR率: 0.01 + powerFactor × 0.02 + max(0, exitVelocity - 145) × 0.002
+```
+
+#### インプレー結果（安打率）
+```
+ライナー安打率: 0.62 + contactFactor × 0.05 - fieldingFactor × 0.03 (最低0.50)
+フライ安打率: 0.12 - fieldingFactor × 0.03 + (exitVelocity - 120) × 0.0005 (最低0.05)
 ```
 
 ### 安打の長打タイプ

@@ -1,5 +1,5 @@
 import type { Team } from "@/models/team";
-import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog } from "@/models/league";
+import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog } from "@/models/league";
 import type { Player, PitchRepertoire } from "@/models/player";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
@@ -30,6 +30,9 @@ interface AtBatDetail {
   result: AtBatResult;
   battedBallType: BattedBallType | null; // 三振・四球・死球はnull
   fielderPosition: FielderPosition | null;
+  direction: number | null;
+  launchAngle: number | null;
+  exitVelocity: number | null;
 }
 
 /** 走者の状態 */
@@ -62,7 +65,8 @@ function getFieldingAbility(
 /** 守備側チームのフィールダーマップを構築 */
 function buildFielderMap(
   fieldingTeam: Player[],
-  pitcher: Player
+  pitcher: Player,
+  fullRoster?: Player[]
 ): Map<FielderPosition, Player> {
   const map = new Map<FielderPosition, Player>();
   map.set(1, pitcher);
@@ -71,10 +75,21 @@ function buildFielderMap(
     C: 2, "1B": 3, "2B": 4, "3B": 5, SS: 6, LF: 7, CF: 8, RF: 9,
   };
 
+  // まず打順(fieldingTeam)から登録
   for (const player of fieldingTeam) {
     const pos = posMap[player.position];
     if (pos !== undefined && !map.has(pos)) {
       map.set(pos, player);
+    }
+  }
+
+  // フルロスターから未登録ポジションを補完
+  if (fullRoster) {
+    for (const player of fullRoster) {
+      const pos = posMap[player.position];
+      if (pos !== undefined && !map.has(pos)) {
+        map.set(pos, player);
+      }
     }
   }
 
@@ -266,15 +281,15 @@ function resolveInPlayFromBall(
 
   // --- 本塁打判定 ---
   if (ball.type === "fly_ball" || ball.type === "line_drive") {
-    const isBarrel = ball.exitVelocity >= 150 && ball.launchAngle >= 22 && ball.launchAngle <= 38;
+    const isBarrel = ball.exitVelocity >= 158 && ball.launchAngle >= 22 && ball.launchAngle <= 38;
     const powerFactor = batter.batting.power / 100;
     let hrRate: number;
     if (isBarrel) {
-      hrRate = 0.35 + powerFactor * 0.15;
+      hrRate = 0.25 + powerFactor * 0.10;
     } else if (ball.type === "fly_ball") {
-      hrRate = 0.05 + powerFactor * 0.08 + (ball.exitVelocity - 120) * 0.001;
+      hrRate = 0.03 + powerFactor * 0.06 + (ball.exitVelocity - 120) * 0.001;
     } else {
-      hrRate = 0.02 + powerFactor * 0.03 + Math.max(0, (ball.exitVelocity - 145)) * 0.002;
+      hrRate = 0.01 + powerFactor * 0.02 + Math.max(0, (ball.exitVelocity - 145)) * 0.002;
     }
     if (Math.random() < Math.max(0.01, hrRate)) return "homerun";
   }
@@ -304,7 +319,7 @@ function resolveInPlayFromBall(
 
   // --- フライ処理 ---
   if (ball.type === "fly_ball") {
-    const hitRate = 0.14 - fieldingFactor * 0.03 + (ball.exitVelocity - 120) * 0.0005;
+    const hitRate = 0.12 - fieldingFactor * 0.03 + (ball.exitVelocity - 120) * 0.0005;
     if (Math.random() < Math.max(0.05, hitRate)) {
       return determineHitType(ball.type, batter);
     }
@@ -320,7 +335,7 @@ function resolveInPlayFromBall(
   }
 
   // --- ライナー処理 ---
-  const hitRate = 0.68 + (batter.batting.contact / 100) * 0.05 - fieldingFactor * 0.03;
+  const hitRate = 0.62 + (batter.batting.contact / 100) * 0.05 - fieldingFactor * 0.03;
   if (Math.random() < Math.max(0.50, hitRate)) {
     return determineHitType(ball.type, batter);
   }
@@ -383,14 +398,14 @@ function simulateAtBat(
   const hbpRate = 0.008 + (1 - controlFactor) * 0.007;
   cumulative += Math.max(0.003, hbpRate);
   if (roll < cumulative) {
-    return { result: "hitByPitch", battedBallType: null, fielderPosition: null };
+    return { result: "hitByPitch", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null };
   }
 
   // 四球率
   const walkRate = 0.075 + eyeFactor * 0.05 - controlFactor * 0.04;
   cumulative += Math.max(0.02, walkRate);
   if (roll < cumulative) {
-    return { result: "walk", battedBallType: null, fielderPosition: null };
+    return { result: "walk", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null };
   }
 
   // 三振率
@@ -401,7 +416,7 @@ function simulateAtBat(
   const strikeoutRate = 0.14 + velocityFactor * 0.08 - contactFactor * 0.06 + finisherBonus;
   cumulative += Math.max(0.05, strikeoutRate);
   if (roll < cumulative) {
-    return { result: "strikeout", battedBallType: null, fielderPosition: null };
+    return { result: "strikeout", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null };
   }
 
   // インプレー: 打球物理データを生成 → フィールダーを幾何学的に決定 → 結果判定
@@ -409,7 +424,7 @@ function simulateAtBat(
   const fielderPos = determineFielderFromBall(ball);
   const result = resolveInPlayFromBall(ball, fielderPos, batter, pitcher, fielderMap, bases, outs);
 
-  return { result, battedBallType: ball.type, fielderPosition: fielderPos };
+  return { result, battedBallType: ball.type, fielderPosition: fielderPos, direction: ball.direction, launchAngle: ball.launchAngle, exitVelocity: ball.exitVelocity };
 }
 
 /** 個人成績マップを取得・初期化するヘルパー */
@@ -688,7 +703,12 @@ function simulateHalfInning(
   batterIndex: number,
   batterStatsMap: Map<string, PlayerGameStats>,
   pitcherLog: PitcherGameLog,
-  catcher: Player
+  catcher: Player,
+  fullRoster?: Player[],
+  options?: SimulateGameOptions,
+  atBatLogs?: AtBatLog[],
+  inning?: number,
+  halfInning?: "top" | "bottom"
 ): { runs: number; hits: number; nextBatterIndex: number } {
   let outs = 0;
   let runs = 0;
@@ -696,7 +716,7 @@ function simulateHalfInning(
   let bases: BaseRunners = { first: null, second: null, third: null };
   let idx = batterIndex;
 
-  const fielderMap = buildFielderMap(fieldingTeam, pitcher);
+  const fielderMap = buildFielderMap(fieldingTeam, pitcher, fullRoster);
 
   while (outs < 3) {
     // 盗塁試行 (打席前)
@@ -758,9 +778,15 @@ function simulateHalfInning(
             const tagCoverPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
             recordFielding(batterStatsMap, fielderMap, tagCoverPos, "putOut");
           } else {
-            // 従来通り: 1塁送球
-            recordFielding(batterStatsMap, fielderMap, fp, "assist");
-            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+            // 1塁送球
+            if (fp === 3) {
+              // 1B自己処理: 無補殺刺殺 (3U)
+              recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+            } else {
+              // 他の内野手 → 1B送球
+              recordFielding(batterStatsMap, fielderMap, fp, "assist");
+              recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+            }
           }
         }
         break;
@@ -776,6 +802,7 @@ function simulateHalfInning(
           const fp = detail.fielderPosition;
           if (fp >= 7 && fp <= 9 && (bases.first || bases.second || bases.third)) {
             if (Math.random() < 0.20) {
+              recordFielding(batterStatsMap, fielderMap, fp, "assist");
               const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
               recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
             }
@@ -793,6 +820,7 @@ function simulateHalfInning(
           const fp = detail.fielderPosition;
           if (fp >= 7 && fp <= 9 && (bases.first || bases.second || bases.third)) {
             if (Math.random() < 0.18) {
+              recordFielding(batterStatsMap, fielderMap, fp, "assist");
               const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
               recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
             }
@@ -842,6 +870,7 @@ function simulateHalfInning(
           // 犠飛での中継補殺
           if (detail.fielderPosition >= 7 && detail.fielderPosition <= 9) {
             if (Math.random() < 0.25) {
+              recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "assist");
               const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
               recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
             }
@@ -968,6 +997,23 @@ function simulateHalfInning(
       }
     }
 
+    if (options?.collectAtBatLogs && atBatLogs) {
+      atBatLogs.push({
+        inning: inning ?? 0,
+        halfInning: halfInning ?? "top",
+        batterId: batter.id,
+        batterName: batter.name,
+        pitcherId: pitcher.id,
+        pitcherName: pitcher.name,
+        result: detail.result,
+        battedBallType: detail.battedBallType,
+        direction: detail.direction,
+        launchAngle: detail.launchAngle,
+        exitVelocity: detail.exitVelocity,
+        fielderPosition: detail.fielderPosition,
+      });
+    }
+
     idx++;
   }
 
@@ -977,11 +1023,15 @@ function simulateHalfInning(
   return { runs, hits, nextBatterIndex: idx };
 }
 
+export interface SimulateGameOptions {
+  collectAtBatLogs?: boolean;
+}
+
 /**
  * 1試合をシミュレートする
  * @returns GameResult
  */
-export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
+export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateGameOptions): GameResult {
   const homePitcher = getStartingPitcher(homeTeam);
   const awayPitcher = getStartingPitcher(awayTeam);
   const homeBatters = getBattingOrder(homeTeam);
@@ -1015,12 +1065,14 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
   let awayScore = 0;
   let homeBatterIdx = 0;
   let awayBatterIdx = 0;
+  const atBatLogs: AtBatLog[] = [];
 
   // 9イニング
   for (let i = 0; i < 9; i++) {
     // 表 (アウェイチームの攻撃 → ホームチームが守備)
     const topResult = simulateHalfInning(
-      awayBatters, homePitcher, homeBatters, awayBatterIdx, batterStatsMap, homePitcherLog, homeCatcher
+      awayBatters, homePitcher, homeBatters, awayBatterIdx, batterStatsMap, homePitcherLog, homeCatcher,
+      getActivePlayers(homeTeam), options, atBatLogs, i + 1, "top"
     );
     awayScore += topResult.runs;
     awayBatterIdx = topResult.nextBatterIndex;
@@ -1030,7 +1082,8 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
     let bottomRuns = 0;
     if (!(i === 8 && homeScore > awayScore)) {
       const bottomResult = simulateHalfInning(
-        homeBatters, awayPitcher, awayBatters, homeBatterIdx, batterStatsMap, awayPitcherLog, awayCatcher
+        homeBatters, awayPitcher, awayBatters, homeBatterIdx, batterStatsMap, awayPitcherLog, awayCatcher,
+        getActivePlayers(awayTeam), options, atBatLogs, i + 1, "bottom"
       );
       bottomRuns = bottomResult.runs;
       homeScore += bottomRuns;
@@ -1045,14 +1098,17 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
 
   // 延長 (最大12回まで)
   while (homeScore === awayScore && innings.length < 12) {
+    const extInning = innings.length + 1;
     const topResult = simulateHalfInning(
-      awayBatters, homePitcher, homeBatters, awayBatterIdx, batterStatsMap, homePitcherLog, homeCatcher
+      awayBatters, homePitcher, homeBatters, awayBatterIdx, batterStatsMap, homePitcherLog, homeCatcher,
+      getActivePlayers(homeTeam), options, atBatLogs, extInning, "top"
     );
     awayScore += topResult.runs;
     awayBatterIdx = topResult.nextBatterIndex;
 
     const bottomResult = simulateHalfInning(
-      homeBatters, awayPitcher, awayBatters, homeBatterIdx, batterStatsMap, awayPitcherLog, awayCatcher
+      homeBatters, awayPitcher, awayBatters, homeBatterIdx, batterStatsMap, awayPitcherLog, awayCatcher,
+      getActivePlayers(awayTeam), options, atBatLogs, extInning, "bottom"
     );
     homeScore += bottomResult.runs;
     homeBatterIdx = bottomResult.nextBatterIndex;
@@ -1074,6 +1130,7 @@ export function simulateGame(homeTeam: Team, awayTeam: Team): GameResult {
     savePitcherId: null,
     playerStats: Array.from(batterStatsMap.values()),
     pitcherStats: [homePitcherLog, awayPitcherLog],
+    atBatLogs: options?.collectAtBatLogs ? atBatLogs : undefined,
   };
 }
 

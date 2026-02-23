@@ -96,6 +96,24 @@ export interface GameResult {
   playerStats: PlayerGameStats[];
   /** 投手成績 */
   pitcherStats: PitcherGameLog[];
+  /** 打席ログ（診断モード時のみ） */
+  atBatLogs?: AtBatLog[];
+}
+
+/** 1打席のログ（診断用） */
+export interface AtBatLog {
+  inning: number;
+  halfInning: "top" | "bottom";
+  batterId: string;
+  batterName: string;
+  pitcherId: string;
+  pitcherName: string;
+  result: string;
+  battedBallType: string | null;
+  direction: number | null;
+  launchAngle: number | null;
+  exitVelocity: number | null;
+  fielderPosition: number | null;
 }
 
 /** 1イニングのスコア */

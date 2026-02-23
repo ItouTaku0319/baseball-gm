@@ -138,9 +138,9 @@ describe("ポジション別守備機会分布", () => {
     expect(avg["2B"].total).toBeLessThanOrEqual(8);
   });
 
-  it("CF: 1試合あたりPOが2-5", () => {
+  it("CF: 1試合あたりPOが2-5.5", () => {
     expect(avg["CF"].po).toBeGreaterThanOrEqual(2);
-    expect(avg["CF"].po).toBeLessThanOrEqual(5);
+    expect(avg["CF"].po).toBeLessThanOrEqual(5.5);
   });
 
   it("C: 1試合あたりPOが5-12", () => {

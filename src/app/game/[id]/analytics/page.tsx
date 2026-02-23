@@ -1,0 +1,976 @@
+"use client";
+
+import { useEffect, useState, useMemo, useCallback } from "react";
+import { useParams } from "next/navigation";
+import Link from "next/link";
+import { useGameStore } from "@/store/game-store";
+import { simulateGame } from "@/engine/simulation";
+import type { AtBatLog, GameResult } from "@/models/league";
+
+const posNames: Record<number, string> = {
+  1: "P", 2: "C", 3: "1B", 4: "2B", 5: "3B", 6: "SS", 7: "LF", 8: "CF", 9: "RF",
+};
+
+function isHit(result: string): boolean {
+  return ["single", "double", "triple", "homerun", "infieldHit"].includes(result);
+}
+
+function isAtBat(result: string): boolean {
+  return !["walk", "hitByPitch", "sacrificeFly"].includes(result);
+}
+
+// ---- シーズンデータタブ ----
+
+function SeasonDataTab() {
+  const { game } = useGameStore();
+
+  const [leagueFilter, setLeagueFilter] = useState<string>("all");
+  const [rangeFilter, setRangeFilter] = useState<string>("all");
+
+  const allTeams = useMemo(() => game ? Object.values(game.teams) : [], [game]);
+  const leagues = game?.currentSeason.leagues ?? [];
+
+  // フィルタ対象のチームIDセット
+  const filteredTeamIds = useMemo(() => {
+    if (leagueFilter === "all") return new Set(allTeams.map((t) => t.id));
+    const league = leagues.find((l) => l.id === leagueFilter);
+    if (league) return new Set(league.teams);
+    return new Set([leagueFilter]);
+  }, [leagueFilter, allTeams, leagues]);
+
+  // 消化済み試合を取得
+  const playedEntries = useMemo(() => {
+    if (!game) return [];
+    const schedule = game.currentSeason.schedule;
+    const played = schedule.filter((e) => e.result !== null);
+    if (rangeFilter === "last1") return played.slice(-6);
+    if (rangeFilter === "last10") return played.slice(-60);
+    return played;
+  }, [game, rangeFilter]);
+
+  // 打球タイプ集計（フィルタ済みチームの投手成績から）
+  const battedBallStats = useMemo(() => {
+    let gb = 0, fb = 0, ld = 0, pu = 0;
+    for (const entry of playedEntries) {
+      if (!entry.result) continue;
+      for (const ps of entry.result.pitcherStats) {
+        let pitcherTeamId: string | null = null;
+        for (const team of allTeams) {
+          if (team.roster.some((p) => p.id === ps.playerId)) {
+            pitcherTeamId = team.id;
+            break;
+          }
+        }
+        if (!pitcherTeamId || !filteredTeamIds.has(pitcherTeamId)) continue;
+        gb += ps.groundBalls ?? 0;
+        fb += ps.flyBalls ?? 0;
+        ld += ps.lineDrives ?? 0;
+        pu += ps.popups ?? 0;
+      }
+    }
+    const total = gb + fb + ld + pu;
+    return { gb, fb, ld, pu, total };
+  }, [playedEntries, allTeams, filteredTeamIds]);
+
+  // 打撃結果サマリー（フィルタ済みチームの打者成績から）
+  const battingStats = useMemo(() => {
+    let atBats = 0, hits = 0, hr = 0, strikeouts = 0, walks = 0, doubles = 0, triples = 0;
+    let bip = 0;
+    for (const entry of playedEntries) {
+      if (!entry.result) continue;
+      for (const ps of entry.result.playerStats) {
+        let batterTeamId: string | null = null;
+        for (const team of allTeams) {
+          if (team.roster.some((p) => p.id === ps.playerId)) {
+            batterTeamId = team.id;
+            break;
+          }
+        }
+        if (!batterTeamId || !filteredTeamIds.has(batterTeamId)) continue;
+        atBats += ps.atBats;
+        hits += ps.hits;
+        hr += ps.homeRuns;
+        strikeouts += ps.strikeouts;
+        walks += ps.walks;
+        doubles += ps.doubles;
+        triples += ps.triples;
+      }
+    }
+    bip = atBats - strikeouts - hr;
+    const babipHits = hits - hr;
+    const avg = atBats > 0 ? hits / atBats : 0;
+    const kPct = atBats > 0 ? strikeouts / atBats : 0;
+    const bbPct = (atBats + walks) > 0 ? walks / (atBats + walks) : 0;
+    const babip = bip > 0 ? babipHits / bip : 0;
+    const slg = atBats > 0
+      ? ((hits - doubles - triples - hr) + doubles * 2 + triples * 3 + hr * 4) / atBats
+      : 0;
+    const obp = (atBats + walks) > 0 ? (hits + walks) / (atBats + walks) : 0;
+    return { atBats, hits, hr, strikeouts, walks, avg, kPct, bbPct, babip, obp, slg, ops: obp + slg };
+  }, [playedEntries, allTeams, filteredTeamIds]);
+
+  // ポジション別守備機会
+  const fieldingByPos = useMemo(() => {
+    const map: Record<number, { po: number; a: number; e: number }> = {};
+    for (let pos = 1; pos <= 9; pos++) {
+      map[pos] = { po: 0, a: 0, e: 0 };
+    }
+    for (const entry of playedEntries) {
+      if (!entry.result) continue;
+      for (const ps of entry.result.playerStats) {
+        let teamId: string | null = null;
+        for (const team of allTeams) {
+          const player = team.roster.find((p) => p.id === ps.playerId);
+          if (player) {
+            teamId = team.id;
+            const posMap: Record<string, number> = {
+              P: 1, C: 2, "1B": 3, "2B": 4, "3B": 5, SS: 6, LF: 7, CF: 8, RF: 9,
+            };
+            const posNum = posMap[player.position];
+            if (posNum && filteredTeamIds.has(teamId)) {
+              map[posNum].po += ps.putOuts ?? 0;
+              map[posNum].a += ps.assists ?? 0;
+              map[posNum].e += ps.errors ?? 0;
+            }
+            break;
+          }
+        }
+      }
+    }
+    return map;
+  }, [playedEntries, allTeams, filteredTeamIds]);
+
+  if (!game) return null;
+
+  const pct = (n: number) => (n * 100).toFixed(1) + "%";
+  const fmt3 = (n: number) => n.toFixed(3).replace(/^0/, "");
+
+  return (
+    <div className="space-y-6">
+      {/* フィルタ */}
+      <div className="flex flex-wrap gap-4 p-4 bg-gray-800 rounded-lg border border-gray-700">
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-400">チーム絞込:</label>
+          <select
+            value={leagueFilter}
+            onChange={(e) => setLeagueFilter(e.target.value)}
+            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
+          >
+            <option value="all">全体</option>
+            <option value="central">セ・リーグ</option>
+            <option value="pacific">パ・リーグ</option>
+            {allTeams.map((t) => (
+              <option key={t.id} value={t.id}>{t.shortName}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-400">対象範囲:</label>
+          <select
+            value={rangeFilter}
+            onChange={(e) => setRangeFilter(e.target.value)}
+            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
+          >
+            <option value="all">全試合</option>
+            <option value="last10">直近10試合</option>
+            <option value="last1">直近1試合</option>
+          </select>
+        </div>
+        <div className="text-sm text-gray-400 self-center">
+          対象試合数: <span className="text-white" style={{ fontVariantNumeric: "tabular-nums" }}>{playedEntries.length}</span>
+        </div>
+      </div>
+
+      {playedEntries.length === 0 ? (
+        <div className="text-center text-gray-400 py-12">
+          消化済み試合がありません
+        </div>
+      ) : (
+        <>
+          {/* 打球タイプ分布 */}
+          <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+            <h3 className="text-base font-semibold mb-4 text-gray-200">打球タイプ分布</h3>
+            {battedBallStats.total === 0 ? (
+              <p className="text-gray-500 text-sm">データなし</p>
+            ) : (
+              <div className="space-y-3">
+                {[
+                  { label: "ゴロ (GB%)", value: battedBallStats.gb, color: "bg-green-600" },
+                  { label: "フライ (FB%)", value: battedBallStats.fb, color: "bg-blue-600" },
+                  { label: "ライナー (LD%)", value: battedBallStats.ld, color: "bg-yellow-500" },
+                  { label: "ポップ (PU%)", value: battedBallStats.pu, color: "bg-gray-500" },
+                ].map(({ label, value, color }) => {
+                  const pctVal = battedBallStats.total > 0 ? (value / battedBallStats.total) * 100 : 0;
+                  return (
+                    <div key={label}>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="text-gray-300">{label}</span>
+                        <span className="text-white" style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {pctVal.toFixed(1)}% ({value.toLocaleString()})
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-700 rounded-full h-4">
+                        <div
+                          className={`${color} h-4 rounded-full transition-all`}
+                          style={{ width: `${pctVal}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* 打撃結果サマリー */}
+          <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+            <h3 className="text-base font-semibold mb-4 text-gray-200">打撃結果サマリー</h3>
+            <div
+              className="grid grid-cols-4 gap-3 text-center"
+              style={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              {[
+                { label: "打率", value: fmt3(battingStats.avg) },
+                { label: "本塁打", value: battingStats.hr.toLocaleString() },
+                { label: "K%", value: pct(battingStats.kPct) },
+                { label: "BB%", value: pct(battingStats.bbPct) },
+                { label: "BABIP", value: fmt3(battingStats.babip) },
+                { label: "出塁率", value: fmt3(battingStats.obp) },
+                { label: "長打率", value: fmt3(battingStats.slg) },
+                { label: "OPS", value: fmt3(battingStats.ops) },
+              ].map(({ label, value }) => (
+                <div key={label} className="bg-gray-700/50 rounded p-3">
+                  <div className="text-lg font-bold text-white">{value}</div>
+                  <div className="text-xs text-gray-400 mt-1">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ポジション別守備機会 */}
+          <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+            <h3 className="text-base font-semibold mb-4 text-gray-200">ポジション別守備機会</h3>
+            <table
+              className="w-full text-sm"
+              style={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              <thead>
+                <tr className="text-xs text-gray-400 border-b border-gray-700">
+                  <th className="text-left py-2 px-3">ポジション</th>
+                  <th className="text-right py-2 px-3">刺殺(PO)</th>
+                  <th className="text-right py-2 px-3">補殺(A)</th>
+                  <th className="text-right py-2 px-3">失策(E)</th>
+                  <th className="text-right py-2 px-3">守備機会</th>
+                  <th className="text-right py-2 px-3">守備率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: 9 }, (_, i) => i + 1).map((pos) => {
+                  const f = fieldingByPos[pos];
+                  const tc = f.po + f.a + f.e;
+                  const fpct = tc > 0 ? ((f.po + f.a) / tc).toFixed(3).replace(/^0/, "") : "-.---";
+                  return (
+                    <tr key={pos} className="border-b border-gray-700/30">
+                      <td className="py-2 px-3 text-blue-400 font-semibold">{posNames[pos]}</td>
+                      <td className="py-2 px-3 text-right text-gray-200">{f.po.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-gray-200">{f.a.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-red-400">{f.e.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-gray-300">{tc.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-gray-200">{fpct}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- 診断シミュレーションタブ ----
+
+interface SimSummary {
+  homeAvgScore: number;
+  awayAvgScore: number;
+  homeAvg: number;
+  awayAvg: number;
+  homeHR: number;
+  awayHR: number;
+  homeOPS: number;
+  awayOPS: number;
+}
+
+interface BallPhysicsSummary {
+  avgVelocity: number;
+  avgAngle: number;
+  avgDirection: number;
+  pullPct: number;
+  centerPct: number;
+  oppoPct: number;
+  barrelRate: number;
+  barrelHRRate: number;
+  totalBalls: number;
+}
+
+interface BattedBallOutcome {
+  type: string;
+  label: string;
+  count: number;
+  hitRate: number;
+  hrRate: number;
+  outRate: number;
+}
+
+interface FieldingTotals {
+  [pos: number]: { po: number; a: number; e: number; tc: number };
+}
+
+function DiagnosticTab() {
+  const { game } = useGameStore();
+
+  const allTeams = useMemo(() => game ? Object.values(game.teams) : [], [game]);
+  const [homeTeamId, setHomeTeamId] = useState<string>("");
+  const [awayTeamId, setAwayTeamId] = useState<string>("");
+  const [numGames, setNumGames] = useState<number>(10);
+  const [isRunning, setIsRunning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [simResults, setSimResults] = useState<GameResult[]>([]);
+  const [atBatLogs, setAtBatLogs] = useState<AtBatLog[]>([]);
+
+  useEffect(() => {
+    if (allTeams.length >= 2 && !homeTeamId) {
+      setHomeTeamId(allTeams[0].id);
+      setAwayTeamId(allTeams[1].id);
+    }
+  }, [allTeams, homeTeamId]);
+
+  const runSimulation = useCallback(() => {
+    if (!game) return;
+    setIsRunning(true);
+    setProgress(0);
+    setSimResults([]);
+    setAtBatLogs([]);
+
+    const home = game.teams[homeTeamId];
+    const away = game.teams[awayTeamId];
+    const results: GameResult[] = [];
+    const allLogs: AtBatLog[] = [];
+
+    let i = 0;
+    const step = () => {
+      const batchSize = Math.min(10, numGames - i);
+      for (let j = 0; j < batchSize; j++) {
+        const result = simulateGame(home, away, { collectAtBatLogs: true });
+        results.push(result);
+        if (result.atBatLogs) allLogs.push(...result.atBatLogs);
+        i++;
+      }
+      setProgress(i);
+      if (i < numGames) {
+        setTimeout(step, 0);
+      } else {
+        setSimResults([...results]);
+        setAtBatLogs([...allLogs]);
+        setIsRunning(false);
+      }
+    };
+    step();
+  }, [game, homeTeamId, awayTeamId, numGames]);
+
+  // チームスコアサマリー
+  const simSummary = useMemo((): SimSummary | null => {
+    if (simResults.length === 0 || !game) return null;
+    const n = simResults.length;
+
+    // ホームチームの打者統計集計
+    const homeRoster = new Set(game.teams[homeTeamId]?.roster.map((p) => p.id) ?? []);
+    const awayRoster = new Set(game.teams[awayTeamId]?.roster.map((p) => p.id) ?? []);
+
+    let homeAB = 0, homeH = 0, homeHR = 0, homeSLG = 0, homeOB = 0, homeOBDen = 0;
+    let awayAB = 0, awayH = 0, awayHR = 0, awaySLG = 0, awayOB = 0, awayOBDen = 0;
+
+    for (const r of simResults) {
+      for (const ps of r.playerStats) {
+        const isHome = homeRoster.has(ps.playerId);
+        const isAway = awayRoster.has(ps.playerId);
+        if (!isHome && !isAway) continue;
+
+        const singles = ps.hits - ps.doubles - ps.triples - ps.homeRuns;
+        const tb = singles + ps.doubles * 2 + ps.triples * 3 + ps.homeRuns * 4;
+        const pa = ps.atBats + ps.walks;
+
+        if (isHome) {
+          homeAB += ps.atBats;
+          homeH += ps.hits;
+          homeHR += ps.homeRuns;
+          homeSLG += ps.atBats > 0 ? tb : 0;
+          homeOB += ps.hits + ps.walks;
+          homeOBDen += pa;
+        } else {
+          awayAB += ps.atBats;
+          awayH += ps.hits;
+          awayHR += ps.homeRuns;
+          awaySLG += ps.atBats > 0 ? tb : 0;
+          awayOB += ps.hits + ps.walks;
+          awayOBDen += pa;
+        }
+      }
+    }
+
+    const homeObp = homeOBDen > 0 ? homeOB / homeOBDen : 0;
+    const homeSlg = homeAB > 0 ? homeSLG / homeAB : 0;
+    const awayObp = awayOBDen > 0 ? awayOB / awayOBDen : 0;
+    const awaySlg = awayAB > 0 ? awaySLG / awayAB : 0;
+
+    return {
+      homeAvgScore: simResults.reduce((s, r) => s + r.homeScore, 0) / n,
+      awayAvgScore: simResults.reduce((s, r) => s + r.awayScore, 0) / n,
+      homeAvg: homeAB > 0 ? homeH / homeAB : 0,
+      awayAvg: awayAB > 0 ? awayH / awayAB : 0,
+      homeHR: homeHR / n,
+      awayHR: awayHR / n,
+      homeOPS: homeObp + homeSlg,
+      awayOPS: awayObp + awaySlg,
+    };
+  }, [simResults, game, homeTeamId, awayTeamId]);
+
+  // 打球物理サマリー
+  const physicsSummary = useMemo((): BallPhysicsSummary | null => {
+    const balls = atBatLogs.filter((l) => l.exitVelocity !== null && l.direction !== null && l.launchAngle !== null);
+    if (balls.length === 0) return null;
+
+    const n = balls.length;
+    const avgVelocity = balls.reduce((s, l) => s + (l.exitVelocity ?? 0), 0) / n;
+    const avgAngle = balls.reduce((s, l) => s + (l.launchAngle ?? 0), 0) / n;
+    const avgDirection = balls.reduce((s, l) => s + (l.direction ?? 0), 0) / n;
+
+    // 方向分布: Pull(<30°), Center(30-60°), Oppo(>60°)
+    const pull = balls.filter((l) => (l.direction ?? 0) < 30).length;
+    const center = balls.filter((l) => (l.direction ?? 0) >= 30 && (l.direction ?? 0) <= 60).length;
+    const oppo = balls.filter((l) => (l.direction ?? 0) > 60).length;
+
+    // バレルゾーン: 速度158km/h以上 & 角度22-38°
+    const barrels = balls.filter((l) =>
+      (l.exitVelocity ?? 0) >= 158 && (l.launchAngle ?? 0) >= 22 && (l.launchAngle ?? 0) <= 38
+    );
+    const barrelHRs = barrels.filter((l) => l.result === "homerun").length;
+
+    return {
+      avgVelocity,
+      avgAngle,
+      avgDirection,
+      pullPct: n > 0 ? pull / n : 0,
+      centerPct: n > 0 ? center / n : 0,
+      oppoPct: n > 0 ? oppo / n : 0,
+      barrelRate: n > 0 ? barrels.length / n : 0,
+      barrelHRRate: barrels.length > 0 ? barrelHRs / barrels.length : 0,
+      totalBalls: n,
+    };
+  }, [atBatLogs]);
+
+  // 打球タイプ別結果
+  const battedBallOutcomes = useMemo((): BattedBallOutcome[] => {
+    const types = [
+      { type: "ground_ball", label: "ゴロ (GB)" },
+      { type: "fly_ball", label: "フライ (FB)" },
+      { type: "line_drive", label: "ライナー (LD)" },
+      { type: "popup", label: "ポップ (PU)" },
+    ];
+    return types.map(({ type, label }) => {
+      const logs = atBatLogs.filter((l) => l.battedBallType === type);
+      const n = logs.length;
+      if (n === 0) return { type, label, count: 0, hitRate: 0, hrRate: 0, outRate: 0 };
+      const hits = logs.filter((l) => isHit(l.result)).length;
+      const hrs = logs.filter((l) => l.result === "homerun").length;
+      const outs = logs.filter((l) =>
+        ["groundout", "flyout", "lineout", "popout", "doublePlay"].includes(l.result)
+      ).length;
+      return {
+        type,
+        label,
+        count: n,
+        hitRate: hits / n,
+        hrRate: hrs / n,
+        outRate: outs / n,
+      };
+    });
+  }, [atBatLogs]);
+
+  // 守備集計
+  const fieldingTotals = useMemo((): FieldingTotals => {
+    const map: FieldingTotals = {};
+    for (let pos = 1; pos <= 9; pos++) {
+      map[pos] = { po: 0, a: 0, e: 0, tc: 0 };
+    }
+    if (!game || simResults.length === 0) return map;
+    for (const r of simResults) {
+      for (const ps of r.playerStats) {
+        // 全チームのプレイヤーからポジションを解決
+        for (const team of Object.values(game.teams)) {
+          const player = team.roster.find((p) => p.id === ps.playerId);
+          if (player) {
+            const posMap: Record<string, number> = {
+              P: 1, C: 2, "1B": 3, "2B": 4, "3B": 5, SS: 6, LF: 7, CF: 8, RF: 9,
+            };
+            const posNum = posMap[player.position];
+            if (posNum) {
+              map[posNum].po += ps.putOuts ?? 0;
+              map[posNum].a += ps.assists ?? 0;
+              map[posNum].e += ps.errors ?? 0;
+              map[posNum].tc += (ps.putOuts ?? 0) + (ps.assists ?? 0) + (ps.errors ?? 0);
+            }
+            break;
+          }
+        }
+      }
+    }
+    return map;
+  }, [simResults, game]);
+
+  // サマリーCSV出力
+  const downloadSummaryCSV = () => {
+    if (!simSummary || !game) return;
+    const home = game.teams[homeTeamId];
+    const away = game.teams[awayTeamId];
+    const n = simResults.length;
+
+    const rows = [
+      ["項目", "ホーム(" + home.shortName + ")", "アウェイ(" + away.shortName + ")"],
+      ["平均得点", simSummary.homeAvgScore.toFixed(2), simSummary.awayAvgScore.toFixed(2)],
+      ["打率", simSummary.homeAvg.toFixed(3), simSummary.awayAvg.toFixed(3)],
+      ["本塁打/試合", simSummary.homeHR.toFixed(2), simSummary.awayHR.toFixed(2)],
+      ["OPS", simSummary.homeOPS.toFixed(3), simSummary.awayOPS.toFixed(3)],
+      [],
+      ["打球物理サマリー", "値"],
+      ["平均打球速度(km/h)", physicsSummary?.avgVelocity.toFixed(1) ?? ""],
+      ["平均打球角度(°)", physicsSummary?.avgAngle.toFixed(1) ?? ""],
+      ["平均打球方向(°)", physicsSummary?.avgDirection.toFixed(1) ?? ""],
+      ["プル率", ((physicsSummary?.pullPct ?? 0) * 100).toFixed(1) + "%"],
+      ["センター率", ((physicsSummary?.centerPct ?? 0) * 100).toFixed(1) + "%"],
+      ["逆方向率", ((physicsSummary?.oppoPct ?? 0) * 100).toFixed(1) + "%"],
+      ["バレル率", ((physicsSummary?.barrelRate ?? 0) * 100).toFixed(1) + "%"],
+      ["バレルHR率", ((physicsSummary?.barrelHRRate ?? 0) * 100).toFixed(1) + "%"],
+      [],
+      ["打球タイプ", "打球数", "安打率", "HR率", "アウト率"],
+      ...battedBallOutcomes.map((o) => [
+        o.label, o.count, (o.hitRate * 100).toFixed(1) + "%",
+        (o.hrRate * 100).toFixed(1) + "%", (o.outRate * 100).toFixed(1) + "%",
+      ]),
+    ];
+
+    const csvContent = rows.map((r) => r.join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "summary.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // 打席ログCSV出力
+  const downloadAtBatCSV = () => {
+    if (atBatLogs.length === 0) return;
+    const headers = ["回", "表裏", "打者", "投手", "結果", "打球タイプ", "方向°", "角度°", "速度", "処理守備"];
+    const rows = atBatLogs.map((l) => [
+      l.inning,
+      l.halfInning === "top" ? "表" : "裏",
+      l.batterName,
+      l.pitcherName,
+      l.result,
+      l.battedBallType ?? "",
+      l.direction !== null ? l.direction.toFixed(1) : "",
+      l.launchAngle !== null ? l.launchAngle.toFixed(1) : "",
+      l.exitVelocity !== null ? l.exitVelocity.toFixed(1) : "",
+      l.fielderPosition !== null ? (posNames[l.fielderPosition] ?? l.fielderPosition) : "",
+    ]);
+    const csvContent = [headers, ...rows].map((r) => r.join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "atbat_log.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (!game) return null;
+
+  const homeTeam = game.teams[homeTeamId];
+  const awayTeam = game.teams[awayTeamId];
+
+  return (
+    <div className="space-y-6">
+      {/* 設定パネル */}
+      <div className="p-4 bg-gray-800 rounded-lg border border-gray-700">
+        <div className="flex flex-wrap gap-4 mb-4">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-400">ホーム:</label>
+            <select
+              value={homeTeamId}
+              onChange={(e) => setHomeTeamId(e.target.value)}
+              className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
+              disabled={isRunning}
+            >
+              {allTeams.map((t) => (
+                <option key={t.id} value={t.id}>{t.shortName}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-400">アウェイ:</label>
+            <select
+              value={awayTeamId}
+              onChange={(e) => setAwayTeamId(e.target.value)}
+              className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
+              disabled={isRunning}
+            >
+              {allTeams.map((t) => (
+                <option key={t.id} value={t.id}>{t.shortName}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-400">試合数:</label>
+            <select
+              value={numGames}
+              onChange={(e) => setNumGames(Number(e.target.value))}
+              className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
+              disabled={isRunning}
+            >
+              <option value={1}>1</option>
+              <option value={10}>10</option>
+              <option value={50}>50</option>
+              <option value={143}>143</option>
+            </select>
+          </div>
+          <button
+            onClick={runSimulation}
+            disabled={isRunning || !homeTeamId || !awayTeamId}
+            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-semibold transition-colors"
+          >
+            {isRunning ? "実行中..." : "シミュレーション実行"}
+          </button>
+        </div>
+
+        {/* プログレスバー */}
+        {isRunning && (
+          <div>
+            <div
+              className="flex justify-between text-sm text-gray-300 mb-1"
+              style={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              <span>実行中...</span>
+              <span>{progress} / {numGames} 試合</span>
+            </div>
+            <div className="w-full bg-gray-700 rounded-full h-2">
+              <div
+                className="bg-blue-500 h-2 rounded-full transition-all"
+                style={{ width: `${numGames > 0 ? (progress / numGames) * 100 : 0}%` }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {simResults.length === 0 && !isRunning && (
+        <div className="text-center text-gray-400 py-12">
+          チームと試合数を選択して「シミュレーション実行」を押してください
+        </div>
+      )}
+
+      {simResults.length > 0 && (
+        <>
+          {/* チームスコア */}
+          {simSummary && (
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+              <h3 className="text-base font-semibold mb-4 text-gray-200">
+                チームスコア ({simResults.length}試合平均)
+              </h3>
+              <div
+                className="grid grid-cols-2 gap-4"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {[
+                  { teamId: homeTeamId, team: homeTeam, prefix: "ホーム", score: simSummary.homeAvgScore, avg: simSummary.homeAvg, hr: simSummary.homeHR, ops: simSummary.homeOPS },
+                  { teamId: awayTeamId, team: awayTeam, prefix: "アウェイ", score: simSummary.awayAvgScore, avg: simSummary.awayAvg, hr: simSummary.awayHR, ops: simSummary.awayOPS },
+                ].map(({ team, prefix, score, avg, hr, ops }) => (
+                  <div key={prefix} className="bg-gray-700/50 rounded-lg p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="w-3 h-3 rounded-full" style={{ backgroundColor: team?.color }} />
+                      <span className="font-semibold text-blue-400">{team?.shortName}</span>
+                      <span className="text-xs text-gray-400">({prefix})</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div><span className="text-gray-400">平均得点: </span><span className="text-white">{score.toFixed(2)}</span></div>
+                      <div><span className="text-gray-400">打率: </span><span className="text-white">{avg.toFixed(3).replace(/^0/, "")}</span></div>
+                      <div><span className="text-gray-400">HR/試合: </span><span className="text-white">{hr.toFixed(2)}</span></div>
+                      <div><span className="text-gray-400">OPS: </span><span className="text-white">{ops.toFixed(3).replace(/^0/, "")}</span></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 打球物理サマリー */}
+          {physicsSummary && (
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+              <h3 className="text-base font-semibold mb-4 text-gray-200">
+                打球物理サマリー (BIP: {physicsSummary.totalBalls.toLocaleString()}打球)
+              </h3>
+              <div
+                className="grid grid-cols-3 gap-3 text-sm"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                <div className="bg-gray-700/50 rounded p-3">
+                  <div className="text-gray-400 text-xs mb-1">平均打球速度</div>
+                  <div className="text-white font-bold">{physicsSummary.avgVelocity.toFixed(1)} km/h</div>
+                </div>
+                <div className="bg-gray-700/50 rounded p-3">
+                  <div className="text-gray-400 text-xs mb-1">平均打球角度</div>
+                  <div className="text-white font-bold">{physicsSummary.avgAngle.toFixed(1)}°</div>
+                </div>
+                <div className="bg-gray-700/50 rounded p-3">
+                  <div className="text-gray-400 text-xs mb-1">平均打球方向</div>
+                  <div className="text-white font-bold">{physicsSummary.avgDirection.toFixed(1)}°</div>
+                </div>
+                <div className="bg-gray-700/50 rounded p-3">
+                  <div className="text-gray-400 text-xs mb-1">プル / センター / 逆方向</div>
+                  <div className="text-white font-bold">
+                    {(physicsSummary.pullPct * 100).toFixed(1)}% /
+                    {(physicsSummary.centerPct * 100).toFixed(1)}% /
+                    {(physicsSummary.oppoPct * 100).toFixed(1)}%
+                  </div>
+                </div>
+                <div className="bg-gray-700/50 rounded p-3">
+                  <div className="text-gray-400 text-xs mb-1">バレル率</div>
+                  <div className="text-yellow-400 font-bold">{(physicsSummary.barrelRate * 100).toFixed(1)}%</div>
+                </div>
+                <div className="bg-gray-700/50 rounded p-3">
+                  <div className="text-gray-400 text-xs mb-1">バレル内HR率</div>
+                  <div className="text-yellow-400 font-bold">{(physicsSummary.barrelHRRate * 100).toFixed(1)}%</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 打球タイプ別結果 */}
+          <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+            <h3 className="text-base font-semibold mb-4 text-gray-200">打球タイプ別結果</h3>
+            <table
+              className="w-full text-sm"
+              style={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              <thead>
+                <tr className="text-xs text-gray-400 border-b border-gray-700">
+                  <th className="text-left py-2 px-3">タイプ</th>
+                  <th className="text-right py-2 px-3">打球数</th>
+                  <th className="text-right py-2 px-3">安打率</th>
+                  <th className="text-right py-2 px-3">HR率</th>
+                  <th className="text-right py-2 px-3">アウト率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {battedBallOutcomes.map((o) => (
+                  <tr key={o.type} className="border-b border-gray-700/30">
+                    <td className="py-2 px-3 text-gray-200">{o.label}</td>
+                    <td className="py-2 px-3 text-right text-gray-200">{o.count.toLocaleString()}</td>
+                    <td className="py-2 px-3 text-right text-green-400">{(o.hitRate * 100).toFixed(1)}%</td>
+                    <td className="py-2 px-3 text-right text-yellow-400">{(o.hrRate * 100).toFixed(1)}%</td>
+                    <td className="py-2 px-3 text-right text-red-400">{(o.outRate * 100).toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 守備集計 */}
+          <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+            <h3 className="text-base font-semibold mb-4 text-gray-200">守備集計</h3>
+            <table
+              className="w-full text-sm"
+              style={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              <thead>
+                <tr className="text-xs text-gray-400 border-b border-gray-700">
+                  <th className="text-left py-2 px-3">ポジション</th>
+                  <th className="text-right py-2 px-3">刺殺(PO)</th>
+                  <th className="text-right py-2 px-3">補殺(A)</th>
+                  <th className="text-right py-2 px-3">失策(E)</th>
+                  <th className="text-right py-2 px-3">守備機会</th>
+                  <th className="text-right py-2 px-3">守備率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: 9 }, (_, i) => i + 1).map((pos) => {
+                  const f = fieldingTotals[pos];
+                  const fpct = f.tc > 0 ? ((f.po + f.a) / f.tc).toFixed(3).replace(/^0/, "") : "-.---";
+                  return (
+                    <tr key={pos} className="border-b border-gray-700/30">
+                      <td className="py-2 px-3 text-blue-400 font-semibold">{posNames[pos]}</td>
+                      <td className="py-2 px-3 text-right text-gray-200">{f.po.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-gray-200">{f.a.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-red-400">{f.e.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-gray-300">{f.tc.toLocaleString()}</td>
+                      <td className="py-2 px-3 text-right text-gray-200">{fpct}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 打席詳細ログ */}
+          <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold text-gray-200">
+                打席詳細ログ ({atBatLogs.length.toLocaleString()}件)
+              </h3>
+              <div className="flex gap-2">
+                <button
+                  onClick={downloadSummaryCSV}
+                  className="px-3 py-1.5 bg-green-700 hover:bg-green-600 rounded text-xs font-semibold transition-colors"
+                >
+                  サマリーCSV
+                </button>
+                <button
+                  onClick={downloadAtBatCSV}
+                  className="px-3 py-1.5 bg-green-700 hover:bg-green-600 rounded text-xs font-semibold transition-colors"
+                >
+                  打席ログCSV
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[600px] overflow-y-auto">
+              <table
+                className="w-full text-xs"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                <thead className="sticky top-0 bg-gray-800">
+                  <tr className="text-gray-400 border-b border-gray-700">
+                    <th className="text-right py-2 px-2">回</th>
+                    <th className="text-center py-2 px-2">半</th>
+                    <th className="text-left py-2 px-2">打者</th>
+                    <th className="text-left py-2 px-2">投手</th>
+                    <th className="text-left py-2 px-2">結果</th>
+                    <th className="text-left py-2 px-2">打球</th>
+                    <th className="text-right py-2 px-2">方向°</th>
+                    <th className="text-right py-2 px-2">角度°</th>
+                    <th className="text-right py-2 px-2">速度</th>
+                    <th className="text-center py-2 px-2">守備</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {atBatLogs.slice(0, 500).map((log, i) => (
+                    <tr
+                      key={i}
+                      className={`border-b border-gray-700/20 ${i % 2 === 1 ? "bg-gray-700/10" : ""}`}
+                    >
+                      <td className="py-1 px-2 text-right text-gray-400">{log.inning}</td>
+                      <td className="py-1 px-2 text-center text-gray-400">
+                        {log.halfInning === "top" ? "表" : "裏"}
+                      </td>
+                      <td className="py-1 px-2 text-gray-200">{log.batterName}</td>
+                      <td className="py-1 px-2 text-gray-400">{log.pitcherName}</td>
+                      <td className={`py-1 px-2 ${isHit(log.result) ? "text-green-400" : log.result === "strikeout" ? "text-red-400" : log.result === "walk" || log.result === "hitByPitch" ? "text-blue-400" : "text-gray-300"}`}>
+                        {log.result}
+                      </td>
+                      <td className="py-1 px-2 text-gray-400">{log.battedBallType ?? "-"}</td>
+                      <td className="py-1 px-2 text-right text-gray-300">
+                        {log.direction !== null ? log.direction.toFixed(1) : "-"}
+                      </td>
+                      <td className="py-1 px-2 text-right text-gray-300">
+                        {log.launchAngle !== null ? log.launchAngle.toFixed(1) : "-"}
+                      </td>
+                      <td className="py-1 px-2 text-right text-gray-300">
+                        {log.exitVelocity !== null ? log.exitVelocity.toFixed(1) : "-"}
+                      </td>
+                      <td className="py-1 px-2 text-center text-blue-400">
+                        {log.fielderPosition !== null ? (posNames[log.fielderPosition] ?? log.fielderPosition) : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {atBatLogs.length > 500 && (
+                <p className="text-center text-gray-500 text-xs py-2">
+                  最大500件表示 (全{atBatLogs.length.toLocaleString()}件)
+                </p>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- メインページ ----
+
+export default function AnalyticsPage() {
+  const { game, loadGame } = useGameStore();
+  const params = useParams();
+  const id = params.id as string;
+
+  const [tab, setTab] = useState<"season" | "diagnostic">("season");
+
+  useEffect(() => {
+    if (!game && params.id) loadGame(params.id as string);
+  }, [game, params.id, loadGame]);
+
+  if (!game) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-gray-400">読み込み中...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white">
+      <div className="max-w-6xl mx-auto p-6">
+        {/* ヘッダー */}
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold text-white">打球分析</h1>
+          <Link
+            href={`/game/${id}`}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+          >
+            ダッシュボードに戻る
+          </Link>
+        </div>
+
+        {/* タブ */}
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => setTab("season")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+              tab === "season"
+                ? "bg-blue-600 text-white"
+                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+            }`}
+          >
+            シーズンデータ
+          </button>
+          <button
+            onClick={() => setTab("diagnostic")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+              tab === "diagnostic"
+                ? "bg-blue-600 text-white"
+                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+            }`}
+          >
+            診断シミュレーション
+          </button>
+        </div>
+
+        {/* タブ内容 */}
+        {tab === "season" && <SeasonDataTab />}
+        {tab === "diagnostic" && <DiagnosticTab />}
+      </div>
+    </div>
+  );
+}

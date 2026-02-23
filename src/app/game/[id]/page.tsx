@@ -138,6 +138,11 @@ export default function GameDashboard() {
       label: "成績",
       desc: "選手・チーム統計",
     },
+    {
+      href: `/game/${game.id}/analytics`,
+      label: "打球分析",
+      desc: "打球データ・バランス診断",
+    },
   ];
 
   return (

@@ -105,6 +105,13 @@
 - [x] 旧determineBattedBallType/assignFielder/resolveInPlayを置き換え
 - [x] 単体テスト（batted-ball-physics.test.ts）追加
 
+### Step 6: バランス調整 + 守備バグ修正 + 打球分析ツール ✅ 完了
+- [x] バランス調整: バレル閾値150→158km/h、バレルHR率/フライHR率/ライナーHR率を下方修正、ライナー安打率0.68→0.62、フライ安打率0.14→0.12
+- [x] 守備バグ修正: 1B自己処理ゴロの二重記録修正(3U)、外野中継プレーの外野手A記録追加、buildFielderMapにフルロスター補完で2B/CF/C消失修正
+- [x] AtBatLog診断機能: simulateGameにoptions引数追加、collectAtBatLogs=trueで打球物理データ収集
+- [x] 打球分析ツール: analytics/page.tsx新規作成（シーズンデータタブ+診断シミュレーションタブ、CSV出力対応）
+- [x] テスト閾値調整: CF PO上限5→5.5
+
 ## 球種のビジュアル表示（保留）
 - 現在はテーブル内テキスト表示（球種名+変化量）で仮実装
 - パワプロ風のグラフィカル表示を検討したが、テーブルセル内に収まるサイズでは見づらかった

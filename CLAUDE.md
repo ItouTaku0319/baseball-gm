@@ -36,6 +36,7 @@ src/
 │           ├── standings/page.tsx # 順位表
 │           ├── schedule/page.tsx  # スケジュール（日程・結果）
 │           ├── stats/page.tsx     # 成績（打撃/投手・セイバー指標）
+│           ├── analytics/page.tsx # 打球分析（シーズンデータ・診断シミュ）
 │           ├── draft/page.tsx     # ドラフト（未実装UI）
 │           └── trade/page.tsx     # トレード（未実装UI）
 ├── engine/                 # ゲームエンジン（純粋関数）
@@ -245,6 +246,7 @@ PMは常に人間に状況が伝わる状態を維持すること。
 | 成績 | `app/game/[id]/stats/page.tsx` |
 | 順位表 | `app/game/[id]/standings/page.tsx` |
 | スケジュール | `app/game/[id]/schedule/page.tsx` |
+| 打球分析 | `app/game/[id]/analytics/page.tsx` |
 
 **注意**: `models/player.ts` や `store/game-store.ts` は多くの機能から参照されるため、これらを変更するタスクは他と並列にしない。
 
@@ -260,7 +262,11 @@ PMは常に人間に状況が伝わる状態を維持すること。
 - **守備成績(PO/A/E)**: 各打席結果に応じて守備側選手にPO(刺殺)/A(補殺)/E(失策)を記録。三振→捕手PO、ゴロアウト→処理野手A+1BにPO、フライ系→処理野手PO、併殺→処理野手A+中継パターンに応じたPO×2、盗塁死→捕手A+該当塁野手PO。守備率=(PO+A)/(PO+A+E)、RF=(PO+A)/G*9。
 - **簡易UZR/DRS**: ポジション別平均との対比で算出。`rangeRuns = ((PO+A)/Gの差) * 0.8 * G`、`errorRuns = (E/Gの差) * 0.7 * G`。UZR = rangeRuns + errorRuns。プラス=平均以上の守備貢献。
 - **投手打球系指標**: PitcherGameLog/PitcherSeasonStatsに全打球タイプ(groundBalls/flyBalls/lineDrives/popups)を記録。GB%/FB%/LD%は全打球(BIP)に対する割合。IFFB%=popup/(flyBalls+popups)。HR/FB=HR/flyBalls。
-- **打球物理エンジン**: インプレー時に打球の方向(0-90°)・角度(-15~70°)・速度(80-185km/h)をガウス乱数で生成。打球方向はbatSide（左右打席）によるプル傾向あり。フィールダーはゾーンベースで幾何学的に決定（内野: 3B→SS→2B→1B、外野: LF→CF→RF）。本塁打はバレルゾーン（150km/h+, 22-38°）で高確率。旧`determineBattedBallType`+`assignFielder`+`resolveInPlay`を置き換え。
+- **打球物理エンジン**: インプレー時に打球の方向(0-90°)・角度(-15~70°)・速度(80-185km/h)をガウス乱数で生成。打球方向はbatSide（左右打席）によるプル傾向あり。フィールダーはゾーンベースで幾何学的に決定（内野: 3B→SS→2B→1B、外野: LF→CF→RF）。本塁打はバレルゾーン（158km/h+, 22-38°）で高確率。旧`determineBattedBallType`+`assignFielder`+`resolveInPlay`を置き換え。
+- **バランス調整(v2)**: HR率を引き下げ。バレル閾値150→158km/h、バレルHR率0.35+p*0.15→0.25+p*0.10、フライHR率0.05+p*0.08→0.03+p*0.06、ライナーHR率0.02+p*0.03→0.01+p*0.02。ライナー安打率0.68→0.62、フライ安打率0.14→0.12。チーム打率.275→.245-.265目標。
+- **守備バグ修正**: (1) 1B自己処理ゴロでA+POの二重記録→POのみに修正(3U)。(2) 外野中継プレーで外野手にもAを記録。(3) buildFielderMapにfullRoster引数を追加し、打順外ポジション(2B/CF/C等)をフルロスターから補完。
+- **AtBatLog診断機能**: simulateGameにoptions引数({collectAtBatLogs?: boolean})を追加。trueの場合、各打席の方向/角度/速度/結果をAtBatLogとして収集。通常シーズンシミュでは収集しない（パフォーマンス影響なし）。
+- **打球分析ツール**: analytics/page.tsxに2タブ構成。タブ1=シーズンデータ集計（GB%/FB%/LD%/打撃サマリー/守備機会）。タブ2=診断シミュレーション（N試合実行→打球物理サマリー/タイプ別結果/守備集計/打席ログ/CSV出力）。
 
 ## 既知の問題
 <!-- 今は直さないが把握しておくべき問題を記録する。 -->
