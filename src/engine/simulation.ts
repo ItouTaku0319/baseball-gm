@@ -152,7 +152,7 @@ function clamp(value: number, min: number, max: number): number {
 export function classifyBattedBallType(launchAngle: number, exitVelocity: number): BattedBallType {
   if (launchAngle >= 50) return "popup";
   if (launchAngle < 10) return "ground_ball";
-  if (launchAngle < 20) {
+  if (launchAngle < 25) {
     if (exitVelocity < 130) return "ground_ball";
     return "line_drive";
   }
@@ -215,7 +215,7 @@ export function generateBattedBall(batter: Player, pitcher: Player): BattedBall 
   // --- 3. 打球速度 (80-185 km/h) ---
   const velMean = 120 + (power - 50) * 0.5 + (contact - 50) * 0.15;
   const breakingPenalty = (breakingPower - 50) * 0.15;
-  const exitVelocity = clamp(gaussianRandom(velMean - breakingPenalty, 18), 80, 185);
+  const exitVelocity = clamp(gaussianRandom(velMean - breakingPenalty, 18), 80, 170);
 
   // --- 4. 打球タイプ分類 (後方互換) ---
   const type = classifyBattedBallType(launchAngle, exitVelocity);
@@ -314,7 +314,7 @@ function resolveInPlayFromBall(
       // フェンス際: パワー補正付きランダム
       const powerBonus = (batter.batting.power - 50) * 0.002;
       const hrChance = (ratio - 0.95) / 0.10 + powerBonus;
-      if (Math.random() < clamp(hrChance, 0.05, 0.95)) return "homerun";
+      if (Math.random() < clamp(hrChance, 0.01, 0.90)) return "homerun";
     }
   }
 
@@ -507,22 +507,33 @@ function advanceRunners(
   bases: BaseRunners,
   result: AtBatResult,
   batter: Player
-): { bases: BaseRunners; runsScored: number } {
+): { bases: BaseRunners; runsScored: number; scoredRunners: Player[] } {
   let runs = 0;
+  const scored: Player[] = [];
   const newBases: BaseRunners = { first: null, second: null, third: null };
 
   switch (result) {
-    case "homerun":
-      runs = 1 + (bases.first ? 1 : 0) + (bases.second ? 1 : 0) + (bases.third ? 1 : 0);
+    case "homerun": {
+      if (bases.third) scored.push(bases.third);
+      if (bases.second) scored.push(bases.second);
+      if (bases.first) scored.push(bases.first);
+      scored.push(batter);
+      runs = scored.length;
       break;
+    }
 
     case "triple":
-      runs = (bases.first ? 1 : 0) + (bases.second ? 1 : 0) + (bases.third ? 1 : 0);
+      if (bases.first) scored.push(bases.first);
+      if (bases.second) scored.push(bases.second);
+      if (bases.third) scored.push(bases.third);
+      runs = scored.length;
       newBases.third = batter;
       break;
 
     case "double":
-      runs = (bases.second ? 1 : 0) + (bases.third ? 1 : 0);
+      if (bases.second) scored.push(bases.second);
+      if (bases.third) scored.push(bases.third);
+      runs = scored.length;
       if (bases.first) newBases.third = bases.first;
       newBases.second = batter;
       break;
@@ -530,7 +541,8 @@ function advanceRunners(
     case "single":
     case "infieldHit":
     case "error":
-      runs = bases.third ? 1 : 0;
+      if (bases.third) scored.push(bases.third);
+      runs = scored.length;
       if (bases.second) newBases.third = bases.second;
       if (bases.first) newBases.second = bases.first;
       newBases.first = batter;
@@ -539,7 +551,10 @@ function advanceRunners(
     case "walk":
     case "hitByPitch": {
       // 押し出し: フォースされた走者のみ進塁
-      if (bases.first && bases.second && bases.third) runs = 1;
+      if (bases.first && bases.second && bases.third) {
+        scored.push(bases.third);
+        runs = 1;
+      }
       if (bases.first && bases.second) newBases.third = bases.second;
       if (bases.first) newBases.second = bases.first;
       newBases.first = batter;
@@ -553,11 +568,14 @@ function advanceRunners(
       // 1塁走者アウト + 打者アウト (3塁走者は生還しない、2塁走者は2塁のまま)
       if (bases.second) newBases.second = bases.second;
       if (bases.third) newBases.third = bases.third;
-      return { bases: newBases, runsScored: 0 };
+      return { bases: newBases, runsScored: 0, scoredRunners: [] };
 
     case "sacrificeFly":
       // 3塁走者生還、打者アウト
-      runs = bases.third ? 1 : 0;
+      if (bases.third) {
+        scored.push(bases.third);
+        runs = 1;
+      }
       if (bases.second) newBases.third = bases.second;
       if (bases.first) newBases.second = bases.first;
       break;
@@ -582,10 +600,10 @@ function advanceRunners(
 
     default:
       // アウト系: 走者はそのまま
-      return { bases, runsScored: 0 };
+      return { bases, runsScored: 0, scoredRunners: [] };
   }
 
-  return { bases: newBases, runsScored: runs };
+  return { bases: newBases, runsScored: runs, scoredRunners: scored };
 }
 
 /**
@@ -899,6 +917,9 @@ function simulateHalfInning(
         }
         const dpAdvance = advanceRunners(bases, result, batter);
         bases = dpAdvance.bases;
+        for (const runner of dpAdvance.scoredRunners) {
+          getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
+        }
         break;
       }
 
@@ -924,6 +945,9 @@ function simulateHalfInning(
         runs += sfScored;
         bs.rbi += sfScored;
         pitcherLog.earnedRuns += sfScored;
+        for (const runner of sfAdvance.scoredRunners) {
+          getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
+        }
         break;
       }
 
@@ -937,6 +961,9 @@ function simulateHalfInning(
           runs += scored;
           bs.rbi += scored;
           pitcherLog.earnedRuns += scored;
+          for (const runner of advance.scoredRunners) {
+            getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
+          }
         }
         break;
 
@@ -950,6 +977,9 @@ function simulateHalfInning(
           runs += scored;
           bs.rbi += scored;
           pitcherLog.earnedRuns += scored;
+          for (const runner of advance.scoredRunners) {
+            getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
+          }
         }
         break;
 
@@ -976,6 +1006,9 @@ function simulateHalfInning(
         runs += fcScored;
         bs.rbi += fcScored;
         pitcherLog.earnedRuns += fcScored;
+        for (const runner of fcAdvance.scoredRunners) {
+          getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
+        }
         break;
       }
 
@@ -990,6 +1023,9 @@ function simulateHalfInning(
         const errScored = errAdvance.runsScored;
         runs += errScored;
         // エラーによる失点は自責点に含まない
+        for (const runner of errAdvance.scoredRunners) {
+          getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
+        }
         break;
       }
 
@@ -1014,8 +1050,8 @@ function simulateHalfInning(
         runs += hitScored;
         bs.rbi += hitScored;
         pitcherLog.earnedRuns += hitScored;
-        if (result === "homerun") {
-          bs.runs++;
+        for (const runner of hitAdvance.scoredRunners) {
+          getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
         }
         break;
       }
