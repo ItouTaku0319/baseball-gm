@@ -363,6 +363,9 @@ function updatePlayoffPlayerStats(
               stolenBases: existing.stolenBases + (bs.stolenBases || 0),
               caughtStealing: existing.caughtStealing + (bs.caughtStealing || 0),
               errors: existing.errors,
+              hitByPitch: existing.hitByPitch + (bs.hitByPitch ?? 0),
+              sacrificeFlies: existing.sacrificeFlies + (bs.sacrificeFlies ?? 0),
+              groundedIntoDP: existing.groundedIntoDP + (bs.groundedIntoDP ?? 0),
             },
           },
         };
@@ -390,6 +393,9 @@ function updatePlayoffPlayerStats(
               walks: existing.walks + pl.walks,
               strikeouts: existing.strikeouts + pl.strikeouts,
               homeRunsAllowed: existing.homeRunsAllowed + pl.homeRunsAllowed,
+              hitBatsmen: existing.hitBatsmen + (pl.hitBatsmen ?? 0),
+              groundBallOuts: existing.groundBallOuts + (pl.groundBallOuts ?? 0),
+              flyBallOuts: existing.flyBallOuts + (pl.flyBallOuts ?? 0),
             },
           },
         };

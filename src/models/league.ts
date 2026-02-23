@@ -54,6 +54,9 @@ export interface PlayerGameStats {
   strikeouts: number;
   stolenBases: number;
   caughtStealing: number;
+  hitByPitch?: number;       // 死球
+  sacrificeFlies?: number;   // 犠牲フライ
+  groundedIntoDP?: number;   // 併殺打
 }
 
 /** 投手の1試合の成績 */
@@ -65,6 +68,9 @@ export interface PitcherGameLog {
   walks: number;
   strikeouts: number;
   homeRunsAllowed: number;
+  hitBatsmen?: number;       // 与死球
+  groundBallOuts?: number;   // ゴロアウト数
+  flyBallOuts?: number;      // フライアウト数
 }
 
 /** 試合結果 */

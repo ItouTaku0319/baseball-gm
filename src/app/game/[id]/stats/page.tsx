@@ -42,6 +42,9 @@ interface BatterRow {
   obp: number;
   slg: number;
   ops: number;
+  hitByPitch: number;
+  sacrificeFlies: number;
+  groundedIntoDP: number;
   // advanced
   iso: number;
   babip: number;
@@ -88,6 +91,7 @@ interface PitcherRow {
 // ── wOBA linear weights (MLB standard) ──
 
 const W_BB = 0.69;
+const W_HBP = 0.72;
 const W_1B = 0.87;
 const W_2B = 1.27;
 const W_3B = 1.62;
@@ -336,11 +340,11 @@ export default function StatsPage() {
         if (!s || s.atBats === 0) continue;
 
         const singles = s.hits - s.doubles - s.triples - s.homeRuns;
-        const pa = s.atBats + s.walks;
+        const pa = s.atBats + s.walks + (s.hitByPitch || 0) + (s.sacrificeFlies || 0);
         const totalBases =
           singles + s.doubles * 2 + s.triples * 3 + s.homeRuns * 4;
         const avg = s.hits / s.atBats;
-        const obp = pa > 0 ? (s.hits + s.walks) / pa : 0;
+        const obp = pa > 0 ? (s.hits + s.walks + (s.hitByPitch || 0)) / pa : 0;
         const slg = totalBases / s.atBats;
         const ops = obp + slg;
         const iso = slg - avg;
@@ -353,6 +357,7 @@ export default function StatsPage() {
 
         const wobaNum =
           W_BB * s.walks +
+          W_HBP * (s.hitByPitch || 0) +
           W_1B * singles +
           W_2B * s.doubles +
           W_3B * s.triples +
@@ -390,6 +395,9 @@ export default function StatsPage() {
           bbPct,
           bbPerK,
           woba,
+          hitByPitch: s.hitByPitch || 0,
+          sacrificeFlies: s.sacrificeFlies || 0,
+          groundedIntoDP: s.groundedIntoDP || 0,
           wrcPlus: 0, // computed below
           war: 0, // computed below
         });
@@ -882,11 +890,14 @@ function BattingBasicTable({
             <Th>出塁率</Th>
             <Th>長打率</Th>
             <Th>OPS</Th>
+            <Th>死球</Th>
+            <Th>犠飛</Th>
+            <Th>併殺</Th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <EmptyRow cols={16} />
+            <EmptyRow cols={19} />
           ) : (
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
@@ -906,6 +917,9 @@ function BattingBasicTable({
                 <td className={S.cellMono}>{fmtRate(r.obp)}</td>
                 <td className={S.cellMono}>{fmtRate(r.slg)}</td>
                 <td className={S.cellMono}>{fmtRate(r.ops)}</td>
+                <td className={S.cell}>{r.hitByPitch}</td>
+                <td className={S.cell}>{r.sacrificeFlies}</td>
+                <td className={S.cell}>{r.groundedIntoDP}</td>
               </tr>
             ))
           )}

@@ -165,6 +165,9 @@ export interface BatterSeasonStats {
   stolenBases: number;
   caughtStealing: number;
   errors: number;
+  hitByPitch: number;      // 死球
+  sacrificeFlies: number;  // 犠牲フライ
+  groundedIntoDP: number;  // 併殺打
 }
 
 /** 投手のシーズン成績 */
@@ -181,6 +184,9 @@ export interface PitcherSeasonStats {
   walks: number;
   strikeouts: number;
   homeRunsAllowed: number;
+  hitBatsmen: number;      // 与死球
+  groundBallOuts: number;  // ゴロアウト数
+  flyBallOuts: number;     // フライアウト数
 }
 
 /** 選手データ */
@@ -237,6 +243,9 @@ export function emptyBatterStats(): BatterSeasonStats {
     stolenBases: 0,
     caughtStealing: 0,
     errors: 0,
+    hitByPitch: 0,
+    sacrificeFlies: 0,
+    groundedIntoDP: 0,
   };
 }
 
@@ -255,5 +264,8 @@ export function emptyPitcherStats(): PitcherSeasonStats {
     walks: 0,
     strikeouts: 0,
     homeRunsAllowed: 0,
+    hitBatsmen: 0,
+    groundBallOuts: 0,
+    flyBallOuts: 0,
   };
 }
