@@ -103,15 +103,13 @@ export function LineupCard({
 
         {/* 2行目: 能力値 */}
         <div className="flex items-center gap-3 text-xs tabular-nums mb-1 flex-wrap">
-          <ColoredAbility label="ミ" val={player.batting.contact} />
-          <ColoredAbility label="パ" val={player.batting.power} />
           <span className="whitespace-nowrap flex items-center gap-0.5">
             <span className="text-gray-400">弾</span>
             <TrajectoryIcon value={player.batting.trajectory} />
-            <span className={gradeColor(abilityGrade(player.batting.trajectory * 25))}>
-              {player.batting.trajectory}
-            </span>
+            <span className="text-gray-100">{player.batting.trajectory}</span>
           </span>
+          <ColoredAbility label="ミ" val={player.batting.contact} />
+          <ColoredAbility label="パ" val={player.batting.power} />
           <ColoredAbility label="走" val={player.batting.speed} />
           <ColoredAbility label="眼" val={player.batting.eye} />
         </div>

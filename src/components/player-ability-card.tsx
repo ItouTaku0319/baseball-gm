@@ -79,22 +79,26 @@ function pitchLevelColor(level: number): string {
   return "text-cyan-300";
 }
 
-/** 弾道アイコン (SVG弧線、値で高さが変わる) */
+/** 弾道アイコン (角度の異なる矢印) */
 export function TrajectoryIcon({ value }: { value: number }) {
-  // 弾道1=低い弧, 4=高い弧
-  const height = 4 + (value - 1) * 6; // 4, 10, 16, 22
-  const colors = ["#60a5fa", "#22c55e", "#f59e0b", "#ef4444"]; // 1=青, 2=緑, 3=橙, 4=赤
-  const color = colors[Math.min(value - 1, 3)];
+  // 弾道1=ほぼ水平(10°), 2=やや上(25°), 3=上向き(45°), 4=急角度(65°)
+  const angles = [10, 25, 45, 65];
+  const angle = angles[Math.min(value - 1, 3)];
+  const rad = (angle * Math.PI) / 180;
+  const len = 14;
+  const x2 = 4 + len * Math.cos(rad);
+  const y2 = 16 - len * Math.sin(rad);
+  // 矢じり
+  const headLen = 5;
+  const headAngle = 0.5;
+  const hx1 = x2 - headLen * Math.cos(rad - headAngle);
+  const hy1 = y2 + headLen * Math.sin(rad - headAngle);
+  const hx2 = x2 - headLen * Math.cos(rad + headAngle);
+  const hy2 = y2 + headLen * Math.sin(rad + headAngle);
   return (
-    <svg width="24" height="20" viewBox="0 0 24 20" className="inline-block align-middle">
-      <path
-        d={`M 2 18 Q 12 ${18 - height} 22 18`}
-        fill="none"
-        stroke={color}
-        strokeWidth={2}
-        strokeLinecap="round"
-      />
-      <circle cx="22" cy="18" r="2" fill={color} />
+    <svg width="22" height="18" viewBox="0 0 22 18" className="inline-block align-middle">
+      <line x1={4} y1={16} x2={x2} y2={y2} stroke="#d1d5db" strokeWidth={2} strokeLinecap="round" />
+      <polyline points={`${hx1},${hy1} ${x2},${y2} ${hx2},${hy2}`} fill="none" stroke="#d1d5db" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -242,13 +246,13 @@ export function PlayerAbilityCard({ player, seasonYear, teamColor }: PlayerAbili
           <span className={`text-sm ${potentialColor(player.potential.overall)}`}>潜在{player.potential.overall}</span>
         </div>
         <div className="grid grid-cols-4 gap-x-3 gap-y-2 text-sm mb-0">
-          <div><span className="text-gray-400">ミ </span><AbilityCell val={player.batting.contact} /></div>
-          <div><span className="text-gray-400">パ </span><AbilityCell val={player.batting.power} /></div>
           <div>
             <span className="text-gray-400">弾 </span>
             <TrajectoryIcon value={player.batting.trajectory ?? 2} />
             <span className="text-gray-100 ml-0.5">{player.batting.trajectory ?? 2}</span>
           </div>
+          <div><span className="text-gray-400">ミ </span><AbilityCell val={player.batting.contact} /></div>
+          <div><span className="text-gray-400">パ </span><AbilityCell val={player.batting.power} /></div>
           <div><span className="text-gray-400">走 </span><AbilityCell val={player.batting.speed} /></div>
           <div><span className="text-gray-400">眼 </span><AbilityCell val={player.batting.eye} /></div>
           <div><span className="text-gray-400">肩 </span><AbilityCell val={player.batting.arm ?? 50} /></div>
