@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, startTransition } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
@@ -25,7 +25,7 @@ export default function LineupPage() {
   useEffect(() => {
     if (game) {
       const myTeam = game.teams[game.myTeamId];
-      setConfig(myTeam.lineupConfig ?? autoConfigureLineup(myTeam));
+      startTransition(() => setConfig(myTeam.lineupConfig ?? autoConfigureLineup(myTeam)));
     }
   }, [game]);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, startTransition } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
@@ -33,11 +33,11 @@ export default function DraftPage() {
   useEffect(() => {
     if (game && !draft) {
       if (game.offseasonState?.draftState) {
-        setDraft(game.offseasonState.draftState);
+        startTransition(() => setDraft(game.offseasonState!.draftState!));
       } else if (game.currentSeason.phase === "offseason") {
         const standings = sortStandings(game.currentSeason.standings);
         const newDraft = initDraft(standings, 5);
-        setDraft(newDraft);
+        startTransition(() => setDraft(newDraft));
       }
     }
   }, [game, draft]);

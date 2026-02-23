@@ -4,6 +4,7 @@ import type { Team } from "@/models/team";
 import type { TeamRecord } from "@/models/team";
 import { emptyBatterStats, emptyPitcherStats } from "@/models/player";
 import { simulateGame } from "./simulation";
+import { initClimaxFirst } from "./playoffs";
 
 /**
  * シーズン進行エンジン
@@ -73,7 +74,6 @@ export function simulateNextGame(state: GameState): GameState {
 
   // レギュラーシーズン終了 → CS 1stステージに遷移
   if (isSeasonOver) {
-    const { initClimaxFirst } = require("./playoffs");
     newState = initClimaxFirst(newState);
   }
 

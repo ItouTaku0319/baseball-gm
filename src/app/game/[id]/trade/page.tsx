@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, startTransition } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
@@ -35,7 +35,7 @@ export default function TradePage() {
 
   useEffect(() => {
     if (otherTeams.length > 0 && !targetTeamId) {
-      setTargetTeamId(otherTeams[0].id);
+      startTransition(() => setTargetTeamId(otherTeams[0].id));
     }
   }, [otherTeams, targetTeamId]);
 

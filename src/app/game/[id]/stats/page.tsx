@@ -1166,7 +1166,7 @@ function BattingBasicTable({
   playerMap: Map<string, Player>;
   seasonYear: number;
 }) {
-  const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
+  const { containerRef, containerSize, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
   const tooltipTeamColor = tooltip.playerId
     ? rows.find(r => r.playerId === tooltip.playerId)?.teamColor
     : undefined;
@@ -1245,7 +1245,8 @@ function BattingBasicTable({
         x={tooltip.x}
         y={tooltip.y}
         visible={tooltip.visible}
-        containerRef={containerRef}
+        containerWidth={containerSize.width}
+        containerHeight={containerSize.height}
         seasonYear={seasonYear}
         teamColor={tooltipTeamColor}
       />
@@ -1272,7 +1273,7 @@ function BattingAdvTable({
   playerMap: Map<string, Player>;
   seasonYear: number;
 }) {
-  const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
+  const { containerRef, containerSize, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
   const tooltipTeamColor = tooltip.playerId
     ? rows.find(r => r.playerId === tooltip.playerId)?.teamColor
     : undefined;
@@ -1339,7 +1340,8 @@ function BattingAdvTable({
         x={tooltip.x}
         y={tooltip.y}
         visible={tooltip.visible}
-        containerRef={containerRef}
+        containerWidth={containerSize.width}
+        containerHeight={containerSize.height}
         seasonYear={seasonYear}
         teamColor={tooltipTeamColor}
       />
@@ -1366,7 +1368,7 @@ function PitchingBasicTable({
   playerMap: Map<string, Player>;
   seasonYear: number;
 }) {
-  const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
+  const { containerRef, containerSize, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
   const tooltipTeamColor = tooltip.playerId
     ? rows.find(r => r.playerId === tooltip.playerId)?.teamColor
     : undefined;
@@ -1429,7 +1431,8 @@ function PitchingBasicTable({
         x={tooltip.x}
         y={tooltip.y}
         visible={tooltip.visible}
-        containerRef={containerRef}
+        containerWidth={containerSize.width}
+        containerHeight={containerSize.height}
         seasonYear={seasonYear}
         teamColor={tooltipTeamColor}
       />
@@ -1456,7 +1459,7 @@ function PitchingAdvTable({
   playerMap: Map<string, Player>;
   seasonYear: number;
 }) {
-  const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
+  const { containerRef, containerSize, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
   const tooltipTeamColor = tooltip.playerId
     ? rows.find(r => r.playerId === tooltip.playerId)?.teamColor
     : undefined;
@@ -1535,7 +1538,8 @@ function PitchingAdvTable({
         x={tooltip.x}
         y={tooltip.y}
         visible={tooltip.visible}
-        containerRef={containerRef}
+        containerWidth={containerSize.width}
+        containerHeight={containerSize.height}
         seasonYear={seasonYear}
         teamColor={tooltipTeamColor}
       />
@@ -1562,7 +1566,7 @@ function FieldingTable({
   playerMap: Map<string, Player>;
   seasonYear: number;
 }) {
-  const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
+  const { containerRef, containerSize, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
   const tooltipTeamColor = tooltip.playerId
     ? rows.find(r => r.playerId === tooltip.playerId)?.teamColor
     : undefined;
@@ -1623,7 +1627,8 @@ function FieldingTable({
         x={tooltip.x}
         y={tooltip.y}
         visible={tooltip.visible}
-        containerRef={containerRef}
+        containerWidth={containerSize.width}
+        containerHeight={containerSize.height}
         seasonYear={seasonYear}
         teamColor={tooltipTeamColor}
       />

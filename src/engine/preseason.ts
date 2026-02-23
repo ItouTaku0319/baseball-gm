@@ -69,7 +69,7 @@ function applyCampTraining(player: Player): {
   const declineFactor = player.age >= 34 ? 1.5 : player.age >= 32 ? 0.5 : 0;
 
   const newBatting = { ...player.batting };
-  let newPitching = player.pitching ? { ...player.pitching } : null;
+  const newPitching = player.pitching ? { ...player.pitching } : null;
 
   if (ageFactor > 0 && maxGrowth > 0) {
     // 打撃能力の成長

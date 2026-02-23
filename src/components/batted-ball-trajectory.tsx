@@ -238,6 +238,41 @@ function runnerTravelTime(segments: { x: number; y: number }[]): number {
   return dist / RUNNER_SPEED;
 }
 
+/** fromBase → toBase を塁間ごとに分割したイベント列を events に追加し、終了時刻を返す。
+ * fromBase === toBase の場合は一周（4セグメント）として扱う。 */
+function addSegmentedRunEvents(
+  events: PlayEvent[],
+  type: "batter_run" | "runner_advance",
+  entityPrefix: string,
+  fromBase: number,
+  toBase: number,
+  startTime: number,
+): number {
+  // 移動するセグメント数を計算（一周の場合は4）
+  const totalSegs = fromBase === toBase
+    ? 4
+    : (toBase - fromBase + 4) % 4;
+  let current = fromBase;
+  let t = startTime;
+  for (let segIdx = 0; segIdx < totalSegs; segIdx++) {
+    const next = (current + 1) % 4;
+    const segFrom = BASE_COORDS[current];
+    const segTo = BASE_COORDS[next];
+    const segTime = runnerTravelTime([segFrom, segTo]);
+    events.push({
+      type,
+      startTime: t,
+      duration: segTime,
+      from: segFrom,
+      to: segTo,
+      entityId: `${entityPrefix}_seg${segIdx}`,
+    });
+    t += segTime;
+    current = next;
+  }
+  return t;
+}
+
 function buildPlayEvents(log: AtBatLog): PlayEvent[] {
   const events: PlayEvent[] = [];
 
@@ -513,48 +548,13 @@ function buildPlayEvents(log: AtBatLog): PlayEvent[] {
         meta: { via },
       });
       // 打者走者（ホーム一周）
-      const segSeq = [
-        getBasePathSegments(0, 1),
-        getBasePathSegments(1, 2),
-        getBasePathSegments(2, 3),
-        getBasePathSegments(3, 0),
-      ];
-      let runStart = 0.3;
-      for (let i = 0; i < segSeq.length; i++) {
-        const segs = segSeq[i];
-        const segTime = runnerTravelTime(segs);
-        events.push({
-          type: "batter_run",
-          startTime: runStart,
-          duration: segTime,
-          from: segs[0],
-          to: segs[segs.length - 1],
-          entityId: `batter_seg${i}`,
-          meta: { via: undefined },
-        });
-        runStart += segTime;
-      }
+      addSegmentedRunEvents(events, "batter_run", "batter", 0, 0, 0.3);
       // 走者進塁（塁上の全走者がホームへ）
       if (basesBeforePlay) {
         basesBeforePlay.forEach((occupied, baseIdx) => {
           if (!occupied) return;
           const baseNum = baseIdx + 1;
-          let advStart = 0.3;
-          let current = baseNum;
-          while (current !== 0) {
-            const segs = getBasePathSegments(current, (current + 1) % 4 === 0 ? 0 : (current % 3) + 1);
-            const segTime = runnerTravelTime(segs);
-            events.push({
-              type: "runner_advance",
-              startTime: advStart,
-              duration: segTime,
-              from: segs[0],
-              to: segs[segs.length - 1],
-              entityId: `runner_base${baseNum}_seg${current}`,
-            });
-            advStart += segTime;
-            current = (current + 1) % 4;
-          }
+          addSegmentedRunEvents(events, "runner_advance", `runner_base${baseNum}`, baseNum, 0, 0.3);
         });
       }
       break;
@@ -592,35 +592,16 @@ function buildPlayEvents(log: AtBatLog): PlayEvent[] {
         });
       }
 
-      // 打者走者
-      const targetBase = advance;
-      const batterSegs = getBasePathSegments(0, targetBase);
-      const batterTime = runnerTravelTime(batterSegs);
-      events.push({
-        type: "batter_run",
-        startTime: Math.max(0.1, flightOrRollTime * 0.3),
-        duration: batterTime,
-        from: batterSegs[0],
-        to: batterSegs[batterSegs.length - 1],
-        entityId: "batter",
-      });
+      // 打者走者（塁間ごとに分割）
+      addSegmentedRunEvents(events, "batter_run", "batter", 0, advance, Math.max(0.1, flightOrRollTime * 0.3));
 
-      // 前走者の進塁
+      // 前走者の進塁（塁間ごとに分割）
       if (basesBeforePlay) {
         basesBeforePlay.forEach((occupied, baseIdx) => {
           if (!occupied) return;
           const baseNum = baseIdx + 1;
           const newBase = Math.min(baseNum + advance, 4) % 4;
-          const segs = getBasePathSegments(baseNum, newBase === 0 ? 0 : newBase);
-          const runTime = runnerTravelTime(segs);
-          events.push({
-            type: "runner_advance",
-            startTime: Math.max(0.1, flightOrRollTime * 0.3),
-            duration: runTime,
-            from: segs[0],
-            to: segs[segs.length - 1],
-            entityId: `runner_base${baseNum}`,
-          });
+          addSegmentedRunEvents(events, "runner_advance", `runner_base${baseNum}`, baseNum, newBase, Math.max(0.1, flightOrRollTime * 0.3));
         });
       }
       break;
@@ -984,29 +965,45 @@ function AnimatedFieldView({ log, events, currentTime, playing }: AnimatedFieldV
       if (!occupied) return;
       const baseNum = baseIdx + 1;
       if (isAnimating && advance > 0) {
-        const state = getEntityState(events, `runner_base${baseNum}`, currentTime);
-        if (state) {
-          runnerPositions.push({ pos: state.pos, baseIdx });
-          return;
+        // セグメント分割されたイベントを探す
+        let found = false;
+        for (let i = 0; i < 4; i++) {
+          const state = getEntityState(events, `runner_base${baseNum}_seg${i}`, currentTime);
+          if (state) {
+            runnerPositions.push({ pos: state.pos, baseIdx });
+            found = true;
+            break;
+          }
         }
+        if (!found) {
+          // 単一イベントのフォールバック
+          const state = getEntityState(events, `runner_base${baseNum}`, currentTime);
+          if (state) {
+            runnerPositions.push({ pos: state.pos, baseIdx });
+            found = true;
+          }
+        }
+        if (!found) {
+          runnerPositions.push({ pos: BASE_COORDS[baseNum], baseIdx });
+        }
+        return;
       }
       runnerPositions.push({ pos: BASE_COORDS[baseNum], baseIdx });
     });
   }
 
-  // 打者走者（ホームラン時は4セグメント分）
+  // 打者走者（セグメント分割されたイベントから現在位置を探す）
   let batterPos: { x: number; y: number } | null = null;
   if (isAnimating && advance > 0) {
-    if (log.result === "homerun") {
-      // 4セグメントから現在位置を探す
-      for (let i = 0; i < 4; i++) {
-        const state = getEntityState(events, `batter_seg${i}`, currentTime);
-        if (state) {
-          batterPos = state.pos;
-          break;
-        }
+    for (let i = 0; i < 4; i++) {
+      const state = getEntityState(events, `batter_seg${i}`, currentTime);
+      if (state) {
+        batterPos = state.pos;
+        break;
       }
-    } else {
+    }
+    // 単一イベントのフォールバック
+    if (!batterPos) {
       const state = getEntityState(events, "batter", currentTime);
       if (state) batterPos = state.pos;
     }

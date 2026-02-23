@@ -8,7 +8,7 @@ import { simulateGame } from "@/engine/simulation";
 import type { AtBatLog, GameResult } from "@/models/league";
 import type { Player } from "@/models/player";
 import { POSITION_NAMES } from "@/models/player";
-import { AbilityCell, VelocityCell, PitchList, PlayerAbilityCard } from "@/components/player-ability-card";
+import { PlayerAbilityCard } from "@/components/player-ability-card";
 import { BattedBallPopup } from "@/components/batted-ball-trajectory";
 
 // ---- 共有定数・ユーティリティ ----
@@ -198,11 +198,13 @@ function SeasonDataTab() {
     return new Set([leagueFilter]);
   }, [leagueFilter, allTeams, leagues]);
 
-  // チーム変更時にプレイヤーフィルタをリセット
-  useEffect(() => {
+  // チーム変更時にプレイヤーフィルタをリセット (leagueFilter変化のたびに state に反映)
+  const [prevLeagueFilter, setPrevLeagueFilter] = useState(leagueFilter);
+  if (prevLeagueFilter !== leagueFilter) {
+    setPrevLeagueFilter(leagueFilter);
     setPlayerFilter("all");
     setOutcomeFilter("all");
-  }, [leagueFilter]);
+  }
 
   // フィルタ対象の選手リスト
   const filteredPlayers = useMemo(() => {

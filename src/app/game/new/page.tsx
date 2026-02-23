@@ -32,7 +32,7 @@ export default function NewGamePage() {
         color: template.color,
         roster,
         budget: 500000,
-        fanBase: 50 + Math.floor(Math.random() * 30),
+        fanBase: 65,
         homeBallpark: template.homeBallpark,
       };
       const rosterLevels = autoAssignRosterLevels(partialTeam);

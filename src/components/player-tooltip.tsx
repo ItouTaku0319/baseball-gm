@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, RefObject } from "react";
 import type { Player } from "@/models/player";
 import { PlayerAbilityCard } from "./player-ability-card";
 
@@ -21,6 +21,18 @@ export function usePlayerTooltip(playerMap: Map<string, Player>) {
   });
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [containerSize, setContainerSize] = useState({ width: 800, height: 600 });
+
+  // コンテナサイズの監視
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => setContainerSize({ width: el.offsetWidth, height: el.offsetHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const showTooltip = useCallback((playerId: string, x: number, y: number) => {
     setTooltip({ playerId, x, y, visible: true });
@@ -107,6 +119,7 @@ export function usePlayerTooltip(playerMap: Map<string, Player>) {
 
   return {
     containerRef,
+    containerSize,
     tooltip,
     player,
     handleMouseEnter,
@@ -157,7 +170,8 @@ export function PlayerTooltipOverlay({
   x,
   y,
   visible,
-  containerRef,
+  containerWidth = 800,
+  containerHeight = 600,
   seasonYear,
   teamColor,
 }: {
@@ -165,16 +179,14 @@ export function PlayerTooltipOverlay({
   x: number;
   y: number;
   visible: boolean;
-  containerRef: React.RefObject<HTMLDivElement | null>;
+  containerWidth?: number;
+  containerHeight?: number;
+  /** @deprecated containerRef は不要になりました。代わりに containerWidth/Height を使用 */
+  containerRef?: RefObject<HTMLDivElement | null>;
   seasonYear?: number;
   teamColor?: string;
 }) {
   if (!visible || !player) return null;
-
-  // 表示位置の計算: コンテナの幅・高さに応じて反転
-  const container = containerRef.current;
-  const containerWidth = container?.offsetWidth ?? 800;
-  const containerHeight = container?.offsetHeight ?? 600;
 
   // カード幅は約420px, 高さは約200px想定（今季成績セクション分）
   const cardWidth = 420;

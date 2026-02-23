@@ -172,7 +172,7 @@ export function estimateDistance(exitVelocityKmh: number, launchAngleDeg: number
   const vCosT = v * Math.cos(theta);
   const baseDistance = vCosT * (vSinT + Math.sqrt(vSinT * vSinT + 2 * g * h)) / g;
 
-  const dragFactor = 0.87; // 空気抵抗補正(約13%減)
+  const dragFactor = 0.70; // 空気抵抗補正(約30%減)
   return baseDistance * dragFactor;
 }
 
