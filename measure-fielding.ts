@@ -5,7 +5,7 @@ function createTestPlayer(id: string, position: Player["position"], isPitcher: b
   return {
     id, name: `テスト${position}`, age: 25, position, isPitcher,
     throwHand: "R", batSide: "R",
-    batting: { contact: 50, power: 50, speed: 50, arm: 50, fielding: 50, catching: 50, eye: 50 },
+    batting: { contact: 50, power: 50, trajectory: 2, speed: 50, arm: 50, fielding: 50, catching: 50, eye: 50 },
     pitching: isPitcher ? { velocity: 145, control: 50, pitches: [{ type: "slider", level: 4 }], stamina: 60, mentalToughness: 50, arm: 50, fielding: 50, catching: 50 } : null,
     potential: { overall: "C" }, salary: 500, contractYears: 1,
     careerBattingStats: {}, careerPitchingStats: {},

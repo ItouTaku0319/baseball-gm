@@ -40,9 +40,14 @@ function randomAbility(base: number, spread: number): number {
 }
 
 function generateBatterAbilities(overall: number): BatterAbilities {
+  const contact = randomAbility(overall, 15);
+  const power = randomAbility(overall, 15);
+  const trajectoryBase = 1 + (power / 100) * 2.5 + (Math.random() - 0.5) * 1.5;
+  const trajectory = Math.max(1, Math.min(4, Math.round(trajectoryBase)));
   return {
-    contact: randomAbility(overall, 15),
-    power: randomAbility(overall, 15),
+    contact,
+    power,
+    trajectory,
     speed: randomAbility(overall, 15),
     arm: randomAbility(overall, 15),
     fielding: randomAbility(overall, 10),

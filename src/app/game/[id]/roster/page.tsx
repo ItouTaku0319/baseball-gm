@@ -15,6 +15,7 @@ import {
   AbilityCell,
   VelocityCell,
   PitchList,
+  TrajectoryIcon,
 } from "@/components/player-ability-card";
 import { ICHI_GUN_MAX } from "@/models/team";
 import type { RosterLevel } from "@/models/team";
@@ -186,6 +187,7 @@ export default function RosterPage() {
               <th className="py-3 px-3 text-center text-gray-400">打</th>
               <th className="py-3 px-3 text-right text-gray-400">ミート</th>
               <th className="py-3 px-3 text-right text-gray-400">パワー</th>
+              <th className="py-3 px-3 text-right text-gray-400">弾道</th>
               <th className="py-3 px-3 text-right text-gray-400">走力</th>
               <th className="py-3 px-3 text-right text-gray-400">肩力</th>
               <th className="py-3 px-3 text-right text-gray-400">守備</th>
@@ -351,6 +353,10 @@ function BatterRow({
       </td>
       <td className="py-2.5 px-3 text-right">
         <AbilityCell val={p.batting.power} />
+      </td>
+      <td className="py-2.5 px-3 text-right">
+        <TrajectoryIcon value={p.batting.trajectory ?? 2} />
+        <span className="text-gray-100 ml-1">{p.batting.trajectory ?? 2}</span>
       </td>
       <td className="py-2.5 px-3 text-right">
         <AbilityCell val={p.batting.speed} />

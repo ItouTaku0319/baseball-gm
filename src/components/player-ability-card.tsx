@@ -79,6 +79,26 @@ function pitchLevelColor(level: number): string {
   return "text-cyan-300";
 }
 
+/** 弾道アイコン (SVG弧線、値で高さが変わる) */
+export function TrajectoryIcon({ value }: { value: number }) {
+  // 弾道1=低い弧, 4=高い弧
+  const height = 4 + (value - 1) * 6; // 4, 10, 16, 22
+  const colors = ["#60a5fa", "#22c55e", "#f59e0b", "#ef4444"]; // 1=青, 2=緑, 3=橙, 4=赤
+  const color = colors[Math.min(value - 1, 3)];
+  return (
+    <svg width="24" height="20" viewBox="0 0 24 20" className="inline-block align-middle">
+      <path
+        d={`M 2 18 Q 12 ${18 - height} 22 18`}
+        fill="none"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+      />
+      <circle cx="22" cy="18" r="2" fill={color} />
+    </svg>
+  );
+}
+
 export function PitchList({ pitches }: { pitches: PitchRepertoire[] }) {
   if (pitches.length === 0) return <span className="text-gray-600">-</span>;
   return (
@@ -224,6 +244,11 @@ export function PlayerAbilityCard({ player, seasonYear, teamColor }: PlayerAbili
         <div className="grid grid-cols-4 gap-x-3 gap-y-2 text-sm mb-0">
           <div><span className="text-gray-400">ミ </span><AbilityCell val={player.batting.contact} /></div>
           <div><span className="text-gray-400">パ </span><AbilityCell val={player.batting.power} /></div>
+          <div>
+            <span className="text-gray-400">弾 </span>
+            <TrajectoryIcon value={player.batting.trajectory ?? 2} />
+            <span className="text-gray-100 ml-0.5">{player.batting.trajectory ?? 2}</span>
+          </div>
           <div><span className="text-gray-400">走 </span><AbilityCell val={player.batting.speed} /></div>
           <div><span className="text-gray-400">眼 </span><AbilityCell val={player.batting.eye} /></div>
           <div><span className="text-gray-400">肩 </span><AbilityCell val={player.batting.arm ?? 50} /></div>

@@ -6,8 +6,12 @@ import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
 import { POSITION_NAMES } from "@/models/player";
 import type { Player } from "@/models/player";
+import { VelocityCell, AbilityCell, PitchList } from "@/components/player-ability-card";
 import type { TeamLineupConfig } from "@/models/team";
 import { autoConfigureLineup, getIchiGunPlayers } from "@/engine/lineup";
+import { LineupField } from "@/components/lineup-field";
+import type { FieldPlayer } from "@/components/lineup-field";
+import { LineupCard } from "@/components/lineup-card";
 
 type Tab = "batting" | "rotation" | "bullpen";
 
@@ -186,81 +190,210 @@ function BattingOrderEditor({
   playerMap: Map<string, Player>;
   onChange: (c: TeamLineupConfig) => void;
 }) {
-  const orderLabels = [
-    "1番 (リードオフ)",
-    "2番 (つなぎ)",
-    "3番 (チャンスメーカー)",
-    "4番 (クリーンナップ)",
-    "5番 (ポイントゲッター)",
-    "6番",
-    "7番",
-    "8番",
-    "9番",
-  ];
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const game = useGameStore((s) => s.game);
+  const seasonYear = game?.currentSeason.year;
+
+  const usedIds = new Set(config.battingOrder);
+  const benchBatters = batters.filter((b) => !usedIds.has(b.id));
+
+  const fieldPlayers: FieldPlayer[] = config.battingOrder
+    .slice(0, 9)
+    .map((id) => {
+      const p = playerMap.get(id);
+      if (!p) return null;
+      return { id: p.id, name: p.name, position: p.position };
+    })
+    .filter((x): x is FieldPlayer => x !== null);
+
+  const handleCardClick = (playerId: string) => {
+    if (!selectedId) {
+      setSelectedId(playerId);
+      return;
+    }
+    if (selectedId === playerId) {
+      setSelectedId(null);
+      return;
+    }
+
+    const selectedIndex = config.battingOrder.indexOf(selectedId);
+    const clickedIndex = config.battingOrder.indexOf(playerId);
+
+    if (selectedIndex >= 0 && clickedIndex >= 0) {
+      const newOrder = [...config.battingOrder];
+      [newOrder[selectedIndex], newOrder[clickedIndex]] = [newOrder[clickedIndex], newOrder[selectedIndex]];
+      onChange({ ...config, battingOrder: newOrder });
+    }
+    setSelectedId(null);
+  };
+
+  const handleBenchClick = (playerId: string) => {
+    if (!selectedId) return;
+    const selectedIndex = config.battingOrder.indexOf(selectedId);
+    if (selectedIndex < 0) return;
+
+    const newOrder = [...config.battingOrder];
+    newOrder[selectedIndex] = playerId;
+    onChange({ ...config, battingOrder: newOrder });
+    setSelectedId(null);
+  };
 
   const handleSwap = (i: number, j: number) => {
+    if (j < 0 || j >= 9) return;
     const newOrder = [...config.battingOrder];
     [newOrder[i], newOrder[j]] = [newOrder[j], newOrder[i]];
     onChange({ ...config, battingOrder: newOrder });
   };
 
-  const handleReplace = (slotIndex: number, playerId: string) => {
-    const newOrder = [...config.battingOrder];
-    newOrder[slotIndex] = playerId;
-    onChange({ ...config, battingOrder: newOrder });
+  return (
+    <div>
+      <h2 className="text-lg font-semibold mb-3 text-blue-400">スタメン打順</h2>
+
+      <div className="flex flex-col lg:flex-row gap-4 mb-6">
+        {/* フィールド図 */}
+        <div className="lg:w-[320px] shrink-0">
+          <LineupField
+            players={fieldPlayers}
+            selectedId={selectedId}
+            onPlayerClick={handleCardClick}
+          />
+        </div>
+
+        {/* 打順カードリスト */}
+        <div className="flex-1 space-y-1.5">
+          {config.battingOrder.slice(0, 9).map((playerId, i) => {
+            const player = playerMap.get(playerId);
+            if (!player) return null;
+            const stats = seasonYear != null
+              ? player.careerBattingStats[seasonYear]
+              : undefined;
+            return (
+              <LineupCard
+                key={playerId}
+                order={i + 1}
+                player={player}
+                seasonStats={stats}
+                selected={selectedId === playerId}
+                onClick={() => handleCardClick(playerId)}
+                onMoveUp={() => handleSwap(i, i - 1)}
+                onMoveDown={() => handleSwap(i, i + 1)}
+                disableUp={i === 0}
+                disableDown={i >= 8}
+              />
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ベンチ */}
+      {benchBatters.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold mb-2 text-gray-400">
+            ベンチ ({benchBatters.length})
+            {selectedId && (
+              <span className="ml-2 text-yellow-400 text-xs">
+                クリックで差し替え
+              </span>
+            )}
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+            {benchBatters.map((b) => (
+              <div
+                key={b.id}
+                onClick={() => handleBenchClick(b.id)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                  selectedId
+                    ? "bg-gray-700 hover:bg-gray-600 cursor-pointer border border-yellow-500/30"
+                    : "bg-gray-800/50 border border-gray-700/50"
+                }`}
+              >
+                <span className="text-gray-400 text-xs">{POSITION_NAMES[b.position]}</span>
+                <span className="text-white">{b.name}</span>
+                <span className="text-gray-500 text-xs ml-auto">
+                  ミ{b.batting.contact} パ{b.batting.power}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 投手カード ──
+
+/** 投手情報カード */
+function PitcherCard({
+  player,
+  role,
+  isNext,
+  onRemove,
+  removeLabel,
+}: {
+  player: Player;
+  role?: string;
+  isNext?: boolean;
+  onRemove?: () => void;
+  removeLabel?: string;
+}) {
+  const pitching = player.pitching;
+  if (!pitching) return null;
+
+  const roleColors: Record<string, string> = {
+    "守護神": "bg-red-900/60 text-red-300",
+    "セットアッパー": "bg-orange-900/60 text-orange-300",
+    "中継ぎ": "bg-gray-700 text-gray-400",
   };
 
-  const usedIds = new Set(config.battingOrder);
-  const available = batters.filter((b) => !usedIds.has(b.id));
-
   return (
-    <div className="space-y-2">
-      <h2 className="text-lg font-semibold mb-3 text-blue-400">スタメン打順</h2>
-      {config.battingOrder.slice(0, 9).map((playerId, i) => {
-        const player = playerMap.get(playerId);
-        return (
-          <div
-            key={i}
-            className="flex items-center gap-3 bg-gray-800 rounded-lg p-3 border border-gray-700"
+    <div
+      className={`bg-gray-800 rounded-lg p-3 border transition-colors ${
+        isNext ? "border-green-500" : "border-gray-700"
+      }`}
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-white font-bold">{player.name}</span>
+        <span className="text-gray-400 text-xs">{player.age}歳</span>
+        {role && (
+          <span className={`text-xs px-2 py-0.5 rounded-full ${roleColors[role] ?? "bg-gray-700 text-gray-400"}`}>
+            {role}
+          </span>
+        )}
+        {isNext && (
+          <span className="text-green-400 text-xs">●次回先発</span>
+        )}
+        {onRemove && (
+          <button
+            onClick={onRemove}
+            className="ml-auto px-2 py-1 bg-red-900/50 hover:bg-red-800 rounded text-xs text-red-300"
           >
-            <div className="w-32 text-sm text-gray-400 flex-shrink-0">
-              {orderLabels[i]}
-            </div>
-            <select
-              value={playerId}
-              onChange={(e) => handleReplace(i, e.target.value)}
-              className="flex-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
-            >
-              {player && (
-                <option value={player.id}>
-                  {player.name} ({POSITION_NAMES[player.position]}) ミ{player.batting.contact} パ{player.batting.power} 走{player.batting.speed}
-                </option>
-              )}
-              {available.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name} ({POSITION_NAMES[b.position]}) ミ{b.batting.contact} パ{b.batting.power} 走{b.batting.speed}
-                </option>
-              ))}
-            </select>
-            <div className="flex gap-1">
-              <button
-                onClick={() => i > 0 && handleSwap(i, i - 1)}
-                disabled={i === 0}
-                className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm disabled:opacity-30"
-              >
-                ↑
-              </button>
-              <button
-                onClick={() => i < 8 && handleSwap(i, i + 1)}
-                disabled={i >= 8}
-                className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm disabled:opacity-30"
-              >
-                ↓
-              </button>
-            </div>
-          </div>
-        );
-      })}
+            {removeLabel ?? "除外"}
+          </button>
+        )}
+      </div>
+      <div className="flex items-center gap-3 text-sm mb-1.5 flex-wrap">
+        <span>
+          <span className="text-gray-400">球速 </span>
+          <VelocityCell val={pitching.velocity} />
+        </span>
+        <span>
+          <span className="text-gray-400">制球 </span>
+          <AbilityCell val={pitching.control} />
+        </span>
+        <span>
+          <span className="text-gray-400">スタ </span>
+          <AbilityCell val={pitching.stamina} />
+        </span>
+        <span>
+          <span className="text-gray-400">精神 </span>
+          <AbilityCell val={pitching.mentalToughness} />
+        </span>
+      </div>
+      <div className="text-sm">
+        <PitchList pitches={pitching.pitches} />
+      </div>
     </div>
   );
 }
@@ -282,12 +415,6 @@ function RotationEditor({
     config.closerId,
     ...config.setupIds,
   ].filter(Boolean));
-
-  const handleReplace = (slotIndex: number, playerId: string) => {
-    const newRotation = [...config.startingRotation];
-    newRotation[slotIndex] = playerId;
-    onChange({ ...config, startingRotation: newRotation });
-  };
 
   const handleAdd = (playerId: string) => {
     if (config.startingRotation.length >= 6) return;
@@ -317,76 +444,44 @@ function RotationEditor({
       <h2 className="text-lg font-semibold mb-3 text-blue-400">
         先発ローテーション ({config.startingRotation.length}人)
       </h2>
-      <p className="text-sm text-gray-400 mb-4">
-        次回先発: {config.rotationIndex + 1}番手
-      </p>
       <div className="space-y-2 mb-4">
         {config.startingRotation.map((playerId, i) => {
           const player = playerMap.get(playerId);
+          if (!player) return null;
+          const isNext = i === config.rotationIndex % config.startingRotation.length;
           return (
-            <div
-              key={i}
-              className={`flex items-center gap-3 bg-gray-800 rounded-lg p-3 border ${
-                i === config.rotationIndex % config.startingRotation.length
-                  ? "border-green-500"
-                  : "border-gray-700"
-              }`}
-            >
-              <div className="w-16 text-sm text-gray-400">
+            <div key={playerId} className="flex items-start gap-2">
+              <div className="w-10 pt-3 text-sm text-gray-400 text-center shrink-0">
                 {i + 1}番手
-                {i === config.rotationIndex % config.startingRotation.length && (
-                  <span className="text-green-400 ml-1">●</span>
-                )}
               </div>
-              <select
-                value={playerId}
-                onChange={(e) => handleReplace(i, e.target.value)}
-                className="flex-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
-              >
-                {player && (
-                  <option value={player.id}>
-                    {player.name} {player.pitching?.velocity}km スタ{player.pitching?.stamina}
-                  </option>
-                )}
-                {available.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} {p.pitching?.velocity}km スタ{p.pitching?.stamina}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={() => handleRemove(i)}
-                disabled={config.startingRotation.length <= 1}
-                className="px-3 py-1 bg-red-900/50 hover:bg-red-800 rounded text-sm text-red-300 disabled:opacity-30"
-              >
-                除外
-              </button>
+              <div className="flex-1">
+                <PitcherCard
+                  player={player}
+                  isNext={isNext}
+                  onRemove={config.startingRotation.length > 1 ? () => handleRemove(i) : undefined}
+                />
+              </div>
             </div>
           );
         })}
       </div>
       {config.startingRotation.length < 6 && available.length > 0 && (
-        <div className="flex items-center gap-3">
-          <select
-            id="add-starter"
-            defaultValue=""
-            onChange={(e) => {
-              if (e.target.value) {
-                handleAdd(e.target.value);
-                e.target.value = "";
-              }
-            }}
-            className="flex-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
-          >
-            <option value="" disabled>
-              先発投手を追加...
-            </option>
+        <div>
+          <h3 className="text-sm font-semibold mb-2 text-gray-400">追加可能な投手</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
             {available.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} {p.pitching?.velocity}km スタ{p.pitching?.stamina}
-              </option>
+              <div
+                key={p.id}
+                onClick={() => handleAdd(p.id)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-gray-800/50 border border-gray-700/50 hover:bg-gray-700 cursor-pointer transition-colors"
+              >
+                <span className="text-white">{p.name}</span>
+                <span className="text-gray-500 text-xs ml-auto">
+                  {p.pitching?.velocity}km 制球{p.pitching?.control}
+                </span>
+              </div>
             ))}
-          </select>
+          </div>
         </div>
       )}
     </div>
@@ -410,12 +505,16 @@ function BullpenEditor({
   const availablePitchers = pitchers.filter((p) => !rotationSet.has(p.id));
   const usedIds = new Set([config.closerId, ...config.setupIds].filter(Boolean));
 
-  const handleCloserChange = (playerId: string) => {
+  const handleCloserClick = (playerId: string) => {
     onChange({
       ...config,
       closerId: playerId || null,
       setupIds: config.setupIds.filter((id) => id !== playerId),
     });
+  };
+
+  const handleCloserRemove = () => {
+    onChange({ ...config, closerId: null });
   };
 
   const handleSetupAdd = (playerId: string) => {
@@ -436,11 +535,8 @@ function BullpenEditor({
   const closerPlayer = config.closerId
     ? playerMap.get(config.closerId)
     : null;
-  const availableForCloser = availablePitchers.filter(
-    (p) => !config.setupIds.includes(p.id)
-  );
-  const availableForSetup = availablePitchers.filter(
-    (p) => p.id !== config.closerId && !config.setupIds.includes(p.id)
+  const availableForAny = availablePitchers.filter(
+    (p) => !usedIds.has(p.id)
   );
 
   return (
@@ -448,95 +544,72 @@ function BullpenEditor({
       {/* クローザー */}
       <div>
         <h2 className="text-lg font-semibold mb-3 text-red-400">守護神</h2>
-        <select
-          value={config.closerId ?? ""}
-          onChange={(e) => handleCloserChange(e.target.value)}
-          className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
-        >
-          <option value="">なし</option>
-          {closerPlayer && (
-            <option value={closerPlayer.id}>
-              {closerPlayer.name} {closerPlayer.pitching?.velocity}km 制球{closerPlayer.pitching?.control}
-            </option>
-          )}
-          {availableForCloser
-            .filter((p) => p.id !== config.closerId)
-            .map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} {p.pitching?.velocity}km 制球{p.pitching?.control}
-              </option>
-            ))}
-        </select>
+        {closerPlayer ? (
+          <PitcherCard
+            player={closerPlayer}
+            role="守護神"
+            onRemove={handleCloserRemove}
+            removeLabel="解除"
+          />
+        ) : (
+          <p className="text-gray-500 text-sm mb-2">未設定</p>
+        )}
       </div>
 
       {/* セットアッパー */}
       <div>
         <h2 className="text-lg font-semibold mb-3 text-orange-400">
-          セットアッパー ({config.setupIds.length}人)
+          セットアッパー ({config.setupIds.length}/3)
         </h2>
         <div className="space-y-2 mb-3">
           {config.setupIds.map((playerId, i) => {
             const player = playerMap.get(playerId);
+            if (!player) return null;
             return (
-              <div
-                key={i}
-                className="flex items-center gap-3 bg-gray-800 rounded-lg p-3 border border-gray-700"
-              >
-                <span className="text-white flex-1">
-                  {player?.name ?? "?"} {player?.pitching?.velocity}km
-                </span>
-                <button
-                  onClick={() => handleSetupRemove(i)}
-                  className="px-3 py-1 bg-red-900/50 hover:bg-red-800 rounded text-sm text-red-300"
-                >
-                  除外
-                </button>
-              </div>
+              <PitcherCard
+                key={playerId}
+                player={player}
+                role="セットアッパー"
+                onRemove={() => handleSetupRemove(i)}
+                removeLabel="解除"
+              />
             );
           })}
         </div>
-        {config.setupIds.length < 3 && availableForSetup.length > 0 && (
-          <select
-            defaultValue=""
-            onChange={(e) => {
-              if (e.target.value) {
-                handleSetupAdd(e.target.value);
-                e.target.value = "";
-              }
-            }}
-            className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
-          >
-            <option value="" disabled>
-              セットアッパーを追加...
-            </option>
-            {availableForSetup.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} {p.pitching?.velocity}km 制球{p.pitching?.control}
-              </option>
-            ))}
-          </select>
-        )}
       </div>
 
-      {/* 中継ぎ一覧 */}
+      {/* その他のリリーフ（中継ぎ） */}
       <div>
         <h2 className="text-lg font-semibold mb-3 text-gray-400">
-          その他のリリーフ
+          中継ぎ ({availableForAny.length}人)
         </h2>
-        <div className="space-y-1">
-          {availablePitchers
-            .filter((p) => !usedIds.has(p.id))
-            .map((p) => (
-              <div
-                key={p.id}
-                className="flex items-center gap-3 bg-gray-800/50 rounded px-3 py-2 text-sm text-gray-300"
-              >
-                <span>{p.name}</span>
-                <span className="text-gray-500">
-                  {p.pitching?.velocity}km 制球{p.pitching?.control} スタ{p.pitching?.stamina}
-                </span>
+        <p className="text-gray-500 text-xs mb-2">
+          クリックで守護神/セットアッパーに指名
+        </p>
+        <div className="space-y-2">
+          {availableForAny.map((p) => (
+            <div key={p.id} className="relative group">
+              <PitcherCard player={p} role="中継ぎ" />
+              <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                {!config.closerId && (
+                  <button
+                    onClick={() => handleCloserClick(p.id)}
+                    className="px-2 py-1 bg-red-900/80 hover:bg-red-800 rounded text-xs text-red-200"
+                  >
+                    守護神に
+                  </button>
+                )}
+                {config.setupIds.length < 3 && (
+                  <button
+                    onClick={() => handleSetupAdd(p.id)}
+                    className="px-2 py-1 bg-orange-900/80 hover:bg-orange-800 rounded text-xs text-orange-200"
+                  >
+                    SU に
+                  </button>
+                )}
               </div>
-            ))}
+            </div>
+          ))}
         </div>
       </div>
     </div>

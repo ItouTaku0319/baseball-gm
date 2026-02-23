@@ -109,6 +109,7 @@ function createDummyFielder(): Player {
     batting: {
       contact: 50,
       power: 50,
+      trajectory: 2,
       speed: 50,
       arm: 50,
       fielding: 50,
@@ -199,6 +200,9 @@ export function generateBattedBall(batter: Player, pitcher: Player): BattedBall 
 
   // --- 2. 打球角度 (-15° ~ 70°) ---
   let angleMean = 12 + (power - 50) * 0.08 - (contact - 50) * 0.04;
+  // 弾道(trajectory)による角度補正: 弾道1=-3°, 2=±0°, 3=+3°, 4=+6°
+  const trajectory = batter.batting.trajectory ?? 2;
+  angleMean += (trajectory - 2) * 3;
   let sinkerBonus = 0;
   if (pitcher.pitching?.pitches) {
     for (const pitch of pitcher.pitching.pitches) {

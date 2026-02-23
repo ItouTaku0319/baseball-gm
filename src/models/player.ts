@@ -114,6 +114,8 @@ export interface BatterAbilities {
   contact: number;
   /** パワー (長打力に影響) */
   power: number;
+  /** 弾道 (1-4、打球角度の傾向に影響) */
+  trajectory: number;
   /** 走力 (盗塁・内野安打に影響) */
   speed: number;
   /** 肩力 (送球に影響) */
