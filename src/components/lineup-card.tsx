@@ -2,7 +2,7 @@
 
 import type { Player, BatterSeasonStats } from "@/models/player";
 import { POSITION_NAMES, BAT_SIDE_NAMES, THROW_HAND_NAMES } from "@/models/player";
-import { TrajectoryIcon, abilityGrade, gradeColor } from "@/components/player-ability-card";
+import { TrajectoryIcon, trajectoryTextClass, abilityGrade, gradeColor } from "@/components/player-ability-card";
 
 export interface LineupCardProps {
   /** 打順番号 (1-9) */
@@ -106,7 +106,7 @@ export function LineupCard({
           <span className="whitespace-nowrap flex items-center gap-0.5">
             <span className="text-gray-400">弾</span>
             <TrajectoryIcon value={player.batting.trajectory} />
-            <span className="text-gray-100">{player.batting.trajectory}</span>
+            <span className={trajectoryTextClass(player.batting.trajectory)}>{player.batting.trajectory}</span>
           </span>
           <ColoredAbility label="ミ" val={player.batting.contact} />
           <ColoredAbility label="パ" val={player.batting.power} />

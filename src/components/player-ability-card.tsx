@@ -79,16 +79,25 @@ function pitchLevelColor(level: number): string {
   return "text-cyan-300";
 }
 
+/** 弾道の色 (パワプロ風: 1=白, 2=青, 3=橙, 4=赤) */
+const TRAJECTORY_COLORS = ["#d1d5db", "#60a5fa", "#f59e0b", "#ef4444"];
+const TRAJECTORY_TEXT_CLASSES = ["text-gray-300", "text-blue-400", "text-amber-400", "text-red-400"];
+
+/** 弾道テキストのTailwindクラスを返す */
+export function trajectoryTextClass(value: number): string {
+  return TRAJECTORY_TEXT_CLASSES[Math.min(Math.max(value - 1, 0), 3)];
+}
+
 /** 弾道アイコン (角度の異なる矢印) */
 export function TrajectoryIcon({ value }: { value: number }) {
   // 弾道1=ほぼ水平(10°), 2=やや上(25°), 3=上向き(45°), 4=急角度(65°)
   const angles = [10, 25, 45, 65];
   const angle = angles[Math.min(value - 1, 3)];
+  const color = TRAJECTORY_COLORS[Math.min(value - 1, 3)];
   const rad = (angle * Math.PI) / 180;
   const len = 14;
   const x2 = 4 + len * Math.cos(rad);
   const y2 = 16 - len * Math.sin(rad);
-  // 矢じり
   const headLen = 5;
   const headAngle = 0.5;
   const hx1 = x2 - headLen * Math.cos(rad - headAngle);
@@ -97,8 +106,8 @@ export function TrajectoryIcon({ value }: { value: number }) {
   const hy2 = y2 + headLen * Math.sin(rad + headAngle);
   return (
     <svg width="22" height="18" viewBox="0 0 22 18" className="inline-block align-middle">
-      <line x1={4} y1={16} x2={x2} y2={y2} stroke="#d1d5db" strokeWidth={2} strokeLinecap="round" />
-      <polyline points={`${hx1},${hy1} ${x2},${y2} ${hx2},${hy2}`} fill="none" stroke="#d1d5db" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+      <line x1={4} y1={16} x2={x2} y2={y2} stroke={color} strokeWidth={2} strokeLinecap="round" />
+      <polyline points={`${hx1},${hy1} ${x2},${y2} ${hx2},${hy2}`} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -249,7 +258,7 @@ export function PlayerAbilityCard({ player, seasonYear, teamColor }: PlayerAbili
           <div>
             <span className="text-gray-400">弾 </span>
             <TrajectoryIcon value={player.batting.trajectory ?? 2} />
-            <span className="text-gray-100 ml-0.5">{player.batting.trajectory ?? 2}</span>
+            <span className={`ml-0.5 ${trajectoryTextClass(player.batting.trajectory ?? 2)}`}>{player.batting.trajectory ?? 2}</span>
           </div>
           <div><span className="text-gray-400">ミ </span><AbilityCell val={player.batting.contact} /></div>
           <div><span className="text-gray-400">パ </span><AbilityCell val={player.batting.power} /></div>
