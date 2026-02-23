@@ -151,9 +151,9 @@ function clamp(value: number, min: number, max: number): number {
 /** 打球角度と速度から打球タイプを分類する */
 export function classifyBattedBallType(launchAngle: number, exitVelocity: number): BattedBallType {
   if (launchAngle >= 50) return "popup";
-  if (launchAngle < 5) return "ground_ball";
+  if (launchAngle < 10) return "ground_ball";
   if (launchAngle < 20) {
-    if (exitVelocity < 100) return "ground_ball";
+    if (exitVelocity < 130) return "ground_ball";
     return "line_drive";
   }
   return "fly_ball";
@@ -301,8 +301,8 @@ function resolveInPlayFromBall(
   // ポップフライ → 常にアウト
   if (ball.type === "popup") return "popout";
 
-  // --- 本塁打判定 ---
-  if (ball.type === "fly_ball" || ball.type === "line_drive") {
+  // --- 本塁打判定 (フライのみ: ライナーはHR対象外) ---
+  if (ball.type === "fly_ball") {
     const distance = estimateDistance(ball.exitVelocity, ball.launchAngle);
     const fenceDist = getFenceDistance(ball.direction);
     const ratio = distance / fenceDist;
@@ -324,6 +324,14 @@ function resolveInPlayFromBall(
       const dpRate = 0.12 + (1 - batter.batting.speed / 100) * 0.06;
       if (Math.random() < dpRate) return "doublePlay";
     }
+
+    // ゴロ安打判定（野手の間を抜ける打球）
+    const speedFactor = clamp((ball.exitVelocity - 100) / 80, 0, 1);
+    const fielderSkill = (fielding + catching) / 200;
+    const groundHitRate = 0.18 + speedFactor * 0.08 - fielderSkill * 0.10;
+    const contactBonus = (batter.batting.contact - 50) / 100 * 0.05;
+    const finalGroundHitRate = clamp(groundHitRate + contactBonus, 0.08, 0.30);
+    if (Math.random() < finalGroundHitRate) return "single";
 
     const speedBonus = batter.batting.speed / 100;
     const velPenalty = Math.max(0, (ball.exitVelocity - 100)) * 0.001;
@@ -349,7 +357,7 @@ function resolveInPlayFromBall(
     }
 
     if (bases.third && outs < 2) {
-      if (Math.random() < 0.50) return "sacrificeFly";
+      if (Math.random() < 0.15) return "sacrificeFly";
     }
 
     const errorRate = 0.015 - fieldingFactor * 0.008;
@@ -437,7 +445,7 @@ function simulateAtBat(
     ? Math.max(...pit.pitches.map(p => p.level))
     : 0;
   const finisherBonus = maxPitchLevel >= 5 ? (maxPitchLevel - 4) * 0.015 : 0;
-  const strikeoutRate = 0.14 + velocityFactor * 0.08 - contactFactor * 0.06 + finisherBonus;
+  const strikeoutRate = 0.20 + velocityFactor * 0.08 - contactFactor * 0.10 + finisherBonus;
   cumulative += Math.max(0.05, strikeoutRate);
   if (roll < cumulative) {
     return { result: "strikeout", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null };
