@@ -113,23 +113,23 @@ describe("ポジション別守備機会分布", () => {
 
   // teamAはホームチームとして9イニングの表のみ守備するため、
   // SS守備機会はフル18イニングの約半分になる
-  it("SS: 1試合あたりPO+Aが6.5-10.5", () => {
-    expect(avg["SS"].total).toBeGreaterThanOrEqual(6.5);
-    expect(avg["SS"].total).toBeLessThanOrEqual(10.5);
+  it("SS: 1試合あたりPO+Aが3.0-6.5", () => {
+    expect(avg["SS"].total).toBeGreaterThanOrEqual(3.0);
+    expect(avg["SS"].total).toBeLessThanOrEqual(6.5);
   });
 
-  it("SS: 1試合あたりPOが2.5-5.5", () => {
-    expect(avg["SS"].po).toBeGreaterThanOrEqual(2.5);
-    expect(avg["SS"].po).toBeLessThanOrEqual(5.5);
+  it("SS: 1試合あたりPOが0.5-2.5", () => {
+    expect(avg["SS"].po).toBeGreaterThanOrEqual(0.5);
+    expect(avg["SS"].po).toBeLessThanOrEqual(2.5);
   });
 
-  it("SS: 1試合あたりAが3.5-6.5", () => {
-    expect(avg["SS"].a).toBeGreaterThanOrEqual(3.5);
-    expect(avg["SS"].a).toBeLessThanOrEqual(6.5);
+  it("SS: 1試合あたりAが2.0-4.5", () => {
+    expect(avg["SS"].a).toBeGreaterThanOrEqual(2.0);
+    expect(avg["SS"].a).toBeLessThanOrEqual(4.5);
   });
 
-  it("1B: 1試合あたりPOが5-12", () => {
-    expect(avg["1B"].po).toBeGreaterThanOrEqual(5);
+  it("1B: 1試合あたりPOが6-12", () => {
+    expect(avg["1B"].po).toBeGreaterThanOrEqual(6);
     expect(avg["1B"].po).toBeLessThanOrEqual(12);
   });
 
@@ -138,9 +138,9 @@ describe("ポジション別守備機会分布", () => {
     expect(avg["2B"].total).toBeLessThanOrEqual(8);
   });
 
-  it("CF: 1試合あたりPOが2-5.5", () => {
-    expect(avg["CF"].po).toBeGreaterThanOrEqual(2);
-    expect(avg["CF"].po).toBeLessThanOrEqual(5.5);
+  it("CF: 1試合あたりPOが1.5-3.5", () => {
+    expect(avg["CF"].po).toBeGreaterThanOrEqual(1.5);
+    expect(avg["CF"].po).toBeLessThanOrEqual(3.5);
   });
 
   it("C: 1試合あたりPOが5-12", () => {

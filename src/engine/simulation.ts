@@ -203,9 +203,9 @@ export function generateBattedBall(batter: Player, pitcher: Player): BattedBall 
 
 /** 内野手をゾーンベースで決定 */
 function assignInfielder(direction: number, exitVelocity: number): FielderPosition {
-  // 投手は低速ゴロのみ（ピッチャー返し）
-  if (direction > 30 && direction < 60 && exitVelocity < 110) {
-    if (Math.random() < 0.12) return 1;
+  // ピッチャー返し: 中央付近の低速ゴロ
+  if (direction > 25 && direction < 65 && exitVelocity < 120) {
+    if (Math.random() < 0.20) return 1;
   }
 
   const noise = gaussianRandom(0, 5);
@@ -213,17 +213,17 @@ function assignInfielder(direction: number, exitVelocity: number): FielderPositi
 
   if (adj < 18) return 5;       // 3B
   if (adj < 40) return 6;       // SS
-  if (adj < 55) return 4;       // 2B
+  if (adj < 58) return 4;       // 2B
   return 3;                     // 1B
 }
 
 /** 外野手をゾーンベースで決定 */
 function assignOutfielder(direction: number): FielderPosition {
-  const noise = gaussianRandom(0, 4);
+  const noise = gaussianRandom(0, 7);
   const adj = direction + noise;
 
-  if (adj < 30) return 7;    // LF
-  if (adj < 60) return 8;    // CF
+  if (adj < 33) return 7;    // LF
+  if (adj < 52) return 8;    // CF
   return 9;                  // RF
 }
 
@@ -255,7 +255,7 @@ export function determineFielderFromBall(ball: BattedBall): FielderPosition {
   }
 
   // ライナー: 方向と速度で内野/外野を振り分け
-  if (ball.exitVelocity > 140 || ball.launchAngle > 14) {
+  if (ball.exitVelocity > 145 || ball.launchAngle > 16) {
     return assignOutfielder(ball.direction);
   }
   return assignInfielder(ball.direction, ball.exitVelocity);
@@ -747,8 +747,8 @@ function simulateHalfInning(
         pitcherLog.groundBallOuts = (pitcherLog.groundBallOuts ?? 0) + 1;
         if (detail.fielderPosition) {
           const fp = detail.fielderPosition;
-          if (bases.first && Math.random() < 0.95) {
-            // 2塁フォースアウト: 走者1塁時の95%
+          if (bases.first && Math.random() < 0.40) {
+            // 2塁フォースアウト: 走者1塁時の40%
             if (fp === 6) {
               // SS自身が2塁ベースを踏む → 無補殺刺殺
               recordFielding(batterStatsMap, fielderMap, 6, "putOut");
@@ -789,6 +789,10 @@ function simulateHalfInning(
             }
           }
         }
+        // 捕手が関与したプレー（バント処理・牽制等）
+        if (Math.random() < 0.05) {
+          recordFielding(batterStatsMap, fielderMap, 2, "assist");
+        }
         break;
 
       case "flyout":
@@ -801,7 +805,7 @@ function simulateHalfInning(
           // 外野フライでの中継/カットオフ補殺 (走者ありの場合)
           const fp = detail.fielderPosition;
           if (fp >= 7 && fp <= 9 && (bases.first || bases.second || bases.third)) {
-            if (Math.random() < 0.20) {
+            if (Math.random() < 0.03) {
               recordFielding(batterStatsMap, fielderMap, fp, "assist");
               const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
               recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
@@ -819,7 +823,7 @@ function simulateHalfInning(
           // 外野ライナーでの中継補殺 (走者ありの場合)
           const fp = detail.fielderPosition;
           if (fp >= 7 && fp <= 9 && (bases.first || bases.second || bases.third)) {
-            if (Math.random() < 0.18) {
+            if (Math.random() < 0.03) {
               recordFielding(batterStatsMap, fielderMap, fp, "assist");
               const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
               recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
@@ -869,7 +873,7 @@ function simulateHalfInning(
           recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "putOut");
           // 犠飛での中継補殺
           if (detail.fielderPosition >= 7 && detail.fielderPosition <= 9) {
-            if (Math.random() < 0.25) {
+            if (Math.random() < 0.05) {
               recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "assist");
               const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
               recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
