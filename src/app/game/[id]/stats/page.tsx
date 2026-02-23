@@ -15,7 +15,7 @@ type BattingSortAdv = "ops" | "woba" | "wrcPlus" | "war";
 type BattingSort = BattingSortBasic | BattingSortAdv;
 
 type PitchingSortBasic = "era" | "wins" | "strikeouts" | "saves";
-type PitchingSortAdv = "fip" | "war" | "k9" | "kPerBb" | "gbPct";
+type PitchingSortAdv = "fip" | "xfip" | "war" | "k9" | "kPerBb" | "gbPct";
 type PitchingSort = PitchingSortBasic | PitchingSortAdv;
 
 type FieldingSortKey = "games" | "fieldingPct" | "putOuts" | "assists" | "errors" | "uzr";
@@ -43,6 +43,9 @@ interface BatterRow {
   walks: number;
   strikeouts: number;
   stolenBases: number;
+  caughtStealing: number;
+  sbPct: number;
+  runs: number;
   avg: number;
   obp: number;
   slg: number;
@@ -57,6 +60,7 @@ interface BatterRow {
   bbPct: number;
   bbPerK: number;
   woba: number;
+  wRAA: number;
   wrcPlus: number;
   war: number;
 }
@@ -98,6 +102,8 @@ interface PitcherRow {
   gbFb: number;
   iffbPct: number;
   hrFb: number;
+  xfip: number;
+  babip: number;
 }
 
 interface FielderRow {
@@ -426,6 +432,11 @@ export default function StatsPage() {
           walks: s.walks,
           strikeouts: s.strikeouts,
           stolenBases: s.stolenBases,
+          caughtStealing: s.caughtStealing ?? 0,
+          sbPct: (s.stolenBases + (s.caughtStealing ?? 0)) > 0
+            ? s.stolenBases / (s.stolenBases + (s.caughtStealing ?? 0))
+            : 0,
+          runs: s.runs ?? 0,
           avg,
           obp,
           slg,
@@ -439,6 +450,7 @@ export default function StatsPage() {
           hitByPitch: s.hitByPitch || 0,
           sacrificeFlies: s.sacrificeFlies || 0,
           groundedIntoDP: s.groundedIntoDP || 0,
+          wRAA: 0, // computed below
           wrcPlus: 0, // computed below
           war: 0, // computed below
         });
@@ -449,9 +461,10 @@ export default function StatsPage() {
     const lgW = totalPA > 0 ? totalWobaNum / totalPA : 0;
     const lgRPA = lgW / WOBA_SCALE;
 
-    // Second pass: compute wRC+ and WAR
+    // Second pass: compute wRAA, wRC+ and WAR
     for (const r of rows) {
       const wRAA = ((r.woba - lgW) / WOBA_SCALE) * r.pa;
+      r.wRAA = wRAA;
       r.wrcPlus =
         lgRPA > 0
           ? (((r.woba - lgW) / WOBA_SCALE + lgRPA) / lgRPA) * 100
@@ -476,6 +489,7 @@ export default function StatsPage() {
     let lgHR = 0;
     let lgBBp = 0;
     let lgKp = 0;
+    let lgFB = 0;
 
     for (const team of Object.values(game.teams)) {
       for (const player of team.roster) {
@@ -487,6 +501,7 @@ export default function StatsPage() {
         lgHR += s.homeRunsAllowed;
         lgBBp += s.walks;
         lgKp += s.strikeouts;
+        lgFB += s.flyBalls ?? 0;
       }
     }
 
@@ -494,6 +509,7 @@ export default function StatsPage() {
     const lgFIPraw =
       lgIP > 0 ? (13 * lgHR + 3 * lgBBp - 2 * lgKp) / lgIP : 0;
     const cFIP = lgERA - lgFIPraw;
+    const lgHRperFB = lgFB > 0 ? lgHR / lgFB : 0;
 
     // Second pass: compute per-pitcher stats
     for (const [teamId, team] of Object.entries(game.teams)) {
@@ -508,7 +524,8 @@ export default function StatsPage() {
         const hr9 = ip > 0 ? (s.homeRunsAllowed / ip) * 9 : 0;
         const kPerBb = s.walks > 0 ? s.strikeouts / s.walks : 0;
         // Estimate TBF (total batters faced)
-        const tbf = s.inningsPitched + s.hits + s.walks;
+        const hbp = s.hitBatsmen ?? 0;
+        const tbf = s.inningsPitched + s.hits + s.walks + hbp;
         const kPct = tbf > 0 ? s.strikeouts / tbf : 0;
         const bbPct = tbf > 0 ? s.walks / tbf : 0;
         const fipRaw =
@@ -534,6 +551,15 @@ export default function StatsPage() {
         const gbFb = fb > 0 ? gb / fb : 0;
         const iffbPct = (fb + pu) > 0 ? pu / (fb + pu) : 0;
         const hrFb = fb > 0 ? s.homeRunsAllowed / fb : 0;
+
+        // xFIP: 個人HRをリーグ平均HR/FB率×個人FBで置換
+        const xfip = ip > 0
+          ? ((13 * lgHRperFB * fb + 3 * s.walks - 2 * s.strikeouts) / ip) + cFIP
+          : 0;
+
+        // 投手BABIP
+        const babipDenom = tbf - s.strikeouts - s.homeRunsAllowed - s.walks - hbp;
+        const babip = babipDenom > 0 ? (s.hits - s.homeRunsAllowed) / babipDenom : 0;
 
         rows.push({
           playerId: player.id,
@@ -569,6 +595,8 @@ export default function StatsPage() {
           gbFb,
           iffbPct,
           hrFb,
+          xfip,
+          babip,
         });
       }
     }
@@ -698,7 +726,7 @@ export default function StatsPage() {
     if (qualifiedOnly && (pitchingSort === "era" || pitchingSort === "fip")) {
       rows = rows.filter(isQualifiedPitcher);
     }
-    const ascending = pitchingSort === "era" || pitchingSort === "fip";
+    const ascending = pitchingSort === "era" || pitchingSort === "fip" || pitchingSort === "xfip";
     return [...rows].sort((a, b) => {
       const va = a[pitchingSort as keyof PitcherRow] as number;
       const vb = b[pitchingSort as keyof PitcherRow] as number;
@@ -1054,7 +1082,10 @@ function BattingBasicTable({
             <SortTh label="打率" sortKey="avg" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
             <SortTh label="本塁打" sortKey="homeRuns" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
             <SortTh label="打点" sortKey="rbi" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
+            <Th>得点</Th>
             <SortTh label="盗塁" sortKey="stolenBases" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
+            <Th>盗塁死</Th>
+            <Th>盗塁率</Th>
             <Th>四球</Th>
             <Th>三振</Th>
             <Th>出塁率</Th>
@@ -1067,7 +1098,7 @@ function BattingBasicTable({
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <EmptyRow cols={19} />
+            <EmptyRow cols={22} />
           ) : (
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
@@ -1089,7 +1120,10 @@ function BattingBasicTable({
                 <td className={`${S.cellMono} ${sort === "avg" ? S.highlight : ""}`}>{fmtRate(r.avg)}</td>
                 <td className={`${S.cell} ${sort === "homeRuns" ? S.highlight : ""}`}>{r.homeRuns}</td>
                 <td className={`${S.cell} ${sort === "rbi" ? S.highlight : ""}`}>{r.rbi}</td>
+                <td className={S.cell}>{fmtInt(r.runs)}</td>
                 <td className={`${S.cell} ${sort === "stolenBases" ? S.highlight : ""}`}>{r.stolenBases}</td>
+                <td className={S.cell}>{r.caughtStealing}</td>
+                <td className={S.cell}>{fmtPct(r.sbPct)}</td>
                 <td className={S.cell}>{r.walks}</td>
                 <td className={S.cell}>{r.strikeouts}</td>
                 <td className={S.cellMono}>{fmtRate(r.obp)}</td>
@@ -1146,13 +1180,14 @@ function BattingAdvTable({
             <Th>BABIP</Th>
             <SortTh label="OPS" sortKey="ops" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
             <SortTh label="wOBA" sortKey="woba" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
+            <Th>wRAA</Th>
             <SortTh label="wRC+" sortKey="wrcPlus" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
             <SortTh label="WAR" sortKey="war" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <EmptyRow cols={13} />
+            <EmptyRow cols={14} />
           ) : (
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
@@ -1175,6 +1210,9 @@ function BattingAdvTable({
                 <td className={S.cellMono}>{fmtRate(r.babip)}</td>
                 <td className={`${S.cellMono} ${sort === "ops" ? S.highlight : ""}`}>{fmtRate(r.ops)}</td>
                 <td className={`${S.cellMono} ${sort === "woba" ? S.highlight : ""}`}>{fmtRate(r.woba)}</td>
+                <td className={`${S.cellMono} ${r.wRAA > 0.5 ? "text-green-400" : r.wRAA < -0.5 ? "text-red-400" : ""}`}>
+                  {r.wRAA > 0 ? "+" : ""}{fmtDec1(r.wRAA)}
+                </td>
                 <td className={`${S.cell} ${sort === "wrcPlus" ? S.highlight : ""}`}>{Math.round(r.wrcPlus)}</td>
                 <td className={`${S.cellMono} ${sort === "war" ? S.highlight : ""}`}>{fmtWar(r.war)}</td>
               </tr>
@@ -1306,7 +1344,9 @@ function PitchingAdvTable({
             <Th>K%</Th>
             <Th>BB%</Th>
             <SortTh label="FIP" sortKey="fip" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
+            <SortTh label="xFIP" sortKey="xfip" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
             <Th>WHIP</Th>
+            <Th>BABIP</Th>
             <SortTh label="WAR" sortKey="war" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
             <SortTh label="GB%" sortKey="gbPct" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
             <Th>FB%</Th>
@@ -1318,7 +1358,7 @@ function PitchingAdvTable({
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <EmptyRow cols={19} />
+            <EmptyRow cols={21} />
           ) : (
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
@@ -1341,7 +1381,9 @@ function PitchingAdvTable({
                 <td className={S.cell}>{fmtPct(r.kPct)}</td>
                 <td className={S.cell}>{fmtPct(r.bbPct)}</td>
                 <td className={`${S.cellMono} ${sort === "fip" ? S.highlight : ""}`}>{fmtDec2(r.fip)}</td>
+                <td className={`${S.cellMono} ${sort === "xfip" ? S.highlight : ""}`}>{fmtDec2(r.xfip)}</td>
                 <td className={S.cellMono}>{fmtDec2(r.whip)}</td>
+                <td className={S.cellMono}>{fmtRate(r.babip)}</td>
                 <td className={`${S.cellMono} ${sort === "war" ? S.highlight : ""}`}>{fmtWar(r.war)}</td>
                 <td className={`${S.cell} ${sort === "gbPct" ? S.highlight : ""}`}>{fmtPct(r.gbPct)}</td>
                 <td className={S.cell}>{fmtPct(r.fbPct)}</td>
