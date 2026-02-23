@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { AtBatLog } from "@/models/league";
 import { getFenceDistance, estimateDistance } from "@/engine/simulation";
 
@@ -71,36 +71,19 @@ function toFieldSvg(distM: number, dirDeg: number): { x: number; y: number } {
   };
 }
 
-// ---- 守備デフォルト位置 ----
+// ---- ベジェ曲線 ----
 
-const FIELDER_DEFAULT_POS: Record<number, { dist: number; dir: number }> = {
-  1: { dist: 16, dir: 45 },
-  2: { dist: 2,  dir: 45 },
-  3: { dist: 25, dir: 80 },
-  4: { dist: 35, dir: 62 },
-  5: { dist: 25, dir: 10 },
-  6: { dist: 35, dir: 28 },
-  7: { dist: 80, dir: 10 },
-  8: { dist: 85, dir: 45 },
-  9: { dist: 80, dir: 80 },
-};
-
-// ---- 走者進塁数 ----
-
-function getRunnerAdvancement(result: string): number {
-  switch (result) {
-    case "homerun": return 4;
-    case "triple": return 3;
-    case "double": return 2;
-    case "single":
-    case "infieldHit":
-    case "error":
-    case "fieldersChoice": return 1;
-    case "walk":
-    case "hitByPitch": return 1;
-    case "sacrificeFly": return 1;
-    default: return 0;
-  }
+function quadBezier(
+  from: { x: number; y: number },
+  via: { x: number; y: number },
+  to: { x: number; y: number },
+  t: number
+): { x: number; y: number } {
+  const u = 1 - t;
+  return {
+    x: u * u * from.x + 2 * u * t * via.x + t * t * to.x,
+    y: u * u * from.y + 2 * u * t * via.y + t * t * to.y,
+  };
 }
 
 // ---- 塁座標 ----
@@ -117,47 +100,19 @@ const BASE_COORDS: Record<number, { x: number; y: number }> = {
   3: THIRD_COORD,
 };
 
-function getBasePathSegments(fromBase: number, toBase: number): { x: number; y: number }[] {
-  const path = [BASE_COORDS[fromBase]];
-  let current = fromBase;
-  while (current !== toBase) {
-    current = (current + 1) % 4;
-    path.push(BASE_COORDS[current]);
-  }
-  return path;
-}
+// ---- フライの制御点 ----
 
-function interpolateBasePath(segments: { x: number; y: number }[], t: number): { x: number; y: number } {
-  if (segments.length < 2) return segments[0];
-  const totalSegments = segments.length - 1;
-  const segmentT = t * totalSegments;
-  const segIdx = Math.min(Math.floor(segmentT), totalSegments - 1);
-  const localT = segmentT - segIdx;
-  return lerp(segments[segIdx], segments[segIdx + 1], localT);
-}
-
-// ---- ベジェ曲線 ----
-
-function quadBezier(
+function makeFlyVia(
   from: { x: number; y: number },
-  via: { x: number; y: number },
   to: { x: number; y: number },
-  t: number
+  launchAngle: number
 ): { x: number; y: number } {
-  const u = 1 - t;
-  return {
-    x: u * u * from.x + 2 * u * t * via.x + t * t * to.x,
-    y: u * u * from.y + 2 * u * t * via.y + t * t * to.y,
-  };
+  const mid = lerp(from, to, 0.5);
+  const heightOffset = Math.min(100, (launchAngle / 45) * 80);
+  return { x: mid.x, y: mid.y - heightOffset };
 }
 
-// ---- 物理定数 ----
-
-const REACTION_TIME = 0.3;
-const FIELDER_SPEED = 7.5;
-const INFIELD_THROW_SPEED = 35;
-const OUTFIELD_THROW_SPEED = 30;
-const RUNNER_SPEED = 8.5;
+// ---- 物理計算 ----
 
 function getBallFlightTime(exitVelocityKmh: number, launchAngleDeg: number): number {
   const v = exitVelocityKmh / 3.6;
@@ -173,715 +128,67 @@ function getGroundBallTime(exitVelocityKmh: number, distM: number): number {
   return vGround > 0 ? distM / vGround : 2.0;
 }
 
-function getDistanceBetween(a: { x: number; y: number }, b: { x: number; y: number }): number {
-  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2) / 1.8;
+/** フライ打球の時刻tにおける状態（地面投影位置・高さ）を返す */
+function getBallStateAtTime(
+  exitVelocityKmh: number,
+  launchAngleDeg: number,
+  direction: number,
+  t: number,
+): { groundPos: { x: number; y: number }; height: number } | null {
+  const v = exitVelocityKmh / 3.6;
+  const theta = launchAngleDeg * Math.PI / 180;
+  const g = 9.8;
+  const h0 = 1.2;
+  const dragFactor = 0.87;
+
+  const vx = v * Math.cos(theta);
+  const vy = v * Math.sin(theta);
+
+  const disc = vy * vy + 2 * g * h0;
+  if (disc < 0) return null;
+  const tFlight = (vy + Math.sqrt(disc)) / g;
+  if (t > tFlight + 0.001) return null;
+
+  const horizontalDist = vx * Math.min(t, tFlight) * dragFactor;
+  const height = Math.max(0, h0 + vy * t - 0.5 * g * t * t);
+  const groundPos = toFieldSvg(horizontalDist, direction);
+
+  return { groundPos, height };
 }
 
-// ---- イベントシーケンス ----
-
-type PlayEventType =
-  | "ball_fly"
-  | "ball_ground"
-  | "ball_hr"
-  | "fielder_run"
-  | "throw"
-  | "catch"
-  | "runner_advance"
-  | "batter_run"
-  | "tag_base"
-  | "error_bobble";
-
-interface PlayEvent {
-  type: PlayEventType;
-  startTime: number;
-  duration: number;
-  from: { x: number; y: number };
-  to: { x: number; y: number };
-  entityId: string;
-  meta?: {
-    via?: { x: number; y: number };
-    result?: "out" | "safe";
-  };
-}
-
-function makeFlyVia(
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-  launchAngle: number
-): { x: number; y: number } {
-  const mid = lerp(from, to, 0.5);
-  const heightOffset = Math.min(100, (launchAngle / 45) * 80);
-  return { x: mid.x, y: mid.y - heightOffset };
-}
-
-function fielderSvgPos(pos: number): { x: number; y: number } {
-  const coord = FIELDER_DEFAULT_POS[pos];
-  if (!coord) return HOME_COORD;
-  return toFieldSvg(coord.dist, coord.dir);
-}
-
-function runnerBasePath(
-  basesBeforePlay: [boolean, boolean, boolean] | null,
-  baseIdx: number,
-  advance: number
-): { x: number; y: number }[] {
-  const baseNum = baseIdx + 1;
-  const targetBase = Math.min(baseNum + advance, 4) % 4; // 4→0(home)
-  return getBasePathSegments(baseNum, targetBase === 0 ? 0 : targetBase);
-}
-
-function runnerTravelTime(segments: { x: number; y: number }[]): number {
-  let dist = 0;
-  for (let i = 0; i + 1 < segments.length; i++) {
-    dist += getDistanceBetween(segments[i], segments[i + 1]);
-  }
-  return dist / RUNNER_SPEED;
-}
-
-/** fromBase → toBase を塁間ごとに分割したイベント列を events に追加し、終了時刻を返す。
- * fromBase === toBase の場合は一周（4セグメント）として扱う。 */
-function addSegmentedRunEvents(
-  events: PlayEvent[],
-  type: "batter_run" | "runner_advance",
-  entityPrefix: string,
-  fromBase: number,
-  toBase: number,
-  startTime: number,
-): number {
-  // 移動するセグメント数を計算（一周の場合は4）
-  const totalSegs = fromBase === toBase
-    ? 4
-    : (toBase - fromBase + 4) % 4;
-  let current = fromBase;
-  let t = startTime;
-  for (let segIdx = 0; segIdx < totalSegs; segIdx++) {
-    const next = (current + 1) % 4;
-    const segFrom = BASE_COORDS[current];
-    const segTo = BASE_COORDS[next];
-    const segTime = runnerTravelTime([segFrom, segTo]);
-    events.push({
-      type,
-      startTime: t,
-      duration: segTime,
-      from: segFrom,
-      to: segTo,
-      entityId: `${entityPrefix}_seg${segIdx}`,
-    });
-    t += segTime;
-    current = next;
-  }
-  return t;
-}
-
-function buildPlayEvents(log: AtBatLog): PlayEvent[] {
-  const events: PlayEvent[] = [];
-
-  if (log.direction === null || log.exitVelocity === null) return events;
-
-  const home = HOME_COORD;
-  const firstBase = FIRST_COORD;
-  const secondBase = SECOND_COORD;
-
-  const fielderPos = log.fielderPosition ?? 8;
-  const effectiveFielderPos = fielderPos >= 7 ? fielderPos : fielderPos;
-  const fielderDefault = fielderSvgPos(effectiveFielderPos);
-
-  const dist = log.estimatedDistance ?? estimateDistance(log.exitVelocity, log.launchAngle ?? 15);
-  const landPos = toFieldSvg(dist, log.direction);
-  const launchAngle = log.launchAngle ?? 15;
-  const exitVelocity = log.exitVelocity;
-
-  const advance = getRunnerAdvancement(log.result);
-  const basesBeforePlay = log.basesBeforePlay;
-
-  switch (log.result) {
-    case "groundout": {
-      const groundTime = getGroundBallTime(exitVelocity, dist);
-      events.push({
-        type: "ball_ground",
-        startTime: 0,
-        duration: groundTime,
-        from: home,
-        to: landPos,
-        entityId: "ball",
-      });
-      const fielderRunDist = getDistanceBetween(fielderDefault, landPos);
-      const fielderRunTime = fielderRunDist / FIELDER_SPEED;
-      if (fielderRunDist > 3) {
-        events.push({
-          type: "fielder_run",
-          startTime: REACTION_TIME,
-          duration: fielderRunTime,
-          from: fielderDefault,
-          to: landPos,
-          entityId: `fielder_${effectiveFielderPos}`,
-        });
-      }
-      const catchTime = Math.max(groundTime, REACTION_TIME + fielderRunTime);
-      events.push({
-        type: "catch",
-        startTime: catchTime,
-        duration: 0.3,
-        from: landPos,
-        to: landPos,
-        entityId: `fielder_${effectiveFielderPos}`,
-      });
-      const throwDist = getDistanceBetween(landPos, firstBase);
-      const throwTime = throwDist / INFIELD_THROW_SPEED;
-      events.push({
-        type: "throw",
-        startTime: catchTime + 0.2,
-        duration: throwTime,
-        from: landPos,
-        to: firstBase,
-        entityId: "ball",
-      });
-      events.push({
-        type: "tag_base",
-        startTime: catchTime + 0.2 + throwTime,
-        duration: 0.4,
-        from: firstBase,
-        to: firstBase,
-        entityId: "base_1",
-        meta: { result: "out" },
-      });
-      break;
-    }
-
-    case "doublePlay": {
-      const groundTime = getGroundBallTime(exitVelocity, dist);
-      events.push({
-        type: "ball_ground",
-        startTime: 0,
-        duration: groundTime,
-        from: home,
-        to: landPos,
-        entityId: "ball",
-      });
-      const fielderRunDist = getDistanceBetween(fielderDefault, landPos);
-      const fielderRunTime = fielderRunDist / FIELDER_SPEED;
-      if (fielderRunDist > 3) {
-        events.push({
-          type: "fielder_run",
-          startTime: REACTION_TIME,
-          duration: fielderRunTime,
-          from: fielderDefault,
-          to: landPos,
-          entityId: `fielder_${effectiveFielderPos}`,
-        });
-      }
-      const catchTime = Math.max(groundTime, REACTION_TIME + fielderRunTime);
-      events.push({
-        type: "catch",
-        startTime: catchTime,
-        duration: 0.25,
-        from: landPos,
-        to: landPos,
-        entityId: `fielder_${effectiveFielderPos}`,
-      });
-      // throw to 2B (SS or 2B)
-      const throwDist1 = getDistanceBetween(landPos, secondBase);
-      const throwTime1 = throwDist1 / INFIELD_THROW_SPEED;
-      events.push({
-        type: "throw",
-        startTime: catchTime + 0.15,
-        duration: throwTime1,
-        from: landPos,
-        to: secondBase,
-        entityId: "ball",
-      });
-      events.push({
-        type: "tag_base",
-        startTime: catchTime + 0.15 + throwTime1,
-        duration: 0.3,
-        from: secondBase,
-        to: secondBase,
-        entityId: "base_2",
-        meta: { result: "out" },
-      });
-      // throw to 1B
-      const throwDist2 = getDistanceBetween(secondBase, firstBase);
-      const throwTime2 = throwDist2 / INFIELD_THROW_SPEED;
-      const throw2Start = catchTime + 0.15 + throwTime1 + 0.15;
-      events.push({
-        type: "throw",
-        startTime: throw2Start,
-        duration: throwTime2,
-        from: secondBase,
-        to: firstBase,
-        entityId: "ball",
-      });
-      events.push({
-        type: "tag_base",
-        startTime: throw2Start + throwTime2,
-        duration: 0.4,
-        from: firstBase,
-        to: firstBase,
-        entityId: "base_1",
-        meta: { result: "out" },
-      });
-      // 打者走者
-      const batterSegs = getBasePathSegments(0, 1);
-      const batterTime = runnerTravelTime(batterSegs);
-      events.push({
-        type: "batter_run",
-        startTime: groundTime + 0.1,
-        duration: batterTime,
-        from: home,
-        to: firstBase,
-        entityId: "batter",
-        meta: { via: undefined },
-      });
-      break;
-    }
-
-    case "flyout":
-    case "popout":
-    case "lineout": {
-      const flightTime = getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
-      const via = makeFlyVia(home, landPos, launchAngle);
-      events.push({
-        type: "ball_fly",
-        startTime: 0,
-        duration: flightTime,
-        from: home,
-        to: landPos,
-        entityId: "ball",
-        meta: { via },
-      });
-      const fielderRunDist = getDistanceBetween(fielderDefault, landPos);
-      const fielderRunTime = fielderRunDist / FIELDER_SPEED;
-      if (fielderRunDist > 3) {
-        events.push({
-          type: "fielder_run",
-          startTime: REACTION_TIME,
-          duration: fielderRunTime,
-          from: fielderDefault,
-          to: landPos,
-          entityId: `fielder_${effectiveFielderPos}`,
-        });
-      }
-      events.push({
-        type: "catch",
-        startTime: flightTime,
-        duration: 0.3,
-        from: landPos,
-        to: landPos,
-        entityId: `fielder_${effectiveFielderPos}`,
-      });
-      break;
-    }
-
-    case "sacrificeFly": {
-      const flightTime = getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
-      const via = makeFlyVia(home, landPos, launchAngle);
-      events.push({
-        type: "ball_fly",
-        startTime: 0,
-        duration: flightTime,
-        from: home,
-        to: landPos,
-        entityId: "ball",
-        meta: { via },
-      });
-      const fielderRunDist = getDistanceBetween(fielderDefault, landPos);
-      const fielderRunTime = fielderRunDist / FIELDER_SPEED;
-      if (fielderRunDist > 3) {
-        events.push({
-          type: "fielder_run",
-          startTime: REACTION_TIME,
-          duration: fielderRunTime,
-          from: fielderDefault,
-          to: landPos,
-          entityId: `fielder_${effectiveFielderPos}`,
-        });
-      }
-      events.push({
-        type: "catch",
-        startTime: flightTime,
-        duration: 0.3,
-        from: landPos,
-        to: landPos,
-        entityId: `fielder_${effectiveFielderPos}`,
-      });
-      // 3Bランナーのタッチアップ
-      if (basesBeforePlay && basesBeforePlay[2]) {
-        const tagupSegs = getBasePathSegments(3, 0);
-        const tagupTime = runnerTravelTime(tagupSegs);
-        events.push({
-          type: "runner_advance",
-          startTime: flightTime + 0.1,
-          duration: tagupTime,
-          from: THIRD_COORD,
-          to: HOME_COORD,
-          entityId: "runner_3B",
-        });
-        // 外野→ホームへの送球（間に合わない想定）
-        const throwDist = getDistanceBetween(landPos, HOME_COORD);
-        const throwTime = throwDist / OUTFIELD_THROW_SPEED;
-        events.push({
-          type: "throw",
-          startTime: flightTime + 0.5,
-          duration: throwTime,
-          from: landPos,
-          to: HOME_COORD,
-          entityId: "ball",
-        });
-      }
-      break;
-    }
-
-    case "homerun": {
-      const flightTime = getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
-      const fenceDist = getFenceDistance(log.direction);
-      const hrLandPos = toFieldSvg(fenceDist + 10, log.direction);
-      const via = makeFlyVia(home, hrLandPos, Math.max(launchAngle, 30));
-      // 大きな弧にするためにvia点をさらに高くする
-      via.y = Math.min(via.y, home.y - 100);
-      events.push({
-        type: "ball_hr",
-        startTime: 0,
-        duration: flightTime,
-        from: home,
-        to: hrLandPos,
-        entityId: "ball",
-        meta: { via },
-      });
-      // 打者走者（ホーム一周）
-      addSegmentedRunEvents(events, "batter_run", "batter", 0, 0, 0.3);
-      // 走者進塁（塁上の全走者がホームへ）
-      if (basesBeforePlay) {
-        basesBeforePlay.forEach((occupied, baseIdx) => {
-          if (!occupied) return;
-          const baseNum = baseIdx + 1;
-          addSegmentedRunEvents(events, "runner_advance", `runner_base${baseNum}`, baseNum, 0, 0.3);
-        });
-      }
-      break;
-    }
-
-    case "single":
-    case "double":
-    case "triple": {
-      const isFly = launchAngle > 10 && log.battedBallType !== "grounder";
-      const flightOrRollTime = isFly
-        ? getBallFlightTime(exitVelocity, Math.max(launchAngle, 5))
-        : getGroundBallTime(exitVelocity, dist);
-      const via = isFly ? makeFlyVia(home, landPos, launchAngle) : undefined;
-
-      events.push({
-        type: isFly ? "ball_fly" : "ball_ground",
-        startTime: 0,
-        duration: flightOrRollTime,
-        from: home,
-        to: landPos,
-        entityId: "ball",
-        meta: via ? { via } : undefined,
-      });
-
-      const fielderRunDist = getDistanceBetween(fielderDefault, landPos);
-      const fielderRunTime = fielderRunDist / FIELDER_SPEED;
-      if (fielderRunDist > 3) {
-        events.push({
-          type: "fielder_run",
-          startTime: REACTION_TIME,
-          duration: fielderRunTime,
-          from: fielderDefault,
-          to: landPos,
-          entityId: `fielder_${effectiveFielderPos}`,
-        });
-      }
-
-      // 打者走者（塁間ごとに分割）
-      addSegmentedRunEvents(events, "batter_run", "batter", 0, advance, Math.max(0.1, flightOrRollTime * 0.3));
-
-      // 前走者の進塁（塁間ごとに分割）
-      if (basesBeforePlay) {
-        basesBeforePlay.forEach((occupied, baseIdx) => {
-          if (!occupied) return;
-          const baseNum = baseIdx + 1;
-          const newBase = Math.min(baseNum + advance, 4) % 4;
-          addSegmentedRunEvents(events, "runner_advance", `runner_base${baseNum}`, baseNum, newBase, Math.max(0.1, flightOrRollTime * 0.3));
-        });
-      }
-      break;
-    }
-
-    case "infieldHit": {
-      const groundTime = getGroundBallTime(exitVelocity, dist);
-      events.push({
-        type: "ball_ground",
-        startTime: 0,
-        duration: groundTime,
-        from: home,
-        to: landPos,
-        entityId: "ball",
-      });
-      const fielderRunDist = getDistanceBetween(fielderDefault, landPos);
-      const fielderRunTime = fielderRunDist / FIELDER_SPEED;
-      if (fielderRunDist > 3) {
-        events.push({
-          type: "fielder_run",
-          startTime: REACTION_TIME,
-          duration: fielderRunTime,
-          from: fielderDefault,
-          to: landPos,
-          entityId: `fielder_${effectiveFielderPos}`,
-        });
-      }
-      const catchTime = Math.max(groundTime, REACTION_TIME + fielderRunTime);
-      // 遅れた送球（間に合わない）
-      const throwDist = getDistanceBetween(landPos, firstBase);
-      const throwTime = throwDist / (INFIELD_THROW_SPEED * 0.6); // 遅め
-      events.push({
-        type: "throw",
-        startTime: catchTime + 0.35,
-        duration: throwTime,
-        from: landPos,
-        to: firstBase,
-        entityId: "ball",
-      });
-      events.push({
-        type: "tag_base",
-        startTime: catchTime + 0.35 + throwTime,
-        duration: 0.4,
-        from: firstBase,
-        to: firstBase,
-        entityId: "base_1",
-        meta: { result: "safe" },
-      });
-      // 打者走者（速め）
-      const batterSegs = getBasePathSegments(0, 1);
-      const batterTime = runnerTravelTime(batterSegs) * 0.85;
-      events.push({
-        type: "batter_run",
-        startTime: groundTime * 0.2,
-        duration: batterTime,
-        from: home,
-        to: firstBase,
-        entityId: "batter",
-      });
-      break;
-    }
-
-    case "error": {
-      const isGrounder = log.battedBallType === "grounder" || launchAngle < 10;
-      const arrivalTime = isGrounder
-        ? getGroundBallTime(exitVelocity, dist)
-        : getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
-      const via = !isGrounder ? makeFlyVia(home, landPos, launchAngle) : undefined;
-      events.push({
-        type: isGrounder ? "ball_ground" : "ball_fly",
-        startTime: 0,
-        duration: arrivalTime,
-        from: home,
-        to: landPos,
-        entityId: "ball",
-        meta: via ? { via } : undefined,
-      });
-      const fielderRunDist = getDistanceBetween(fielderDefault, landPos);
-      const fielderRunTime = fielderRunDist / FIELDER_SPEED;
-      if (fielderRunDist > 3) {
-        events.push({
-          type: "fielder_run",
-          startTime: REACTION_TIME,
-          duration: fielderRunTime,
-          from: fielderDefault,
-          to: landPos,
-          entityId: `fielder_${effectiveFielderPos}`,
-        });
-      }
-      const reachTime = Math.max(arrivalTime, REACTION_TIME + fielderRunTime);
-      // エラー：ボールが跳ねる
-      const bobbleTo = { x: landPos.x + 10, y: landPos.y + 8 };
-      events.push({
-        type: "error_bobble",
-        startTime: reachTime,
-        duration: 0.4,
-        from: landPos,
-        to: bobbleTo,
-        entityId: "ball",
-      });
-      // 打者走者
-      const batterSegs = getBasePathSegments(0, 1);
-      const batterTime = runnerTravelTime(batterSegs);
-      events.push({
-        type: "batter_run",
-        startTime: arrivalTime * 0.3,
-        duration: batterTime,
-        from: home,
-        to: firstBase,
-        entityId: "batter",
-      });
-      events.push({
-        type: "tag_base",
-        startTime: arrivalTime * 0.3 + batterTime,
-        duration: 0.4,
-        from: firstBase,
-        to: firstBase,
-        entityId: "base_1",
-        meta: { result: "safe" },
-      });
-      break;
-    }
-
-    case "fieldersChoice": {
-      const groundTime = getGroundBallTime(exitVelocity, dist);
-      events.push({
-        type: "ball_ground",
-        startTime: 0,
-        duration: groundTime,
-        from: home,
-        to: landPos,
-        entityId: "ball",
-      });
-      const fielderRunDist = getDistanceBetween(fielderDefault, landPos);
-      const fielderRunTime = fielderRunDist / FIELDER_SPEED;
-      if (fielderRunDist > 3) {
-        events.push({
-          type: "fielder_run",
-          startTime: REACTION_TIME,
-          duration: fielderRunTime,
-          from: fielderDefault,
-          to: landPos,
-          entityId: `fielder_${effectiveFielderPos}`,
-        });
-      }
-      const catchTime = Math.max(groundTime, REACTION_TIME + fielderRunTime);
-      // 2Bへ送球してアウト
-      const throwDist = getDistanceBetween(landPos, secondBase);
-      const throwTime = throwDist / INFIELD_THROW_SPEED;
-      events.push({
-        type: "throw",
-        startTime: catchTime + 0.15,
-        duration: throwTime,
-        from: landPos,
-        to: secondBase,
-        entityId: "ball",
-      });
-      events.push({
-        type: "tag_base",
-        startTime: catchTime + 0.15 + throwTime,
-        duration: 0.4,
-        from: secondBase,
-        to: secondBase,
-        entityId: "base_2",
-        meta: { result: "out" },
-      });
-      // 打者走者は1Bセーフ
-      const batterSegs = getBasePathSegments(0, 1);
-      const batterTime = runnerTravelTime(batterSegs);
-      events.push({
-        type: "batter_run",
-        startTime: groundTime * 0.3,
-        duration: batterTime,
-        from: home,
-        to: firstBase,
-        entityId: "batter",
-      });
-      events.push({
-        type: "tag_base",
-        startTime: groundTime * 0.3 + batterTime,
-        duration: 0.4,
-        from: firstBase,
-        to: firstBase,
-        entityId: "base_1",
-        meta: { result: "safe" },
-      });
-      break;
-    }
-
-    default:
-      break;
-  }
-
-  return events;
-}
-
-function getTotalDuration(events: PlayEvent[]): number {
-  if (events.length === 0) return 3;
-  return Math.max(...events.map(e => e.startTime + e.duration)) + 0.5;
-}
-
-// ---- イベントから現在位置を計算 ----
-
-interface EntityState {
-  pos: { x: number; y: number };
-  visible: boolean;
-}
-
-function getEntityState(events: PlayEvent[], entityId: string, currentTime: number): EntityState | null {
-  // 当該エンティティの最新イベントを探す
-  const relevant = events.filter(e => e.entityId === entityId);
-  if (relevant.length === 0) return null;
-
-  // currentTime に有効なイベントを見つける
-  let active: PlayEvent | null = null;
-  let lastBefore: PlayEvent | null = null;
-  for (const e of relevant) {
-    if (currentTime >= e.startTime && currentTime <= e.startTime + e.duration) {
-      active = e;
-      break;
-    }
-    if (currentTime > e.startTime + e.duration) {
-      lastBefore = e;
-    }
-  }
-
-  if (active) {
-    const t = (currentTime - active.startTime) / Math.max(active.duration, 0.001);
-    const ct = clampNum(t, 0, 1);
-
-    let pos: { x: number; y: number };
-    if (active.meta?.via && (active.type === "ball_fly" || active.type === "ball_hr")) {
-      pos = quadBezier(active.from, active.meta.via, active.to, ct);
-    } else if (active.type === "error_bobble") {
-      // 跳ね: 上へ行って戻る放物線
-      const bx = lerp(active.from, active.to, ct).x;
-      const by = lerp(active.from, active.to, ct).y - Math.sin(ct * Math.PI) * 15;
-      pos = { x: bx, y: by };
-    } else if (active.type === "batter_run") {
-      // 単一セグメント（from→to）
-      pos = lerp(active.from, active.to, ct);
-    } else if (active.type === "runner_advance") {
-      pos = lerp(active.from, active.to, ct);
-    } else {
-      pos = lerp(active.from, active.to, ct);
-    }
-    return { pos, visible: true };
-  }
-
-  if (lastBefore) {
-    return { pos: lastBefore.to, visible: true };
-  }
-
-  // まだ開始前のイベントのfromを返す
-  const first = relevant[0];
-  if (currentTime < first.startTime) {
-    return { pos: first.from, visible: true };
-  }
-
-  return null;
+/** ゴロ打球の時刻tにおける地面位置を返す */
+function getGroundBallStateAtTime(
+  direction: number,
+  totalDist: number,
+  t: number,
+  totalTime: number,
+): { groundPos: { x: number; y: number } } | null {
+  if (t > totalTime + 0.001) return null;
+  const progress = clampNum(t / totalTime, 0, 1);
+  const easedProgress = progress * (2 - progress);
+  const dist = totalDist * easedProgress;
+  return { groundPos: toFieldSvg(dist, direction) };
 }
 
 // ---- アニメーションフック ----
 
-function usePlayAnimation(totalDuration: number) {
+function usePlayAnimation() {
   const [currentTime, setCurrentTime] = useState(-1);
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(1);
   const animRef = useRef<number | null>(null);
   const startRef = useRef(0);
+  const durationRef = useRef(0);
 
-  const play = useCallback(() => {
+  const play = useCallback((duration: number) => {
     if (animRef.current) cancelAnimationFrame(animRef.current);
+    durationRef.current = duration;
     setPlaying(true);
     setCurrentTime(0);
     startRef.current = performance.now();
     const animate = (now: number) => {
-      const elapsed = ((now - startRef.current) / 1000) * speed;
-      if (elapsed >= totalDuration) {
-        setCurrentTime(totalDuration);
+      const elapsed = (now - startRef.current) / 1000;
+      if (elapsed >= durationRef.current) {
+        setCurrentTime(durationRef.current);
         setPlaying(false);
         return;
       }
@@ -889,25 +196,25 @@ function usePlayAnimation(totalDuration: number) {
       animRef.current = requestAnimationFrame(animate);
     };
     animRef.current = requestAnimationFrame(animate);
-  }, [totalDuration, speed]);
+  }, []);
 
   useEffect(() => {
     return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
   }, []);
 
-  return { currentTime, totalDuration, playing, play, speed, setSpeed };
+  return { currentTime, playing, play };
 }
 
 // ---- フィールドビュー ----
 
 interface AnimatedFieldViewProps {
   log: AtBatLog;
-  events: PlayEvent[];
   currentTime: number;
-  playing: boolean;
+  totalTime: number;
+  trailPoints: { x: number; y: number }[];
 }
 
-function AnimatedFieldView({ log, events, currentTime, playing }: AnimatedFieldViewProps) {
+function AnimatedFieldView({ log, currentTime, totalTime, trailPoints }: AnimatedFieldViewProps) {
   const fencePoints = Array.from({ length: 19 }, (_, i) => {
     const deg = i * 5;
     const dist = getFenceDistance(deg);
@@ -921,95 +228,79 @@ function AnimatedFieldView({ log, events, currentTime, playing }: AnimatedFieldV
   const third = THIRD_COORD;
   const diamondPath = `M ${home.x} ${home.y} L ${first.x.toFixed(1)} ${first.y.toFixed(1)} L ${second.x.toFixed(1)} ${second.y.toFixed(1)} L ${third.x.toFixed(1)} ${third.y.toFixed(1)} Z`;
 
-  // 打球の静的落下地点
-  let dot: { x: number; y: number } | null = null;
-  if (log.direction !== null && log.estimatedDistance != null && log.estimatedDistance > 0) {
-    dot = toFieldSvg(log.estimatedDistance, log.direction);
-  }
+  const hasFieldData = log.direction !== null && log.estimatedDistance != null && log.estimatedDistance > 0;
+  const isAnimating = currentTime >= 0;
 
-  const isAnimating = playing || currentTime >= 0;
-  const advance = getRunnerAdvancement(log.result);
+  const direction = log.direction ?? 45;
+  const exitVelocity = log.exitVelocity ?? 120;
+  const launchAngle = log.launchAngle ?? 15;
+  const estimatedDist = log.estimatedDistance ?? estimateDistance(exitVelocity, launchAngle);
+  const isGrounder = (log.launchAngle ?? 15) <= 0 || log.battedBallType === "grounder";
+  const isHomerun = log.result === "homerun";
 
-  // ボール位置
-  const ballState = isAnimating ? getEntityState(events, "ball", currentTime) : null;
+  // 落下地点
+  const dot = hasFieldData ? toFieldSvg(estimatedDist, direction) : null;
 
-  // tag_base エフェクト表示
-  const tagEvents = events.filter(e => e.type === "tag_base");
-  const activeTagEvents = tagEvents.filter(
-    e => currentTime >= e.startTime && currentTime <= e.startTime + e.duration
-  );
+  // アニメーション中のボール状態
+  let ballGroundPos: { x: number; y: number } | null = null;
+  let ballHeight = 0;
+  let shadowGroundPos: { x: number; y: number } | null = null;
 
-  // catch エフェクト表示
-  const catchEvents = events.filter(e => e.type === "catch");
-  const activeCatchEvents = catchEvents.filter(
-    e => currentTime >= e.startTime && currentTime <= e.startTime + e.duration
-  );
-
-  // 守備走者の位置
-  const fielderStates: Record<number, { x: number; y: number }> = {};
-  Object.keys(FIELDER_DEFAULT_POS).forEach(posStr => {
-    const pos = Number(posStr);
-    const defaultP = toFieldSvg(FIELDER_DEFAULT_POS[pos].dist, FIELDER_DEFAULT_POS[pos].dir);
-    if (isAnimating) {
-      const state = getEntityState(events, `fielder_${pos}`, currentTime);
-      fielderStates[pos] = state ? state.pos : defaultP;
-    } else {
-      fielderStates[pos] = defaultP;
-    }
-  });
-
-  // 走者の位置（basesBeforePlay から）
-  const runnerPositions: { pos: { x: number; y: number }; baseIdx: number }[] = [];
-  if (log.basesBeforePlay) {
-    log.basesBeforePlay.forEach((occupied, baseIdx) => {
-      if (!occupied) return;
-      const baseNum = baseIdx + 1;
-      if (isAnimating && advance > 0) {
-        // セグメント分割されたイベントを探す
-        let found = false;
-        for (let i = 0; i < 4; i++) {
-          const state = getEntityState(events, `runner_base${baseNum}_seg${i}`, currentTime);
-          if (state) {
-            runnerPositions.push({ pos: state.pos, baseIdx });
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          // 単一イベントのフォールバック
-          const state = getEntityState(events, `runner_base${baseNum}`, currentTime);
-          if (state) {
-            runnerPositions.push({ pos: state.pos, baseIdx });
-            found = true;
-          }
-        }
-        if (!found) {
-          runnerPositions.push({ pos: BASE_COORDS[baseNum], baseIdx });
-        }
-        return;
-      }
-      runnerPositions.push({ pos: BASE_COORDS[baseNum], baseIdx });
-    });
-  }
-
-  // 打者走者（セグメント分割されたイベントから現在位置を探す）
-  let batterPos: { x: number; y: number } | null = null;
-  if (isAnimating && advance > 0) {
-    for (let i = 0; i < 4; i++) {
-      const state = getEntityState(events, `batter_seg${i}`, currentTime);
+  if (isAnimating && hasFieldData && currentTime <= totalTime) {
+    if (isGrounder) {
+      const state = getGroundBallStateAtTime(direction, estimatedDist, currentTime, totalTime);
       if (state) {
-        batterPos = state.pos;
-        break;
+        ballGroundPos = state.groundPos;
+        ballHeight = 0;
+        shadowGroundPos = null;
+      }
+    } else {
+      const state = getBallStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, currentTime);
+      if (state) {
+        ballGroundPos = state.groundPos;
+        ballHeight = state.height;
+        // 影は地面投影なので同じ位置（既に地面への投影計算済み）
+        shadowGroundPos = state.groundPos;
       }
     }
-    // 単一イベントのフォールバック
-    if (!batterPos) {
-      const state = getEntityState(events, "batter", currentTime);
-      if (state) batterPos = state.pos;
-    }
   }
+
+  // アニメーション中の軌跡ライン（currentTime/totalTime の割合で trailPoints を切り出す）
+  const trailEnd = isAnimating && totalTime > 0
+    ? Math.floor((clampNum(currentTime / totalTime, 0, 1)) * trailPoints.length)
+    : (isAnimating ? trailPoints.length : 0);
+  const visibleTrail = trailPoints.slice(0, trailEnd + 1);
+  const trailPolyline = visibleTrail.length >= 2
+    ? visibleTrail.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")
+    : null;
+
+  // フライ系: フライトの最高高さ（ドットサイズ計算用）
+  let maxHeight = 0;
+  if (!isGrounder && hasFieldData) {
+    const tFlight = getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
+    const tPeak = Math.max(0, (exitVelocity / 3.6) * Math.sin(launchAngle * Math.PI / 180) / 9.8);
+    const peak = getBallStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, Math.min(tPeak, tFlight));
+    maxHeight = peak?.height ?? 10;
+  }
+
+  // ドットサイズ: 高さに応じて変化
+  const ballRadius = isGrounder
+    ? 2.5
+    : Math.max(2, 2 + (maxHeight > 0 ? (ballHeight / maxHeight) * 4 : 0));
+
+  // ホームラン: フェンス越えエフェクト
+  const hrFenceDist = isHomerun && log.direction !== null ? getFenceDistance(log.direction) : null;
+  const hrFencePos = hrFenceDist && log.direction !== null ? toFieldSvg(hrFenceDist, log.direction) : null;
+  const ballBeyondFence = isHomerun && hrFenceDist && hasFieldData && ballGroundPos
+    ? estimatedDist >= hrFenceDist && currentTime / totalTime > 0.7
+    : false;
 
   const outsBeforePlay = log.outsBeforePlay ?? null;
+
+  // 静的表示（アニメーション非再生）の落下地点マーカー
+  const showStaticDot = dot && !isAnimating;
+  // アニメーション完了後の落下地点マーカー
+  const showLandingDot = dot && isAnimating && currentTime >= totalTime;
 
   return (
     <svg viewBox="0 0 300 300" className="w-full bg-gray-900 rounded border border-gray-700">
@@ -1022,65 +313,115 @@ function AnimatedFieldView({ log, events, currentTime, playing }: AnimatedFieldV
         <rect key={i} x={p.x - 3} y={p.y - 3} width="6" height="6" fill="#e5e7eb" transform={`rotate(45 ${p.x} ${p.y})`} />
       ))}
 
-      {/* 守備選手 */}
-      {Object.entries(FIELDER_DEFAULT_POS).map(([posStr]) => {
-        const pos = Number(posStr);
-        const isActive = pos === log.fielderPosition;
-        const displayP = fielderStates[pos] ?? toFieldSvg(FIELDER_DEFAULT_POS[pos].dist, FIELDER_DEFAULT_POS[pos].dir);
-        return (
-          <g key={pos}>
-            <circle cx={displayP.x} cy={displayP.y} r={4} fill={isActive ? "#f97316" : "#374151"} stroke="#9ca3af" strokeWidth="0.8" />
-            <text x={displayP.x} y={displayP.y + 1} textAnchor="middle" fill="white" fontSize="5" dominantBaseline="middle">{pos}</text>
-          </g>
-        );
+      {/* 走者（塁上の走者を静的表示） */}
+      {log.basesBeforePlay && log.basesBeforePlay.map((occupied, baseIdx) => {
+        if (!occupied) return null;
+        const p = BASE_COORDS[baseIdx + 1];
+        return <circle key={baseIdx} cx={p.x} cy={p.y} r={3.5} fill="#22c55e" stroke="white" strokeWidth="0.8" />;
       })}
 
-      {/* 走者 */}
-      {runnerPositions.map(({ pos, baseIdx }) => (
-        <circle key={baseIdx} cx={pos.x} cy={pos.y} r={3.5} fill="#22c55e" stroke="white" strokeWidth="0.8" />
-      ))}
-
-      {/* 打者走者 */}
-      {batterPos && (
-        <circle cx={batterPos.x} cy={batterPos.y} r={3.5} fill="#3b82f6" stroke="white" strokeWidth="0.8" />
-      )}
-
-      {/* 打球落下地点（静的） */}
-      {dot && !isAnimating && (
+      {/* 静的落下地点（アニメーション非再生時） */}
+      {showStaticDot && (
         <>
-          <line x1={home.x} y1={home.y} x2={dot.x} y2={dot.y} stroke={dotColor(log.result)} strokeWidth="1" strokeDasharray="3,3" opacity="0.6" />
+          <line x1={home.x} y1={home.y} x2={dot.x} y2={dot.y} stroke={dotColor(log.result)} strokeWidth="1" strokeDasharray="3,3" opacity="0.5" />
           <circle cx={dot.x} cy={dot.y} r="5" fill={dotColor(log.result)} opacity="0.9" />
           <circle cx={dot.x} cy={dot.y} r="5" fill="none" stroke="white" strokeWidth="0.8" opacity="0.5" />
         </>
       )}
 
-      {/* ボール（アニメーション中） */}
-      {ballState && isAnimating && (
-        <circle cx={ballState.pos.x} cy={ballState.pos.y} r={2.5} fill="white" stroke="#ef4444" strokeWidth="0.8" />
+      {/* アニメーション中の軌跡ライン */}
+      {trailPolyline && (
+        <polyline
+          points={trailPolyline}
+          fill="none"
+          stroke={dotColor(log.result)}
+          strokeWidth="1"
+          strokeDasharray={isGrounder ? "2,2" : "none"}
+          opacity="0.45"
+        />
       )}
 
-      {/* catch エフェクト（パルス円） */}
-      {activeCatchEvents.map((e, i) => {
-        const t = (currentTime - e.startTime) / Math.max(e.duration, 0.001);
-        const r = 6 + t * 6;
-        const opacity = 1 - t;
-        return (
-          <circle key={i} cx={e.from.x} cy={e.from.y} r={r} fill="none" stroke="#facc15" strokeWidth="1.5" opacity={opacity} />
-        );
-      })}
+      {/* フライ系: 影ドット（地面投影） */}
+      {!isGrounder && shadowGroundPos && ballGroundPos && ballHeight > 0.5 && (
+        <>
+          {/* 高さを示す縦線（影→ボール方向に小さく） */}
+          <line
+            x1={shadowGroundPos.x}
+            y1={shadowGroundPos.y}
+            x2={shadowGroundPos.x}
+            y2={shadowGroundPos.y - Math.min(ballHeight * 1.5, 20)}
+            stroke="#9ca3af"
+            strokeWidth="0.8"
+            opacity="0.35"
+          />
+          {/* 影ドット */}
+          <circle
+            cx={shadowGroundPos.x}
+            cy={shadowGroundPos.y}
+            r={2}
+            fill="#6b7280"
+            opacity="0.4"
+          />
+        </>
+      )}
 
-      {/* tag_base エフェクト */}
-      {activeTagEvents.map((e, i) => {
-        const isOut = e.meta?.result === "out";
-        return isOut ? (
-          <g key={i}>
-            <line x1={e.from.x - 5} y1={e.from.y - 5} x2={e.from.x + 5} y2={e.from.y + 5} stroke="#ef4444" strokeWidth="2" />
-            <line x1={e.from.x + 5} y1={e.from.y - 5} x2={e.from.x - 5} y2={e.from.y + 5} stroke="#ef4444" strokeWidth="2" />
-          </g>
-        ) : (
-          <circle key={i} cx={e.from.x} cy={e.from.y} r={7} fill="none" stroke="#22c55e" strokeWidth="2" opacity={0.8} />
-        );
-      })}
+      {/* ボール本体ドット（アニメーション中） */}
+      {ballGroundPos && isAnimating && currentTime < totalTime && (
+        <>
+          {/* フライ系: ボールの高さに応じた位置（SVGは俯瞰なのでサイズで高さを表現） */}
+          {!isGrounder && ballHeight > 0.5 ? (
+            <circle
+              cx={ballGroundPos.x}
+              cy={ballGroundPos.y - Math.min(ballHeight * 1.5, 20)}
+              r={ballRadius}
+              fill="white"
+              stroke={dotColor(log.result)}
+              strokeWidth="0.8"
+              opacity="0.95"
+            />
+          ) : (
+            <circle
+              cx={ballGroundPos.x}
+              cy={ballGroundPos.y}
+              r={ballRadius}
+              fill={isGrounder ? "white" : dotColor(log.result)}
+              stroke={isGrounder ? "#9ca3af" : "white"}
+              strokeWidth="0.8"
+              opacity="0.95"
+            />
+          )}
+        </>
+      )}
+
+      {/* ホームラン: フェンス越えエフェクト */}
+      {ballBeyondFence && hrFencePos && (
+        <>
+          {[0, 60, 120, 180, 240, 300].map((angleDeg, i) => {
+            const rad = angleDeg * Math.PI / 180;
+            const r = 8;
+            return (
+              <line
+                key={i}
+                x1={hrFencePos.x}
+                y1={hrFencePos.y}
+                x2={hrFencePos.x + r * Math.cos(rad)}
+                y2={hrFencePos.y + r * Math.sin(rad)}
+                stroke="#ef4444"
+                strokeWidth="1.5"
+                opacity="0.8"
+              />
+            );
+          })}
+        </>
+      )}
+
+      {/* アニメーション完了後の落下地点マーカー */}
+      {showLandingDot && dot && (
+        <>
+          <circle cx={dot.x} cy={dot.y} r="5" fill={dotColor(log.result)} opacity="0.9" />
+          <circle cx={dot.x} cy={dot.y} r="5" fill="none" stroke="white" strokeWidth="0.8" opacity="0.5" />
+        </>
+      )}
 
       {/* アウトカウント表示 */}
       {outsBeforePlay !== null && (
@@ -1128,10 +469,10 @@ function computeTrajectoryPoints(
 interface SideViewProps {
   log: AtBatLog;
   currentTime: number;
-  events: PlayEvent[];
+  totalFlightTime: number;
 }
 
-function SideView({ log, currentTime, events }: SideViewProps) {
+function SideView({ log, currentTime, totalFlightTime }: SideViewProps) {
   if (log.exitVelocity === null || log.launchAngle === null || log.launchAngle <= 0) {
     return (
       <svg viewBox="0 0 350 180" className="w-full bg-gray-900 rounded border border-gray-700">
@@ -1180,25 +521,17 @@ function SideView({ log, currentTime, events }: SideViewProps) {
   const xLabels: number[] = [];
   for (let x = 0; x <= xMax; x += 50) xLabels.push(x);
 
-  // ボールのサイドビュー位置（ball_fly/ball_hr イベント中のみ）
+  // ボールのサイドビュー位置（アニメーション中のフライ時のみ）
   let sideBallPos: { sx: number; sy: number } | null = null;
-  if (currentTime >= 0) {
-    const ballEvents = events.filter(e =>
-      (e.type === "ball_fly" || e.type === "ball_hr") && e.entityId === "ball"
-    );
-    for (const e of ballEvents) {
-      if (currentTime >= e.startTime && currentTime <= e.startTime + e.duration) {
-        const t = (currentTime - e.startTime) / Math.max(e.duration, 0.001);
-        const tFlight = getBallFlightTime(log.exitVelocity, Math.max(log.launchAngle, 5));
-        const physT = t * tFlight;
-        const ptIdx = Math.min(Math.floor(t * points.length), points.length - 1);
-        const pt = points[ptIdx];
-        const { sx, sy } = toSvgCoord(pt.x, pt.y);
-        sideBallPos = { sx, sy };
-        break;
-      }
-    }
+  if (currentTime >= 0 && totalFlightTime > 0 && currentTime <= totalFlightTime) {
+    const t = clampNum(currentTime / totalFlightTime, 0, 1);
+    const ptIdx = Math.min(Math.floor(t * points.length), points.length - 1);
+    const pt = points[ptIdx];
+    const { sx, sy } = toSvgCoord(pt.x, pt.y);
+    sideBallPos = { sx, sy };
   }
+
+  const isAnimating = currentTime >= 0;
 
   return (
     <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full bg-gray-900 rounded border border-gray-700">
@@ -1210,12 +543,12 @@ function SideView({ log, currentTime, events }: SideViewProps) {
       {fenceSx >= padLeft && fenceSx <= svgW - padRight && (
         <line x1={fenceSx} y1={fenceTopSy} x2={fenceSx} y2={fenceBottomSy} stroke="#f59e0b" strokeWidth="2" />
       )}
-      <path d={pathD} fill="none" stroke={color} strokeWidth="2" opacity={currentTime >= 0 ? 0.35 : 1} />
-      <circle cx={peakSx} cy={peakSy} r="3" fill={color} opacity={currentTime >= 0 ? 0.35 : 1} />
+      <path d={pathD} fill="none" stroke={color} strokeWidth="2" opacity={isAnimating ? 0.35 : 1} />
+      <circle cx={peakSx} cy={peakSy} r="3" fill={color} opacity={isAnimating ? 0.35 : 1} />
       <text x={peakSx} y={peakSy - 6} textAnchor="middle" fill="#d1d5db" fontSize="8">
         {peak.y.toFixed(1)}m
       </text>
-      <circle cx={landSx} cy={groundSy} r="4" fill={color} opacity={currentTime >= 0 ? 0.35 : 1} />
+      <circle cx={landSx} cy={groundSy} r="4" fill={color} opacity={isAnimating ? 0.35 : 1} />
       {xLabels.map(x => {
         const { sx } = toSvgCoord(x, 0);
         return (
@@ -1244,20 +577,60 @@ export interface BattedBallPopupProps {
 }
 
 export function BattedBallPopup({ log, batterName, pitcherName, onClose }: BattedBallPopupProps) {
-  const events = buildPlayEvents(log);
-  const totalDuration = getTotalDuration(events);
-  const { currentTime, playing, play, speed, setSpeed } = usePlayAnimation(totalDuration);
-
   const hasFieldData = log.direction !== null && log.estimatedDistance != null && log.estimatedDistance > 0;
-  const canAnimate = hasFieldData && events.length > 0;
+
+  const exitVelocity = log.exitVelocity ?? 120;
+  const launchAngle = log.launchAngle ?? 15;
+  const direction = log.direction ?? 45;
+  const estimatedDist = log.estimatedDistance ?? estimateDistance(exitVelocity, launchAngle);
+  const isGrounder = launchAngle <= 0 || log.battedBallType === "grounder";
+  const isHomerun = log.result === "homerun";
+
+  // 総アニメーション時間
+  const totalTime = useMemo(() => {
+    if (!hasFieldData) return 0;
+    if (isGrounder) return getGroundBallTime(exitVelocity, estimatedDist);
+    // ホームランはフェンス越えを考慮した飛距離
+    const hrDist = isHomerun && log.direction !== null ? getFenceDistance(log.direction) + 10 : estimatedDist;
+    const effectiveDist = isHomerun ? hrDist : estimatedDist;
+    // フライ時間は物理から、ただし最低でも推定距離/フライ時間を確認
+    void effectiveDist; // used for clarity
+    return getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
+  }, [hasFieldData, isGrounder, isHomerun, exitVelocity, estimatedDist, launchAngle, log.direction]);
+
+  // フライ時の滞空時間（SideView用）
+  const totalFlightTime = useMemo(() => {
+    if (!hasFieldData || isGrounder) return 0;
+    return getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
+  }, [hasFieldData, isGrounder, exitVelocity, launchAngle]);
+
+  // 地面投影位置の事前計算
+  const trailPoints = useMemo(() => {
+    if (!hasFieldData) return [];
+    const points: { x: number; y: number }[] = [];
+    const steps = 60;
+    for (let i = 0; i <= steps; i++) {
+      const t = (i / steps) * totalTime;
+      if (isGrounder) {
+        const state = getGroundBallStateAtTime(direction, estimatedDist, t, totalTime);
+        if (state) points.push(state.groundPos);
+      } else {
+        const state = getBallStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, t);
+        if (state) points.push(state.groundPos);
+      }
+    }
+    return points;
+  }, [hasFieldData, isGrounder, direction, estimatedDist, totalTime, exitVelocity, launchAngle]);
+
+  const { currentTime, playing, play } = usePlayAnimation();
+  const canAnimate = hasFieldData && totalTime > 0;
 
   // ポップアップ表示時に自動1回再生
   useEffect(() => {
     if (canAnimate) {
-      const timer = setTimeout(() => play(), 300);
+      const timer = setTimeout(() => play(totalTime), 300);
       return () => clearTimeout(timer);
     }
-  // play は useCallback で安定しているが、依存に含めないとESLintが警告するため含める
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canAnimate]);
 
@@ -1302,11 +675,16 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
         <div className="grid grid-cols-2 gap-4">
           <div>
             <div className="text-gray-400 text-xs mb-1 text-center">フィールドビュー</div>
-            <AnimatedFieldView log={log} events={events} currentTime={currentTime} playing={playing} />
+            <AnimatedFieldView
+              log={log}
+              currentTime={currentTime}
+              totalTime={totalTime}
+              trailPoints={trailPoints}
+            />
           </div>
           <div>
             <div className="text-gray-400 text-xs mb-1 text-center">軌道（横から）</div>
-            <SideView log={log} currentTime={currentTime} events={events} />
+            <SideView log={log} currentTime={currentTime} totalFlightTime={totalFlightTime} />
           </div>
         </div>
 
@@ -1314,23 +692,12 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
         {canAnimate && (
           <div className="mt-3 flex items-center justify-center gap-3">
             <button
-              onClick={play}
+              onClick={() => play(totalTime)}
               disabled={playing}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-sm font-medium transition-colors"
             >
               {playing ? "再生中..." : "▶ リプレー"}
             </button>
-            <div className="flex gap-1 text-xs">
-              {([0.5, 1, 2] as const).map(s => (
-                <button
-                  key={s}
-                  onClick={() => setSpeed(s)}
-                  className={`px-2 py-1 rounded transition-colors ${speed === s ? "bg-gray-500 text-white" : "bg-gray-700 text-gray-400 hover:bg-gray-600"}`}
-                >
-                  {s}x
-                </button>
-              ))}
-            </div>
           </div>
         )}
       </div>
