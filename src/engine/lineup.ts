@@ -145,11 +145,29 @@ export function autoAssignRosterLevels(team: Team): Record<string, RosterLevel> 
     levels[p.id] = i < 12 ? "ichi_gun" : "ni_gun";
   });
 
-  // 野手: 上位16人を1軍 (合計28人)
-  const sortedBatters = [...batters].sort((a, b) => batterOffenseScore(b) - batterOffenseScore(a));
-  sortedBatters.forEach((p, i) => {
-    levels[p.id] = i < 16 ? "ichi_gun" : "ni_gun";
-  });
+  // 野手: 各守備位置から最低1人を1軍に確保 + 残りを打力順で埋める
+  const FIELD_POSITIONS = ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"] as const;
+  const guaranteedIds = new Set<string>();
+
+  // Step 1: 各ポジションのベスト1人を確保
+  for (const pos of FIELD_POSITIONS) {
+    const candidates = batters.filter((p) => p.position === pos);
+    if (candidates.length === 0) continue;
+    const best = [...candidates].sort((a, b) => batterOffenseScore(b) - batterOffenseScore(a))[0];
+    guaranteedIds.add(best.id);
+  }
+
+  // Step 2: 残り枠を打力順で埋める
+  const remaining = batters
+    .filter((p) => !guaranteedIds.has(p.id))
+    .sort((a, b) => batterOffenseScore(b) - batterOffenseScore(a));
+  const remainingSlots = Math.max(0, 16 - guaranteedIds.size);
+  const additionalIds = new Set(remaining.slice(0, remainingSlots).map((p) => p.id));
+
+  // Step 3: レベル割り当て
+  for (const p of batters) {
+    levels[p.id] = guaranteedIds.has(p.id) || additionalIds.has(p.id) ? "ichi_gun" : "ni_gun";
+  }
 
   return levels;
 }
