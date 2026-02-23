@@ -1,6 +1,6 @@
 "use client";
 
-import type { Player, PitchRepertoire, BatterSeasonStats, PitcherSeasonStats } from "@/models/player";
+import type { Player, PitchRepertoire, BatterSeasonStats, PitcherSeasonStats, BatterAbilities, PitcherAbilities } from "@/models/player";
 import {
   PITCH_TYPE_NAMES,
   POSITION_NAMES,
@@ -53,6 +53,45 @@ export function potentialColor(grade: string): string {
     case "D": return "text-lime-400";
     default:  return "text-gray-500";
   }
+}
+
+/** 野手総合値 (1-999) */
+export function calcBatterOverall(b: BatterAbilities): number {
+  const raw = b.contact * 2.2 + b.power * 2.2 + b.speed * 1.5 + b.eye * 1.5
+    + b.fielding * 1.2 + (b.arm ?? 50) * 0.8 + b.catching * 0.6;
+  return Math.round(Math.min(999, Math.max(1, raw)));
+}
+
+/** 投手総合値 (1-999) */
+export function calcPitcherOverall(p: PitcherAbilities): number {
+  const velNorm = ((p.velocity - 120) / 45) * 100;
+  const pitchBonus = Math.min(100, p.pitches.reduce((sum, pitch) => sum + pitch.level * 12, 0));
+  const raw = velNorm * 2.0 + p.control * 2.5 + p.stamina * 1.5 + p.mentalToughness * 1.0 + pitchBonus * 3.0;
+  return Math.round(Math.min(999, Math.max(1, raw)));
+}
+
+/** 総合値(1-999)のランク文字を返す */
+export function overallGrade(val: number): string {
+  if (val >= 900) return "S";
+  if (val >= 800) return "A";
+  if (val >= 700) return "B";
+  if (val >= 600) return "C";
+  if (val >= 500) return "D";
+  if (val >= 400) return "E";
+  if (val >= 300) return "F";
+  return "G";
+}
+
+/** 総合値バッジ (例: "750B") */
+export function OverallBadge({ value }: { value: number }) {
+  const grade = overallGrade(value);
+  const color = gradeColor(grade);
+  return (
+    <span className={`inline-flex items-baseline w-14 justify-center tabular-nums ${color}`}>
+      <span className="text-lg font-bold">{value}</span>
+      <span className="text-xs ml-0.5">{grade}</span>
+    </span>
+  );
 }
 
 export function AbilityCell({ val }: { val: number }) {

@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
 import { POSITION_NAMES } from "@/models/player";
 import type { Player } from "@/models/player";
-import { VelocityCell, AbilityCell, PitchList } from "@/components/player-ability-card";
+import { VelocityCell, AbilityCell, PitchList, calcPitcherOverall, OverallBadge } from "@/components/player-ability-card";
 import type { TeamLineupConfig } from "@/models/team";
 import { autoConfigureLineup, getIchiGunPlayers } from "@/engine/lineup";
 import { LineupField } from "@/components/lineup-field";
@@ -354,6 +354,7 @@ function PitcherCard({
       }`}
     >
       <div className="flex items-center gap-2 mb-2">
+        <OverallBadge value={calcPitcherOverall(pitching)} />
         <span className="text-white font-bold">{player.name}</span>
         <span className="text-gray-400 text-xs">{player.age}歳</span>
         {role && (

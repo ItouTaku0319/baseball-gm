@@ -17,6 +17,9 @@ import {
   PitchList,
   TrajectoryIcon,
   trajectoryTextClass,
+  calcBatterOverall,
+  calcPitcherOverall,
+  OverallBadge,
 } from "@/components/player-ability-card";
 import { ICHI_GUN_MAX } from "@/models/team";
 import type { RosterLevel } from "@/models/team";
@@ -139,6 +142,7 @@ export default function RosterPage() {
         >
           <thead>
             <tr className="border-b-2 border-gray-600 bg-gray-900 text-xs uppercase tracking-wider">
+              <th className="py-3 px-3 text-center text-gray-400">総合</th>
               <th className="py-3 px-3 text-left text-gray-400">名前</th>
               <th className="py-3 px-3 text-right text-gray-400">年齢</th>
               <th className="py-3 px-3 text-center text-gray-400">投</th>
@@ -182,6 +186,7 @@ export default function RosterPage() {
         >
           <thead>
             <tr className="border-b-2 border-gray-600 bg-gray-900 text-xs uppercase tracking-wider">
+              <th className="py-3 px-3 text-center text-gray-400">総合</th>
               <th className="py-3 px-3 text-left text-gray-400">名前</th>
               <th className="py-3 px-3 text-right text-gray-400">年齢</th>
               <th className="py-3 px-3 text-center text-gray-400">位置</th>
@@ -274,6 +279,9 @@ function PitcherRow({
         i % 2 === 1 ? "bg-gray-800/60" : ""
       }`}
     >
+      <td className="py-2.5 px-3 text-center">
+        <OverallBadge value={calcPitcherOverall(p.pitching!)} />
+      </td>
       <td className="py-2.5 px-3 font-medium text-white">{p.name}</td>
       <td className="py-2.5 px-3 text-right text-gray-100">{p.age}</td>
       <td className="py-2.5 px-3 text-center text-gray-300">
@@ -341,6 +349,9 @@ function BatterRow({
         i % 2 === 1 ? "bg-gray-800/60" : ""
       }`}
     >
+      <td className="py-2.5 px-3 text-center">
+        <OverallBadge value={calcBatterOverall(p.batting)} />
+      </td>
       <td className="py-2.5 px-3 font-medium text-white">{p.name}</td>
       <td className="py-2.5 px-3 text-right text-gray-100">{p.age}</td>
       <td className="py-2.5 px-3 text-center text-gray-300">

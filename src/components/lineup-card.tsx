@@ -2,7 +2,7 @@
 
 import type { Player, BatterSeasonStats } from "@/models/player";
 import { POSITION_NAMES, BAT_SIDE_NAMES, THROW_HAND_NAMES } from "@/models/player";
-import { TrajectoryIcon, trajectoryTextClass, abilityGrade, gradeColor } from "@/components/player-ability-card";
+import { TrajectoryIcon, trajectoryTextClass, abilityGrade, gradeColor, calcBatterOverall, OverallBadge } from "@/components/player-ability-card";
 
 export interface LineupCardProps {
   /** 打順番号 (1-9) */
@@ -89,6 +89,11 @@ export function LineupCard({
       {/* 打順番号 */}
       <div className="flex items-center justify-center w-10 shrink-0 text-2xl font-bold tabular-nums text-gray-300 select-none">
         {order}
+      </div>
+
+      {/* 総合値 */}
+      <div className="flex items-center justify-center shrink-0">
+        <OverallBadge value={calcBatterOverall(player.batting)} />
       </div>
 
       {/* 選手情報 */}
