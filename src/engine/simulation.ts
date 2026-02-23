@@ -159,6 +159,28 @@ export function classifyBattedBallType(launchAngle: number, exitVelocity: number
   return "fly_ball";
 }
 
+/** 推定打球飛距離(メートル)を放物運動+空気抵抗補正で計算 */
+export function estimateDistance(exitVelocityKmh: number, launchAngleDeg: number): number {
+  if (launchAngleDeg <= 0) return 0;
+
+  const v = exitVelocityKmh / 3.6; // km/h → m/s
+  const theta = launchAngleDeg * Math.PI / 180;
+  const g = 9.8;
+  const h = 1.2; // 打点高さ(m)
+
+  const vSinT = v * Math.sin(theta);
+  const vCosT = v * Math.cos(theta);
+  const baseDistance = vCosT * (vSinT + Math.sqrt(vSinT * vSinT + 2 * g * h)) / g;
+
+  const dragFactor = 0.87; // 空気抵抗補正(約13%減)
+  return baseDistance * dragFactor;
+}
+
+/** フェンス距離(メートル): NPB標準 両翼100m, 中堅122m */
+export function getFenceDistance(directionDeg: number): number {
+  return 100 + 22 * Math.sin(directionDeg * Math.PI / 90);
+}
+
 /** 打球の物理データを生成する */
 export function generateBattedBall(batter: Player, pitcher: Player): BattedBall {
   const power = batter.batting.power;
@@ -281,17 +303,19 @@ function resolveInPlayFromBall(
 
   // --- 本塁打判定 ---
   if (ball.type === "fly_ball" || ball.type === "line_drive") {
-    const isBarrel = ball.exitVelocity >= 158 && ball.launchAngle >= 22 && ball.launchAngle <= 38;
-    const powerFactor = batter.batting.power / 100;
-    let hrRate: number;
-    if (isBarrel) {
-      hrRate = 0.25 + powerFactor * 0.10;
-    } else if (ball.type === "fly_ball") {
-      hrRate = 0.03 + powerFactor * 0.06 + (ball.exitVelocity - 120) * 0.001;
-    } else {
-      hrRate = 0.01 + powerFactor * 0.02 + Math.max(0, (ball.exitVelocity - 145)) * 0.002;
+    const distance = estimateDistance(ball.exitVelocity, ball.launchAngle);
+    const fenceDist = getFenceDistance(ball.direction);
+    const ratio = distance / fenceDist;
+
+    if (ratio >= 1.05) {
+      // フェンス超え確定
+      return "homerun";
+    } else if (ratio >= 0.95) {
+      // フェンス際: パワー補正付きランダム
+      const powerBonus = (batter.batting.power - 50) * 0.002;
+      const hrChance = (ratio - 0.95) / 0.10 + powerBonus;
+      if (Math.random() < clamp(hrChance, 0.05, 0.95)) return "homerun";
     }
-    if (Math.random() < Math.max(0.01, hrRate)) return "homerun";
   }
 
   // --- ゴロ処理 ---
@@ -728,6 +752,12 @@ function simulateHalfInning(
     }
 
     const batter = battingTeam[idx % battingTeam.length];
+    const outsBeforeAtBat = outs;
+    const basesBeforeAtBat: [boolean, boolean, boolean] = [
+      bases.first !== null,
+      bases.second !== null,
+      bases.third !== null,
+    ];
     const detail = simulateAtBat(batter, pitcher, fielderMap, bases, outs);
     const result = detail.result;
     const bs = getOrCreateBatterStats(batterStatsMap, batter.id);
@@ -1002,6 +1032,9 @@ function simulateHalfInning(
     }
 
     if (options?.collectAtBatLogs && atBatLogs) {
+      const dist = (detail.exitVelocity != null && detail.launchAngle != null)
+        ? estimateDistance(detail.exitVelocity, detail.launchAngle)
+        : null;
       atBatLogs.push({
         inning: inning ?? 0,
         halfInning: halfInning ?? "top",
@@ -1013,6 +1046,9 @@ function simulateHalfInning(
         launchAngle: detail.launchAngle,
         exitVelocity: detail.exitVelocity,
         fielderPosition: detail.fielderPosition,
+        estimatedDistance: dist,
+        basesBeforePlay: basesBeforeAtBat,
+        outsBeforePlay: outsBeforeAtBat,
       });
     }
 

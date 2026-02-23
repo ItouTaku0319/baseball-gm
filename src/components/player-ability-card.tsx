@@ -1,6 +1,6 @@
 "use client";
 
-import type { Player, PitchRepertoire } from "@/models/player";
+import type { Player, PitchRepertoire, BatterSeasonStats, PitcherSeasonStats } from "@/models/player";
 import {
   PITCH_TYPE_NAMES,
   POSITION_NAMES,
@@ -93,49 +93,149 @@ export function PitchList({ pitches }: { pitches: PitchRepertoire[] }) {
   );
 }
 
+/** 打率・OPS用フォーマット (先頭0を省略) */
+function fmtAvg(val: number): string {
+  if (val >= 1) return val.toFixed(3);
+  return val.toFixed(3).slice(1); // ".XXX"
+}
+
+/** ERA・WHIP用フォーマット */
+function fmtDecimal(val: number): string {
+  return val.toFixed(2);
+}
+
+function BatterSeasonRow({ stats }: { stats: BatterSeasonStats }) {
+  const avg = stats.atBats > 0 ? stats.hits / stats.atBats : 0;
+  const obp = (stats.atBats + stats.walks + stats.hitByPitch + stats.sacrificeFlies) > 0
+    ? (stats.hits + stats.walks + stats.hitByPitch) / (stats.atBats + stats.walks + stats.hitByPitch + stats.sacrificeFlies)
+    : 0;
+  const slg = stats.atBats > 0
+    ? (stats.hits - stats.doubles - stats.triples - stats.homeRuns + stats.doubles * 2 + stats.triples * 3 + stats.homeRuns * 4) / stats.atBats
+    : 0;
+  const ops = obp + slg;
+
+  return (
+    <div className="flex items-center gap-3 text-xs tabular-nums font-mono flex-wrap">
+      <span>
+        <span className="text-gray-400">打率 </span>
+        <span className="text-gray-100">{fmtAvg(avg)}</span>
+      </span>
+      <span>
+        <span className="text-gray-400">HR </span>
+        <span className="text-gray-100">{stats.homeRuns}</span>
+      </span>
+      <span>
+        <span className="text-gray-400">打点 </span>
+        <span className="text-gray-100">{stats.rbi}</span>
+      </span>
+      <span>
+        <span className="text-gray-400">OPS </span>
+        <span className="text-gray-100">{fmtAvg(ops)}</span>
+      </span>
+    </div>
+  );
+}
+
+function PitcherSeasonRow({ stats }: { stats: PitcherSeasonStats }) {
+  const innings = stats.inningsPitched / 3;
+  const era = innings > 0 ? (stats.earnedRuns / innings) * 9 : 0;
+  const whip = innings > 0 ? (stats.hits + stats.walks) / innings : 0;
+
+  return (
+    <div className="flex items-center gap-3 text-xs tabular-nums font-mono flex-wrap">
+      <span>
+        <span className="text-gray-400">ERA </span>
+        <span className="text-gray-100">{fmtDecimal(era)}</span>
+      </span>
+      <span>
+        <span className="text-gray-100">{stats.wins}W-{stats.losses}L</span>
+      </span>
+      <span>
+        <span className="text-gray-400">K </span>
+        <span className="text-gray-100">{stats.strikeouts}</span>
+      </span>
+      <span>
+        <span className="text-gray-400">WHIP </span>
+        <span className="text-gray-100">{fmtDecimal(whip)}</span>
+      </span>
+    </div>
+  );
+}
+
+interface PlayerAbilityCardProps {
+  player: Player;
+  seasonYear?: number;
+  teamColor?: string;
+}
+
 /** 選手能力カード（ツールチップやフィルタ表示用） */
-export function PlayerAbilityCard({ player }: { player: Player }) {
+export function PlayerAbilityCard({ player, seasonYear, teamColor }: PlayerAbilityCardProps) {
   const posJa = POSITION_NAMES[player.position];
   const throwJa = THROW_HAND_NAMES[player.throwHand];
   const batJa = BAT_SIDE_NAMES[player.batSide];
 
+  const batterStats = seasonYear != null ? player.careerBattingStats[seasonYear] : undefined;
+  const pitcherStats = seasonYear != null ? player.careerPitchingStats[seasonYear] : undefined;
+
   if (player.isPitcher && player.pitching) {
     return (
-      <div className="bg-gray-700/50 rounded-lg p-4 border border-gray-600">
-        <div className="flex items-center gap-3 mb-3">
-          <span className="text-blue-400 font-bold text-lg">{player.name}</span>
-          <span className="text-gray-400 text-sm">{posJa} {player.age}歳 {throwJa}投</span>
-          <span className={`text-sm ${potentialColor(player.potential.overall)}`}>潜在{player.potential.overall}</span>
-        </div>
-        <div className="grid grid-cols-4 gap-3 text-sm mb-2">
-          <div><span className="text-gray-400">球速 </span><VelocityCell val={player.pitching.velocity} /></div>
-          <div><span className="text-gray-400">制球 </span><AbilityCell val={player.pitching.control} /></div>
-          <div><span className="text-gray-400">スタ </span><AbilityCell val={player.pitching.stamina} /></div>
-          <div><span className="text-gray-400">精神 </span><AbilityCell val={player.pitching.mentalToughness} /></div>
-        </div>
-        <div className="text-sm">
-          <span className="text-gray-400 mr-2">球種:</span>
-          <PitchList pitches={player.pitching.pitches} />
+      <div className="bg-gray-700/50 rounded-lg border border-gray-600 overflow-hidden">
+        {teamColor && <div className="h-1 rounded-t-lg" style={{ backgroundColor: teamColor }} />}
+        <div className="p-4">
+          <div className="flex items-start justify-between mb-3">
+            <div>
+              <span className="text-blue-400 font-bold text-lg mr-2">{player.name}</span>
+              <span className="text-gray-400 text-sm">{posJa} {player.age}歳 {throwJa}投</span>
+            </div>
+            <span className={`text-sm ${potentialColor(player.potential.overall)}`}>潜在{player.potential.overall}</span>
+          </div>
+          <div className="grid grid-cols-4 gap-3 text-sm mb-2">
+            <div><span className="text-gray-400">球速 </span><VelocityCell val={player.pitching.velocity} /></div>
+            <div><span className="text-gray-400">制球 </span><AbilityCell val={player.pitching.control} /></div>
+            <div><span className="text-gray-400">スタ </span><AbilityCell val={player.pitching.stamina} /></div>
+            <div><span className="text-gray-400">精神 </span><AbilityCell val={player.pitching.mentalToughness} /></div>
+          </div>
+          <div className="text-sm mb-0">
+            <span className="text-gray-400 mr-2">球種:</span>
+            <PitchList pitches={player.pitching.pitches} />
+          </div>
+          {pitcherStats && pitcherStats.games > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-600">
+              <span className="text-gray-400 text-xs mr-2">今季</span>
+              <PitcherSeasonRow stats={pitcherStats} />
+            </div>
+          )}
         </div>
       </div>
     );
   }
 
   return (
-    <div className="bg-gray-700/50 rounded-lg p-4 border border-gray-600">
-      <div className="flex items-center gap-3 mb-3">
-        <span className="text-blue-400 font-bold text-lg">{player.name}</span>
-        <span className="text-gray-400 text-sm">{posJa} {player.age}歳 {batJa}打{throwJa}投</span>
-        <span className={`text-sm ${potentialColor(player.potential.overall)}`}>潜在{player.potential.overall}</span>
-      </div>
-      <div className="grid grid-cols-7 gap-3 text-sm">
-        <div><span className="text-gray-400">ミ </span><AbilityCell val={player.batting.contact} /></div>
-        <div><span className="text-gray-400">パ </span><AbilityCell val={player.batting.power} /></div>
-        <div><span className="text-gray-400">走 </span><AbilityCell val={player.batting.speed} /></div>
-        <div><span className="text-gray-400">眼 </span><AbilityCell val={player.batting.eye} /></div>
-        <div><span className="text-gray-400">肩 </span><AbilityCell val={player.batting.arm ?? 50} /></div>
-        <div><span className="text-gray-400">守 </span><AbilityCell val={player.batting.fielding} /></div>
-        <div><span className="text-gray-400">捕 </span><AbilityCell val={player.batting.catching} /></div>
+    <div className="bg-gray-700/50 rounded-lg border border-gray-600 overflow-hidden">
+      {teamColor && <div className="h-1 rounded-t-lg" style={{ backgroundColor: teamColor }} />}
+      <div className="p-4">
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <span className="text-blue-400 font-bold text-lg mr-2">{player.name}</span>
+            <span className="text-gray-400 text-sm">{posJa} {player.age}歳 {batJa}打{throwJa}投</span>
+          </div>
+          <span className={`text-sm ${potentialColor(player.potential.overall)}`}>潜在{player.potential.overall}</span>
+        </div>
+        <div className="grid grid-cols-4 gap-x-3 gap-y-2 text-sm mb-0">
+          <div><span className="text-gray-400">ミ </span><AbilityCell val={player.batting.contact} /></div>
+          <div><span className="text-gray-400">パ </span><AbilityCell val={player.batting.power} /></div>
+          <div><span className="text-gray-400">走 </span><AbilityCell val={player.batting.speed} /></div>
+          <div><span className="text-gray-400">眼 </span><AbilityCell val={player.batting.eye} /></div>
+          <div><span className="text-gray-400">肩 </span><AbilityCell val={player.batting.arm ?? 50} /></div>
+          <div><span className="text-gray-400">守 </span><AbilityCell val={player.batting.fielding} /></div>
+          <div><span className="text-gray-400">捕 </span><AbilityCell val={player.batting.catching} /></div>
+        </div>
+        {batterStats && batterStats.atBats > 0 && (
+          <div className="mt-3 pt-3 border-t border-gray-600">
+            <span className="text-gray-400 text-xs mr-2">今季</span>
+            <BatterSeasonRow stats={batterStats} />
+          </div>
+        )}
       </div>
     </div>
   );

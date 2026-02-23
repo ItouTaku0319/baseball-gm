@@ -9,6 +9,7 @@ import type { AtBatLog, GameResult } from "@/models/league";
 import type { Player } from "@/models/player";
 import { POSITION_NAMES } from "@/models/player";
 import { AbilityCell, VelocityCell, PitchList, PlayerAbilityCard } from "@/components/player-ability-card";
+import { BattedBallPopup } from "@/components/batted-ball-trajectory";
 
 // ---- 共有定数・ユーティリティ ----
 
@@ -79,67 +80,84 @@ function AtBatLogTable({
   getName: (id: string) => string;
   maxRows?: number;
 }) {
+  const [selectedLog, setSelectedLog] = useState<AtBatLog | null>(null);
+
   return (
-    <div className="max-h-[600px] overflow-y-auto">
-      <table className="w-full text-xs" style={{ fontVariantNumeric: "tabular-nums" }}>
-        <thead className="sticky top-0 bg-gray-800">
-          <tr className="text-gray-400 border-b border-gray-700">
-            <th className="text-right py-2 px-2">回</th>
-            <th className="text-center py-2 px-2">半</th>
-            <th className="text-left py-2 px-2">打者</th>
-            <th className="text-left py-2 px-2">投手</th>
-            <th className="text-left py-2 px-2">結果</th>
-            <th className="text-left py-2 px-2">打球</th>
-            <th className="text-right py-2 px-2">方向°</th>
-            <th className="text-right py-2 px-2">角度°</th>
-            <th className="text-right py-2 px-2">速度</th>
-            <th className="text-center py-2 px-2">守備</th>
-          </tr>
-        </thead>
-        <tbody>
-          {logs.slice(0, maxRows).map((log, i) => (
-            <tr
-              key={i}
-              className={`border-b border-gray-700/20 ${i % 2 === 1 ? "bg-gray-700/10" : ""}`}
-            >
-              <td className="py-1 px-2 text-right text-gray-400">{log.inning}</td>
-              <td className="py-1 px-2 text-center text-gray-400">
-                {log.halfInning === "top" ? "表" : "裏"}
-              </td>
-              <td className="py-1 px-2 text-gray-200">{getName(log.batterId)}</td>
-              <td className="py-1 px-2 text-gray-400">{getName(log.pitcherId)}</td>
-              <td className={`py-1 px-2 ${resultColor(log.result)}`}>
-                {resultNamesJa[log.result] ?? log.result}
-              </td>
-              <td className="py-1 px-2 text-gray-400">
-                {log.battedBallType ? (battedBallNamesJa[log.battedBallType] ?? log.battedBallType) : "-"}
-              </td>
-              <td className="py-1 px-2 text-right text-gray-300">
-                {log.direction !== null ? log.direction.toFixed(1) : "-"}
-              </td>
-              <td className="py-1 px-2 text-right text-gray-300">
-                {log.launchAngle !== null ? log.launchAngle.toFixed(1) : "-"}
-              </td>
-              <td className="py-1 px-2 text-right text-gray-300">
-                {log.exitVelocity !== null ? log.exitVelocity.toFixed(1) : "-"}
-              </td>
-              <td className="py-1 px-2 text-center text-blue-400">
-                {log.result === "homerun"
-                  ? "-"
-                  : log.fielderPosition !== null
-                    ? (posNamesJa[log.fielderPosition] ?? log.fielderPosition)
-                    : "-"}
-              </td>
+    <>
+      <div className="max-h-[600px] overflow-y-auto">
+        <table className="w-full text-xs" style={{ fontVariantNumeric: "tabular-nums" }}>
+          <thead className="sticky top-0 bg-gray-800">
+            <tr className="text-gray-400 border-b border-gray-700">
+              <th className="text-right py-2 px-2">回</th>
+              <th className="text-center py-2 px-2">半</th>
+              <th className="text-left py-2 px-2">打者</th>
+              <th className="text-left py-2 px-2">投手</th>
+              <th className="text-left py-2 px-2">結果</th>
+              <th className="text-left py-2 px-2">打球</th>
+              <th className="text-right py-2 px-2">方向°</th>
+              <th className="text-right py-2 px-2">角度°</th>
+              <th className="text-right py-2 px-2">速度</th>
+              <th className="text-right py-2 px-2 text-xs text-gray-400">飛距離</th>
+              <th className="text-center py-2 px-2">守備</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {logs.length > maxRows && (
-        <p className="text-center text-gray-500 text-xs py-2">
-          最大{maxRows}件表示 (全{logs.length.toLocaleString()}件)
-        </p>
+          </thead>
+          <tbody>
+            {logs.slice(0, maxRows).map((log, i) => (
+              <tr
+                key={i}
+                onClick={() => log.battedBallType ? setSelectedLog(log) : undefined}
+                className={`border-b border-gray-700/20 ${i % 2 === 1 ? "bg-gray-700/10" : ""} ${log.battedBallType ? "cursor-pointer hover:bg-gray-600/30" : ""}`}
+              >
+                <td className="py-1 px-2 text-right text-gray-400">{log.inning}</td>
+                <td className="py-1 px-2 text-center text-gray-400">
+                  {log.halfInning === "top" ? "表" : "裏"}
+                </td>
+                <td className="py-1 px-2 text-gray-200">{getName(log.batterId)}</td>
+                <td className="py-1 px-2 text-gray-400">{getName(log.pitcherId)}</td>
+                <td className={`py-1 px-2 ${resultColor(log.result)}`}>
+                  {resultNamesJa[log.result] ?? log.result}
+                </td>
+                <td className="py-1 px-2 text-gray-400">
+                  {log.battedBallType ? (battedBallNamesJa[log.battedBallType] ?? log.battedBallType) : "-"}
+                </td>
+                <td className="py-1 px-2 text-right text-gray-300">
+                  {log.direction !== null ? log.direction.toFixed(1) : "-"}
+                </td>
+                <td className="py-1 px-2 text-right text-gray-300">
+                  {log.launchAngle !== null ? log.launchAngle.toFixed(1) : "-"}
+                </td>
+                <td className="py-1 px-2 text-right text-gray-300">
+                  {log.exitVelocity !== null ? log.exitVelocity.toFixed(1) : "-"}
+                </td>
+                <td className="py-1 px-2 text-right text-gray-300">
+                  {log.estimatedDistance != null ? `${Math.round(log.estimatedDistance)}m` : "-"}
+                </td>
+                <td className="py-1 px-2 text-center text-blue-400">
+                  {log.result === "homerun"
+                    ? "-"
+                    : log.fielderPosition !== null
+                      ? (posNamesJa[log.fielderPosition] ?? log.fielderPosition)
+                      : "-"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {logs.length > maxRows && (
+          <p className="text-center text-gray-500 text-xs py-2">
+            最大{maxRows}件表示 (全{logs.length.toLocaleString()}件)
+          </p>
+        )}
+      </div>
+      {selectedLog && selectedLog.battedBallType && (
+        <BattedBallPopup
+          log={selectedLog}
+          batterName={getName(selectedLog.batterId)}
+          pitcherName={getName(selectedLog.pitcherId)}
+          onClose={() => setSelectedLog(null)}
+        />
       )}
-    </div>
+    </>
   );
 }
 
@@ -840,7 +858,7 @@ function DiagnosticTab() {
   // 打席ログCSV出力
   const downloadAtBatCSV = () => {
     if (atBatLogs.length === 0) return;
-    const headers = ["回", "表裏", "打者", "投手", "結果", "打球タイプ", "方向°", "角度°", "速度", "処理守備"];
+    const headers = ["回", "表裏", "打者", "投手", "結果", "打球タイプ", "方向°", "角度°", "速度", "飛距離(m)", "処理守備"];
     const rows = atBatLogs.map((l) => [
       l.inning,
       l.halfInning === "top" ? "表" : "裏",
@@ -851,6 +869,7 @@ function DiagnosticTab() {
       l.direction !== null ? l.direction.toFixed(1) : "",
       l.launchAngle !== null ? l.launchAngle.toFixed(1) : "",
       l.exitVelocity !== null ? l.exitVelocity.toFixed(1) : "",
+      l.estimatedDistance != null ? l.estimatedDistance.toFixed(1) : "",
       l.result === "homerun"
         ? "-"
         : l.fielderPosition !== null
@@ -992,39 +1011,58 @@ function DiagnosticTab() {
               <h3 className="text-base font-semibold mb-4 text-gray-200">
                 打球物理サマリー (BIP: {physicsSummary.totalBalls.toLocaleString()}打球)
               </h3>
-              <div
-                className="grid grid-cols-3 gap-3 text-sm"
-                style={{ fontVariantNumeric: "tabular-nums" }}
-              >
-                <div className="bg-gray-700/50 rounded p-3">
-                  <div className="text-gray-400 text-xs mb-1">平均打球速度</div>
-                  <div className="text-white font-bold">{physicsSummary.avgVelocity.toFixed(1)} km/h</div>
-                </div>
-                <div className="bg-gray-700/50 rounded p-3">
-                  <div className="text-gray-400 text-xs mb-1">平均打球角度</div>
-                  <div className="text-white font-bold">{physicsSummary.avgAngle.toFixed(1)}°</div>
-                </div>
-                <div className="bg-gray-700/50 rounded p-3">
-                  <div className="text-gray-400 text-xs mb-1">平均打球方向</div>
-                  <div className="text-white font-bold">{physicsSummary.avgDirection.toFixed(1)}°</div>
-                </div>
-                <div className="bg-gray-700/50 rounded p-3">
-                  <div className="text-gray-400 text-xs mb-1">プル / センター / 逆方向</div>
-                  <div className="text-white font-bold">
-                    {(physicsSummary.pullPct * 100).toFixed(1)}% /
-                    {(physicsSummary.centerPct * 100).toFixed(1)}% /
-                    {(physicsSummary.oppoPct * 100).toFixed(1)}%
+              {(() => {
+                const ballsWithDist = atBatLogs.filter(l => (l.estimatedDistance ?? 0) > 0);
+                const avgDist = ballsWithDist.length > 0
+                  ? (ballsWithDist.reduce((s, l) => s + (l.estimatedDistance ?? 0), 0) / ballsWithDist.length).toFixed(1)
+                  : "-";
+                const maxDist = ballsWithDist.length > 0
+                  ? Math.max(...ballsWithDist.map(l => l.estimatedDistance ?? 0)).toFixed(1)
+                  : "-";
+                return (
+                  <div
+                    className="grid grid-cols-3 gap-3 text-sm"
+                    style={{ fontVariantNumeric: "tabular-nums" }}
+                  >
+                    <div className="bg-gray-700/50 rounded p-3">
+                      <div className="text-gray-400 text-xs mb-1">平均打球速度</div>
+                      <div className="text-white font-bold">{physicsSummary.avgVelocity.toFixed(1)} km/h</div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-3">
+                      <div className="text-gray-400 text-xs mb-1">平均打球角度</div>
+                      <div className="text-white font-bold">{physicsSummary.avgAngle.toFixed(1)}°</div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-3">
+                      <div className="text-gray-400 text-xs mb-1">平均打球方向</div>
+                      <div className="text-white font-bold">{physicsSummary.avgDirection.toFixed(1)}°</div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-3">
+                      <div className="text-gray-400 text-xs mb-1">プル / センター / 逆方向</div>
+                      <div className="text-white font-bold">
+                        {(physicsSummary.pullPct * 100).toFixed(1)}% /
+                        {(physicsSummary.centerPct * 100).toFixed(1)}% /
+                        {(physicsSummary.oppoPct * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-3">
+                      <div className="text-gray-400 text-xs mb-1">バレル率</div>
+                      <div className="text-yellow-400 font-bold">{(physicsSummary.barrelRate * 100).toFixed(1)}%</div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-3">
+                      <div className="text-gray-400 text-xs mb-1">バレル内HR率</div>
+                      <div className="text-yellow-400 font-bold">{(physicsSummary.barrelHRRate * 100).toFixed(1)}%</div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-3">
+                      <div className="text-gray-400 text-xs mb-1">平均飛距離</div>
+                      <div className="text-white font-bold">{avgDist !== "-" ? `${avgDist}m` : "-"}</div>
+                    </div>
+                    <div className="bg-gray-700/50 rounded p-3">
+                      <div className="text-gray-400 text-xs mb-1">最大飛距離</div>
+                      <div className="text-white font-bold">{maxDist !== "-" ? `${maxDist}m` : "-"}</div>
+                    </div>
                   </div>
-                </div>
-                <div className="bg-gray-700/50 rounded p-3">
-                  <div className="text-gray-400 text-xs mb-1">バレル率</div>
-                  <div className="text-yellow-400 font-bold">{(physicsSummary.barrelRate * 100).toFixed(1)}%</div>
-                </div>
-                <div className="bg-gray-700/50 rounded p-3">
-                  <div className="text-gray-400 text-xs mb-1">バレル内HR率</div>
-                  <div className="text-yellow-400 font-bold">{(physicsSummary.barrelHRRate * 100).toFixed(1)}%</div>
-                </div>
-              </div>
+                );
+              })()}
             </div>
           )}
 

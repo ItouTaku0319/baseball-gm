@@ -112,6 +112,9 @@ export interface AtBatLog {
   launchAngle: number | null;
   exitVelocity: number | null;
   fielderPosition: number | null;
+  estimatedDistance: number | null;
+  basesBeforePlay: [boolean, boolean, boolean] | null;
+  outsBeforePlay: number | null;
 }
 
 /** 1イニングのスコア */

@@ -158,12 +158,16 @@ export function PlayerTooltipOverlay({
   y,
   visible,
   containerRef,
+  seasonYear,
+  teamColor,
 }: {
   player: Player | null;
   x: number;
   y: number;
   visible: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
+  seasonYear?: number;
+  teamColor?: string;
 }) {
   if (!visible || !player) return null;
 
@@ -172,9 +176,9 @@ export function PlayerTooltipOverlay({
   const containerWidth = container?.offsetWidth ?? 800;
   const containerHeight = container?.offsetHeight ?? 600;
 
-  // カード幅は約450px, 高さは約150px想定
-  const cardWidth = 450;
-  const cardHeight = 160;
+  // カード幅は約420px, 高さは約200px想定（今季成績セクション分）
+  const cardWidth = 420;
+  const cardHeight = 200;
 
   let left = x + 12;
   let top = y - 8;
@@ -193,10 +197,20 @@ export function PlayerTooltipOverlay({
   return (
     <div
       className="absolute z-50 pointer-events-none"
-      style={{ left, top }}
+      style={{
+        left,
+        top,
+        animation: "fadeIn 150ms ease-out",
+      }}
     >
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
       <div className="pointer-events-none shadow-xl shadow-black/50 rounded-lg">
-        <PlayerAbilityCard player={player} />
+        <PlayerAbilityCard player={player} seasonYear={seasonYear} teamColor={teamColor} />
       </div>
     </div>
   );

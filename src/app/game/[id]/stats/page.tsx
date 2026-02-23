@@ -11,11 +11,11 @@ import { usePlayerTooltip, PlayerTooltipTrigger, PlayerTooltipOverlay } from "@/
 // ── Sort types ──
 
 type BattingSortBasic = "avg" | "homeRuns" | "rbi" | "stolenBases";
-type BattingSortAdv = "ops" | "woba" | "wrcPlus" | "war";
+type BattingSortAdv = "ops" | "woba" | "wrcPlus" | "opsPlus" | "war";
 type BattingSort = BattingSortBasic | BattingSortAdv;
 
 type PitchingSortBasic = "era" | "wins" | "strikeouts" | "saves";
-type PitchingSortAdv = "fip" | "xfip" | "war" | "k9" | "kPerBb" | "gbPct";
+type PitchingSortAdv = "fip" | "xfip" | "war" | "k9" | "kPerBb" | "gbPct" | "eraPlus";
 type PitchingSort = PitchingSortBasic | PitchingSortAdv;
 
 type FieldingSortKey = "games" | "fieldingPct" | "putOuts" | "assists" | "errors" | "uzr";
@@ -62,6 +62,7 @@ interface BatterRow {
   woba: number;
   wRAA: number;
   wrcPlus: number;
+  opsPlus: number;
   war: number;
 }
 
@@ -94,6 +95,7 @@ interface PitcherRow {
   kPct: number;
   bbPct: number;
   fip: number;
+  eraPlus: number;
   war: number;
   // 打球系指標
   gbPct: number;
@@ -228,13 +230,18 @@ function SortTh({
   sortKey,
   current,
   onSort,
+  isAscending,
+  title,
 }: {
   label: string;
   sortKey: string;
   current: string;
   onSort: (k: string) => void;
+  isAscending: boolean;
+  title?: string;
 }) {
   const active = current === sortKey;
+  const arrow = active ? (isAscending ? " \u25B2" : " \u25BC") : " \u25BD";
   return (
     <th
       className={`${S.thBase} text-right cursor-pointer select-none hover:text-blue-300 ${
@@ -243,9 +250,10 @@ function SortTh({
           : `${S.thBg} text-gray-400`
       }`}
       onClick={() => onSort(sortKey)}
+      title={title}
     >
       {label}
-      {active ? " \u25BC" : " \u25BD"}
+      {arrow}
     </th>
   );
 }
@@ -253,13 +261,16 @@ function SortTh({
 function Th({
   children,
   className = "",
+  title,
 }: {
   children: string;
   className?: string;
+  title?: string;
 }) {
   return (
     <th
       className={`${S.thBase} ${S.thBg} text-right text-gray-400 ${className}`}
+      title={title}
     >
       {children}
     </th>
@@ -312,6 +323,13 @@ function EmptyRow({ cols }: { cols: number }) {
   );
 }
 
+// ── デフォルトソート方向判定 ──
+
+/** trueを返すキーは昇順がデフォルト */
+function isAscDefault(key: string): boolean {
+  return key === "era" || key === "fip" || key === "xfip" || key === "errors";
+}
+
 // ── Main component ──
 
 export default function StatsPage() {
@@ -321,8 +339,11 @@ export default function StatsPage() {
   const [subTab, setSubTab] = useState<"basic" | "advanced">("basic");
   const [leagueFilter, setLeagueFilter] = useState<LeagueFilter>("myTeam");
   const [battingSort, setBattingSort] = useState<BattingSort>("avg");
+  const [battingSortAsc, setBattingSortAsc] = useState(false);
   const [pitchingSort, setPitchingSort] = useState<PitchingSort>("era");
+  const [pitchingSortAsc, setPitchingSortAsc] = useState(true);
   const [fieldingSort, setFieldingSort] = useState<FieldingSortKey>("games");
+  const [fieldingSortAsc, setFieldingSortAsc] = useState(false);
   const [qualifiedOnly, setQualifiedOnly] = useState(true);
 
   useEffect(() => {
@@ -380,6 +401,12 @@ export default function StatsPage() {
     // First pass: collect raw data
     let totalWobaNum = 0;
     let totalPA = 0;
+    let totalHitsForOBP = 0;
+    let totalWalksForOBP = 0;
+    let totalHBPForOBP = 0;
+    let totalPAForOBP = 0;
+    let totalBasesForSLG = 0;
+    let totalABForSLG = 0;
 
     for (const [teamId, team] of Object.entries(game.teams)) {
       for (const player of team.roster) {
@@ -413,6 +440,12 @@ export default function StatsPage() {
 
         totalWobaNum += wobaNum;
         totalPA += pa;
+        totalHitsForOBP += s.hits;
+        totalWalksForOBP += s.walks;
+        totalHBPForOBP += s.hitByPitch || 0;
+        totalPAForOBP += pa;
+        totalBasesForSLG += totalBases;
+        totalABForSLG += s.atBats;
 
         rows.push({
           playerId: player.id,
@@ -452,6 +485,7 @@ export default function StatsPage() {
           groundedIntoDP: s.groundedIntoDP || 0,
           wRAA: 0, // computed below
           wrcPlus: 0, // computed below
+          opsPlus: 0, // computed below
           war: 0, // computed below
         });
       }
@@ -460,8 +494,12 @@ export default function StatsPage() {
     // League averages
     const lgW = totalPA > 0 ? totalWobaNum / totalPA : 0;
     const lgRPA = lgW / WOBA_SCALE;
+    const lgOBP = totalPAForOBP > 0
+      ? (totalHitsForOBP + totalWalksForOBP + totalHBPForOBP) / totalPAForOBP
+      : 0;
+    const lgSLG = totalABForSLG > 0 ? totalBasesForSLG / totalABForSLG : 0;
 
-    // Second pass: compute wRAA, wRC+ and WAR
+    // Second pass: compute wRAA, wRC+, OPS+ and WAR
     for (const r of rows) {
       const wRAA = ((r.woba - lgW) / WOBA_SCALE) * r.pa;
       r.wRAA = wRAA;
@@ -469,6 +507,9 @@ export default function StatsPage() {
         lgRPA > 0
           ? (((r.woba - lgW) / WOBA_SCALE + lgRPA) / lgRPA) * 100
           : 100;
+      r.opsPlus = (lgOBP > 0 && lgSLG > 0)
+        ? Math.round(((r.obp / lgOBP) + (r.slg / lgSLG) - 1) * 100)
+        : 100;
       const replacement = (r.pa / 600) * 20;
       r.war = (wRAA + replacement) / 10;
     }
@@ -561,6 +602,9 @@ export default function StatsPage() {
         const babipDenom = tbf - s.strikeouts - s.homeRunsAllowed - s.walks - hbp;
         const babip = babipDenom > 0 ? (s.hits - s.homeRunsAllowed) / babipDenom : 0;
 
+        // ERA+: リーグ平均防御率を個人防御率で割った値×100（高いほど良い）
+        const eraPlus = era > 0 ? Math.round((lgERA / era) * 100) : 0;
+
         rows.push({
           playerId: player.id,
           name: player.name,
@@ -588,6 +632,7 @@ export default function StatsPage() {
           kPct,
           bbPct,
           fip,
+          eraPlus,
           war,
           gbPct,
           fbPct,
@@ -712,39 +757,36 @@ export default function StatsPage() {
     if (qualifiedOnly && (battingSort === "avg" || battingSort === "woba" || battingSort === "wrcPlus")) {
       rows = rows.filter(isQualifiedBatter);
     }
-    const asc = false; // all batting sorts are descending
     return [...rows].sort((a, b) => {
       const va = a[battingSort as keyof BatterRow] as number;
       const vb = b[battingSort as keyof BatterRow] as number;
-      return asc ? va - vb : vb - va;
+      return battingSortAsc ? va - vb : vb - va;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batters, leagueFilter, qualifiedOnly, battingSort, teamGames, game?.myTeamId]);
+  }, [batters, leagueFilter, qualifiedOnly, battingSort, battingSortAsc, teamGames, game?.myTeamId]);
 
   const filteredPitchers = useMemo(() => {
     let rows = applyLeagueFilter(pitchers);
-    if (qualifiedOnly && (pitchingSort === "era" || pitchingSort === "fip")) {
+    if (qualifiedOnly && (pitchingSort === "era" || pitchingSort === "fip" || pitchingSort === "eraPlus")) {
       rows = rows.filter(isQualifiedPitcher);
     }
-    const ascending = pitchingSort === "era" || pitchingSort === "fip" || pitchingSort === "xfip";
     return [...rows].sort((a, b) => {
       const va = a[pitchingSort as keyof PitcherRow] as number;
       const vb = b[pitchingSort as keyof PitcherRow] as number;
-      return ascending ? va - vb : vb - va;
+      return pitchingSortAsc ? va - vb : vb - va;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pitchers, leagueFilter, qualifiedOnly, pitchingSort, teamGames, game?.myTeamId]);
+  }, [pitchers, leagueFilter, qualifiedOnly, pitchingSort, pitchingSortAsc, teamGames, game?.myTeamId]);
 
   const filteredFielders = useMemo(() => {
     const rows = applyLeagueFilter(fielders);
-    const ascending = fieldingSort === "errors";
     return [...rows].sort((a, b) => {
       const va = a[fieldingSort as keyof FielderRow] as number;
       const vb = b[fieldingSort as keyof FielderRow] as number;
-      return ascending ? va - vb : vb - va; // errors は昇順、他（uzr含む）は降順
+      return fieldingSortAsc ? va - vb : vb - va;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fielders, leagueFilter, fieldingSort, game?.myTeamId]);
+  }, [fielders, leagueFilter, fieldingSort, fieldingSortAsc, game?.myTeamId]);
 
   // ── Title leaders ──
 
@@ -815,28 +857,72 @@ export default function StatsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batters, pitchers, teamGames]);
 
+  // ── ソートハンドラ ──
+
+  const handleBattingSort = (key: string) => {
+    const k = key as BattingSort;
+    if (k === battingSort) {
+      setBattingSortAsc((prev) => !prev);
+    } else {
+      setBattingSort(k);
+      setBattingSortAsc(isAscDefault(key));
+    }
+  };
+
+  const handlePitchingSort = (key: string) => {
+    const k = key as PitchingSort;
+    if (k === pitchingSort) {
+      setPitchingSortAsc((prev) => !prev);
+    } else {
+      setPitchingSort(k);
+      setPitchingSortAsc(isAscDefault(key));
+    }
+  };
+
+  const handleFieldingSort = (key: string) => {
+    const k = key as FieldingSortKey;
+    if (k === fieldingSort) {
+      setFieldingSortAsc((prev) => !prev);
+    } else {
+      setFieldingSort(k);
+      setFieldingSortAsc(isAscDefault(key));
+    }
+  };
+
   // ── Sub-tab switch handler ──
 
   const handleSubTab = (st: "basic" | "advanced") => {
     setSubTab(st);
     if (tab === "batting") {
-      setBattingSort(st === "basic" ? "avg" : "war");
+      const newKey = st === "basic" ? "avg" : "war";
+      setBattingSort(newKey);
+      setBattingSortAsc(isAscDefault(newKey));
     } else {
-      setPitchingSort(st === "basic" ? "era" : "fip");
+      const newKey = st === "basic" ? "era" : "fip";
+      setPitchingSort(newKey);
+      setPitchingSortAsc(isAscDefault(newKey));
     }
   };
 
   const handleMainTab = (t: "batting" | "pitching" | "fielding") => {
     setTab(t);
     setSubTab("basic");
-    if (t === "batting") setBattingSort("avg");
-    else if (t === "pitching") setPitchingSort("era");
-    else setFieldingSort("games");
+    if (t === "batting") {
+      setBattingSort("avg");
+      setBattingSortAsc(false);
+    } else if (t === "pitching") {
+      setPitchingSort("era");
+      setPitchingSortAsc(true);
+    } else {
+      setFieldingSort("games");
+      setFieldingSortAsc(false);
+    }
   };
 
   if (!game) return <div className="p-8 text-gray-400">読み込み中...</div>;
 
   const hasStats = batters.length > 0 || pitchers.length > 0;
+  const seasonYear = game.currentSeason.year;
 
   return (
     <div className="max-w-7xl mx-auto p-6">
@@ -1004,17 +1090,21 @@ export default function StatsPage() {
                 <BattingBasicTable
                   rows={filteredBatters}
                   sort={battingSort as BattingSortBasic}
-                  onSort={(s) => setBattingSort(s)}
+                  sortAsc={battingSortAsc}
+                  onSort={handleBattingSort}
                   myTeamId={game.myTeamId}
                   playerMap={playerMap}
+                  seasonYear={seasonYear}
                 />
               ) : (
                 <BattingAdvTable
                   rows={filteredBatters}
                   sort={battingSort as BattingSortAdv}
-                  onSort={(s) => setBattingSort(s)}
+                  sortAsc={battingSortAsc}
+                  onSort={handleBattingSort}
                   myTeamId={game.myTeamId}
                   playerMap={playerMap}
+                  seasonYear={seasonYear}
                 />
               )
             ) : tab === "pitching" ? (
@@ -1022,26 +1112,32 @@ export default function StatsPage() {
                 <PitchingBasicTable
                   rows={filteredPitchers}
                   sort={pitchingSort as PitchingSortBasic}
-                  onSort={(s) => setPitchingSort(s)}
+                  sortAsc={pitchingSortAsc}
+                  onSort={handlePitchingSort}
                   myTeamId={game.myTeamId}
                   playerMap={playerMap}
+                  seasonYear={seasonYear}
                 />
               ) : (
                 <PitchingAdvTable
                   rows={filteredPitchers}
                   sort={pitchingSort as PitchingSortAdv}
-                  onSort={(s) => setPitchingSort(s)}
+                  sortAsc={pitchingSortAsc}
+                  onSort={handlePitchingSort}
                   myTeamId={game.myTeamId}
                   playerMap={playerMap}
+                  seasonYear={seasonYear}
                 />
               )
             ) : (
               <FieldingTable
                 rows={filteredFielders}
                 sort={fieldingSort}
-                onSort={(s) => setFieldingSort(s)}
+                sortAsc={fieldingSortAsc}
+                onSort={handleFieldingSort}
                 myTeamId={game.myTeamId}
                 playerMap={playerMap}
+                seasonYear={seasonYear}
               />
             )}
           </div>
@@ -1056,17 +1152,24 @@ export default function StatsPage() {
 function BattingBasicTable({
   rows,
   sort,
+  sortAsc,
   onSort,
   myTeamId,
   playerMap,
+  seasonYear,
 }: {
   rows: BatterRow[];
   sort: BattingSortBasic;
-  onSort: (s: BattingSortBasic) => void;
+  sortAsc: boolean;
+  onSort: (s: string) => void;
   myTeamId: string;
   playerMap: Map<string, Player>;
+  seasonYear: number;
 }) {
   const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
+  const tooltipTeamColor = tooltip.playerId
+    ? rows.find(r => r.playerId === tooltip.playerId)?.teamColor
+    : undefined;
   return (
     <div ref={containerRef} className={S.wrapper} style={{ position: "relative" }} onTouchMove={handleTouchMove}>
       <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -1075,25 +1178,25 @@ function BattingBasicTable({
             <RankTh />
             <NameTh />
             <TeamTh />
-            <Th>試合</Th>
-            <Th>打席</Th>
-            <Th>打数</Th>
-            <Th>安打</Th>
-            <SortTh label="打率" sortKey="avg" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
-            <SortTh label="本塁打" sortKey="homeRuns" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
-            <SortTh label="打点" sortKey="rbi" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
-            <Th>得点</Th>
-            <SortTh label="盗塁" sortKey="stolenBases" current={sort} onSort={(k) => onSort(k as BattingSortBasic)} />
-            <Th>盗塁死</Th>
-            <Th>盗塁率</Th>
-            <Th>四球</Th>
-            <Th>三振</Th>
-            <Th>出塁率</Th>
-            <Th>長打率</Th>
-            <Th>OPS</Th>
-            <Th>死球</Th>
-            <Th>犠飛</Th>
-            <Th>併殺</Th>
+            <Th title="出場試合数">試合</Th>
+            <Th title="打席数">打席</Th>
+            <Th title="打数">打数</Th>
+            <Th title="安打数">安打</Th>
+            <SortTh label="打率" sortKey="avg" current={sort} onSort={onSort} isAscending={sortAsc} title="安打 / 打数" />
+            <SortTh label="本塁打" sortKey="homeRuns" current={sort} onSort={onSort} isAscending={sortAsc} title="本塁打数" />
+            <SortTh label="打点" sortKey="rbi" current={sort} onSort={onSort} isAscending={sortAsc} title="打点数" />
+            <Th title="得点数">得点</Th>
+            <SortTh label="盗塁" sortKey="stolenBases" current={sort} onSort={onSort} isAscending={sortAsc} title="盗塁数" />
+            <Th title="盗塁死回数">盗塁死</Th>
+            <Th title="盗塁成功率 = 盗塁 / (盗塁+盗塁死)">盗塁率</Th>
+            <Th title="四球数">四球</Th>
+            <Th title="三振数">三振</Th>
+            <Th title="出塁率 = (安打+四球+死球) / 打席">出塁率</Th>
+            <Th title="長打率 = 塁打数 / 打数">長打率</Th>
+            <Th title="出塁率 + 長打率">OPS</Th>
+            <Th title="死球数">死球</Th>
+            <Th title="犠牲フライ数">犠飛</Th>
+            <Th title="併殺打数">併殺</Th>
           </tr>
         </thead>
         <tbody>
@@ -1143,6 +1246,8 @@ function BattingBasicTable({
         y={tooltip.y}
         visible={tooltip.visible}
         containerRef={containerRef}
+        seasonYear={seasonYear}
+        teamColor={tooltipTeamColor}
       />
     </div>
   );
@@ -1153,17 +1258,24 @@ function BattingBasicTable({
 function BattingAdvTable({
   rows,
   sort,
+  sortAsc,
   onSort,
   myTeamId,
   playerMap,
+  seasonYear,
 }: {
   rows: BatterRow[];
   sort: BattingSortAdv;
-  onSort: (s: BattingSortAdv) => void;
+  sortAsc: boolean;
+  onSort: (s: string) => void;
   myTeamId: string;
   playerMap: Map<string, Player>;
+  seasonYear: number;
 }) {
   const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
+  const tooltipTeamColor = tooltip.playerId
+    ? rows.find(r => r.playerId === tooltip.playerId)?.teamColor
+    : undefined;
   return (
     <div ref={containerRef} className={S.wrapper} style={{ position: "relative" }} onTouchMove={handleTouchMove}>
       <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -1172,22 +1284,23 @@ function BattingAdvTable({
             <RankTh />
             <NameTh />
             <TeamTh />
-            <Th>打席</Th>
-            <Th>K%</Th>
-            <Th>BB%</Th>
-            <Th>BB/K</Th>
-            <Th>ISO</Th>
-            <Th>BABIP</Th>
-            <SortTh label="OPS" sortKey="ops" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
-            <SortTh label="wOBA" sortKey="woba" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
-            <Th>wRAA</Th>
-            <SortTh label="wRC+" sortKey="wrcPlus" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
-            <SortTh label="WAR" sortKey="war" current={sort} onSort={(k) => onSort(k as BattingSortAdv)} />
+            <Th title="打席数">打席</Th>
+            <Th title="三振率 = 三振 / 打席">K%</Th>
+            <Th title="四球率 = 四球 / 打席">BB%</Th>
+            <Th title="四球 / 三振 比率">BB/K</Th>
+            <Th title="長打力指標 = 長打率 - 打率">ISO</Th>
+            <Th title="インプレー打率 = (安打-本塁打) / (打数-三振-本塁打)">BABIP</Th>
+            <SortTh label="OPS" sortKey="ops" current={sort} onSort={onSort} isAscending={sortAsc} title="出塁率 + 長打率" />
+            <SortTh label="wOBA" sortKey="woba" current={sort} onSort={onSort} isAscending={sortAsc} title="打撃の総合指標（各打撃結果にリニアウェイトを付与）" />
+            <Th title="リーグ平均打者に対する得点貢献">wRAA</Th>
+            <SortTh label="wRC+" sortKey="wrcPlus" current={sort} onSort={onSort} isAscending={sortAsc} title="リーグ平均を100とした打撃総合力" />
+            <SortTh label="OPS+" sortKey="opsPlus" current={sort} onSort={onSort} isAscending={sortAsc} title="リーグ平均を100としたOPS（高いほど良い）" />
+            <SortTh label="WAR" sortKey="war" current={sort} onSort={onSort} isAscending={sortAsc} title="代替可能選手に対する勝利貢献数" />
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <EmptyRow cols={14} />
+            <EmptyRow cols={15} />
           ) : (
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
@@ -1214,6 +1327,7 @@ function BattingAdvTable({
                   {r.wRAA > 0 ? "+" : ""}{fmtDec1(r.wRAA)}
                 </td>
                 <td className={`${S.cell} ${sort === "wrcPlus" ? S.highlight : ""}`}>{Math.round(r.wrcPlus)}</td>
+                <td className={`${S.cell} font-mono ${sort === "opsPlus" ? S.highlight : ""} ${r.opsPlus >= 100 ? "text-green-400" : "text-red-400"}`}>{r.opsPlus}</td>
                 <td className={`${S.cellMono} ${sort === "war" ? S.highlight : ""}`}>{fmtWar(r.war)}</td>
               </tr>
             ))
@@ -1226,6 +1340,8 @@ function BattingAdvTable({
         y={tooltip.y}
         visible={tooltip.visible}
         containerRef={containerRef}
+        seasonYear={seasonYear}
+        teamColor={tooltipTeamColor}
       />
     </div>
   );
@@ -1236,17 +1352,24 @@ function BattingAdvTable({
 function PitchingBasicTable({
   rows,
   sort,
+  sortAsc,
   onSort,
   myTeamId,
   playerMap,
+  seasonYear,
 }: {
   rows: PitcherRow[];
   sort: PitchingSortBasic;
-  onSort: (s: PitchingSortBasic) => void;
+  sortAsc: boolean;
+  onSort: (s: string) => void;
   myTeamId: string;
   playerMap: Map<string, Player>;
+  seasonYear: number;
 }) {
   const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
+  const tooltipTeamColor = tooltip.playerId
+    ? rows.find(r => r.playerId === tooltip.playerId)?.teamColor
+    : undefined;
   return (
     <div ref={containerRef} className={S.wrapper} style={{ position: "relative" }} onTouchMove={handleTouchMove}>
       <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -1255,17 +1378,17 @@ function PitchingBasicTable({
             <RankTh />
             <NameTh />
             <TeamTh />
-            <Th>試合</Th>
-            <SortTh label="勝" sortKey="wins" current={sort} onSort={(k) => onSort(k as PitchingSortBasic)} />
-            <Th>敗</Th>
-            <SortTh label="防御率" sortKey="era" current={sort} onSort={(k) => onSort(k as PitchingSortBasic)} />
-            <Th>投球回</Th>
-            <SortTh label="奪三振" sortKey="strikeouts" current={sort} onSort={(k) => onSort(k as PitchingSortBasic)} />
-            <Th>四球</Th>
-            <Th>被安打</Th>
-            <Th>被本塁打</Th>
-            <Th>WHIP</Th>
-            <SortTh label="セーブ" sortKey="saves" current={sort} onSort={(k) => onSort(k as PitchingSortBasic)} />
+            <Th title="登板試合数">試合</Th>
+            <SortTh label="勝" sortKey="wins" current={sort} onSort={onSort} isAscending={sortAsc} title="勝利数" />
+            <Th title="敗戦数">敗</Th>
+            <SortTh label="防御率" sortKey="era" current={sort} onSort={onSort} isAscending={sortAsc} title="9イニングあたりの自責点" />
+            <Th title="投球イニング数">投球回</Th>
+            <SortTh label="奪三振" sortKey="strikeouts" current={sort} onSort={onSort} isAscending={sortAsc} title="奪三振数" />
+            <Th title="与四球数">四球</Th>
+            <Th title="被安打数">被安打</Th>
+            <Th title="被本塁打数">被本塁打</Th>
+            <Th title="(被安打+与四球) / 投球回">WHIP</Th>
+            <SortTh label="セーブ" sortKey="saves" current={sort} onSort={onSort} isAscending={sortAsc} title="セーブ数" />
           </tr>
         </thead>
         <tbody>
@@ -1307,6 +1430,8 @@ function PitchingBasicTable({
         y={tooltip.y}
         visible={tooltip.visible}
         containerRef={containerRef}
+        seasonYear={seasonYear}
+        teamColor={tooltipTeamColor}
       />
     </div>
   );
@@ -1317,17 +1442,24 @@ function PitchingBasicTable({
 function PitchingAdvTable({
   rows,
   sort,
+  sortAsc,
   onSort,
   myTeamId,
   playerMap,
+  seasonYear,
 }: {
   rows: PitcherRow[];
   sort: PitchingSortAdv;
-  onSort: (s: PitchingSortAdv) => void;
+  sortAsc: boolean;
+  onSort: (s: string) => void;
   myTeamId: string;
   playerMap: Map<string, Player>;
+  seasonYear: number;
 }) {
   const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
+  const tooltipTeamColor = tooltip.playerId
+    ? rows.find(r => r.playerId === tooltip.playerId)?.teamColor
+    : undefined;
   return (
     <div ref={containerRef} className={S.wrapper} style={{ position: "relative" }} onTouchMove={handleTouchMove}>
       <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -1336,29 +1468,30 @@ function PitchingAdvTable({
             <RankTh />
             <NameTh />
             <TeamTh />
-            <Th>投球回</Th>
-            <SortTh label="K/9" sortKey="k9" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
-            <Th>BB/9</Th>
-            <Th>HR/9</Th>
-            <SortTh label="K/BB" sortKey="kPerBb" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
-            <Th>K%</Th>
-            <Th>BB%</Th>
-            <SortTh label="FIP" sortKey="fip" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
-            <SortTh label="xFIP" sortKey="xfip" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
-            <Th>WHIP</Th>
-            <Th>BABIP</Th>
-            <SortTh label="WAR" sortKey="war" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
-            <SortTh label="GB%" sortKey="gbPct" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
-            <Th>FB%</Th>
-            <Th>LD%</Th>
-            <Th>GB/FB</Th>
-            <Th>IFFB%</Th>
-            <Th>HR/FB</Th>
+            <Th title="投球イニング数">投球回</Th>
+            <SortTh label="K/9" sortKey="k9" current={sort} onSort={onSort} isAscending={sortAsc} title="9イニングあたり奪三振数" />
+            <Th title="9イニングあたり与四球数">BB/9</Th>
+            <Th title="9イニングあたり被本塁打数">HR/9</Th>
+            <SortTh label="K/BB" sortKey="kPerBb" current={sort} onSort={onSort} isAscending={sortAsc} title="奪三振 / 与四球 比率" />
+            <Th title="三振率 = 奪三振 / 対戦打者数">K%</Th>
+            <Th title="四球率 = 与四球 / 対戦打者数">BB%</Th>
+            <SortTh label="FIP" sortKey="fip" current={sort} onSort={onSort} isAscending={sortAsc} title="被本塁打・与四球・奪三振から算出する投手純粋指標" />
+            <SortTh label="ERA+" sortKey="eraPlus" current={sort} onSort={onSort} isAscending={sortAsc} title="リーグ平均を100としたERA（高いほど良い）" />
+            <SortTh label="xFIP" sortKey="xfip" current={sort} onSort={onSort} isAscending={sortAsc} title="FIPの被本塁打をリーグ平均HR/FB率で置換" />
+            <Th title="(被安打+与四球) / 投球回">WHIP</Th>
+            <Th title="インプレー打率 = (被安打-被本塁打) / (対戦打者数-奪三振-被本塁打-四球-死球)">BABIP</Th>
+            <SortTh label="WAR" sortKey="war" current={sort} onSort={onSort} isAscending={sortAsc} title="代替可能選手に対する勝利貢献数" />
+            <SortTh label="GB%" sortKey="gbPct" current={sort} onSort={onSort} isAscending={sortAsc} title="ゴロ率（全打球に対するゴロの割合）" />
+            <Th title="フライ率（全打球に対するフライの割合）">FB%</Th>
+            <Th title="ライナー率（全打球に対するライナーの割合）">LD%</Th>
+            <Th title="ゴロ / フライ 比率">GB/FB</Th>
+            <Th title="内野フライ率 = 内野フライ / (フライ+内野フライ)">IFFB%</Th>
+            <Th title="本塁打 / フライ 比率">HR/FB</Th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <EmptyRow cols={21} />
+            <EmptyRow cols={22} />
           ) : (
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
@@ -1381,6 +1514,7 @@ function PitchingAdvTable({
                 <td className={S.cell}>{fmtPct(r.kPct)}</td>
                 <td className={S.cell}>{fmtPct(r.bbPct)}</td>
                 <td className={`${S.cellMono} ${sort === "fip" ? S.highlight : ""}`}>{fmtDec2(r.fip)}</td>
+                <td className={`${S.cell} font-mono ${sort === "eraPlus" ? S.highlight : ""} ${r.eraPlus >= 100 ? "text-green-400" : "text-red-400"}`}>{r.eraPlus}</td>
                 <td className={`${S.cellMono} ${sort === "xfip" ? S.highlight : ""}`}>{fmtDec2(r.xfip)}</td>
                 <td className={S.cellMono}>{fmtDec2(r.whip)}</td>
                 <td className={S.cellMono}>{fmtRate(r.babip)}</td>
@@ -1402,6 +1536,8 @@ function PitchingAdvTable({
         y={tooltip.y}
         visible={tooltip.visible}
         containerRef={containerRef}
+        seasonYear={seasonYear}
+        teamColor={tooltipTeamColor}
       />
     </div>
   );
@@ -1412,17 +1548,24 @@ function PitchingAdvTable({
 function FieldingTable({
   rows,
   sort,
+  sortAsc,
   onSort,
   myTeamId,
   playerMap,
+  seasonYear,
 }: {
   rows: FielderRow[];
   sort: FieldingSortKey;
-  onSort: (s: FieldingSortKey) => void;
+  sortAsc: boolean;
+  onSort: (s: string) => void;
   myTeamId: string;
   playerMap: Map<string, Player>;
+  seasonYear: number;
 }) {
   const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
+  const tooltipTeamColor = tooltip.playerId
+    ? rows.find(r => r.playerId === tooltip.playerId)?.teamColor
+    : undefined;
   return (
     <div ref={containerRef} className={S.wrapper} style={{ position: "relative" }} onTouchMove={handleTouchMove}>
       <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -1431,15 +1574,15 @@ function FieldingTable({
             <RankTh />
             <NameTh />
             <TeamTh />
-            <Th>守備</Th>
-            <SortTh label="試合" sortKey="games" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
-            <SortTh label="刺殺" sortKey="putOuts" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
-            <SortTh label="補殺" sortKey="assists" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
-            <SortTh label="失策" sortKey="errors" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
-            <Th>守備機会</Th>
-            <SortTh label="守備率" sortKey="fieldingPct" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
-            <Th>RF</Th>
-            <SortTh label="UZR" sortKey="uzr" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
+            <Th title="守備ポジション">守備</Th>
+            <SortTh label="試合" sortKey="games" current={sort} onSort={onSort} isAscending={sortAsc} title="出場試合数" />
+            <SortTh label="刺殺" sortKey="putOuts" current={sort} onSort={onSort} isAscending={sortAsc} title="直接アウトを記録した回数" />
+            <SortTh label="補殺" sortKey="assists" current={sort} onSort={onSort} isAscending={sortAsc} title="アウトに貢献した送球回数" />
+            <SortTh label="失策" sortKey="errors" current={sort} onSort={onSort} isAscending={sortAsc} title="エラー回数" />
+            <Th title="刺殺+補殺+失策">守備機会</Th>
+            <SortTh label="守備率" sortKey="fieldingPct" current={sort} onSort={onSort} isAscending={sortAsc} title="(刺殺+補殺) / (刺殺+補殺+失策)" />
+            <Th title="レンジファクター = (刺殺+補殺) / 試合 × 9">RF</Th>
+            <SortTh label="UZR" sortKey="uzr" current={sort} onSort={onSort} isAscending={sortAsc} title="守備による失点防止貢献（プラスは平均以上）" />
           </tr>
         </thead>
         <tbody>
@@ -1481,6 +1624,8 @@ function FieldingTable({
         y={tooltip.y}
         visible={tooltip.visible}
         containerRef={containerRef}
+        seasonYear={seasonYear}
+        teamColor={tooltipTeamColor}
       />
     </div>
   );
