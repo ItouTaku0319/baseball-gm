@@ -387,6 +387,21 @@ function getOrCreateBatterStats(
   return stats;
 }
 
+/** 守備スタッツ（刺殺/補殺/失策）を記録するヘルパー */
+function recordFielding(
+  statsMap: Map<string, PlayerGameStats>,
+  fielderMap: Map<FielderPosition, Player>,
+  pos: FielderPosition,
+  type: "putOut" | "assist" | "error"
+): void {
+  const fielder = fielderMap.get(pos);
+  if (!fielder || fielder.id === "dummy") return;
+  const stats = getOrCreateBatterStats(statsMap, fielder.id);
+  if (type === "putOut") stats.putOuts = (stats.putOuts ?? 0) + 1;
+  else if (type === "assist") stats.assists = (stats.assists ?? 0) + 1;
+  else stats.errors = (stats.errors ?? 0) + 1;
+}
+
 /**
  * 打席結果に応じて走者を進塁させ、得点を計算する
  */
@@ -487,7 +502,8 @@ function attemptStolenBases(
   bases: BaseRunners,
   outs: number,
   catcher: Player,
-  batterStatsMap: Map<string, PlayerGameStats>
+  batterStatsMap: Map<string, PlayerGameStats>,
+  fielderMap: Map<FielderPosition, Player>
 ): { bases: BaseRunners; additionalOuts: number } {
   const newBases = { ...bases };
   let additionalOuts = 0;
@@ -521,6 +537,9 @@ function attemptStolenBases(
         newBases.first = null;
         bs.caughtStealing++;
         additionalOuts++;
+        // 盗塁死: 捕手にA、SSにPO
+        recordFielding(batterStatsMap, fielderMap, 2, "assist");
+        recordFielding(batterStatsMap, fielderMap, 6, "putOut");
       }
     }
   }
@@ -550,6 +569,9 @@ function attemptStolenBases(
         newBases.second = null;
         bs.caughtStealing++;
         additionalOuts++;
+        // 盗塁死: 捕手にA、3BにPO
+        recordFielding(batterStatsMap, fielderMap, 2, "assist");
+        recordFielding(batterStatsMap, fielderMap, 5, "putOut");
       }
     }
   }
@@ -628,7 +650,7 @@ function simulateHalfInning(
   while (outs < 3) {
     // 盗塁試行 (打席前)
     if (bases.first || bases.second) {
-      const stealResult = attemptStolenBases(bases, outs, catcher, batterStatsMap);
+      const stealResult = attemptStolenBases(bases, outs, catcher, batterStatsMap, fielderMap);
       bases = stealResult.bases;
       outs += stealResult.additionalOuts;
       if (outs >= 3) break;
@@ -645,12 +667,17 @@ function simulateHalfInning(
         bs.atBats++;
         bs.strikeouts++;
         pitcherLog.strikeouts++;
+        recordFielding(batterStatsMap, fielderMap, 2, "putOut");
         break;
 
       case "groundout":
         outs++;
         bs.atBats++;
         pitcherLog.groundBallOuts = (pitcherLog.groundBallOuts ?? 0) + 1;
+        if (detail.fielderPosition) {
+          recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "assist");
+          recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+        }
         break;
 
       case "flyout":
@@ -658,11 +685,17 @@ function simulateHalfInning(
         outs++;
         bs.atBats++;
         pitcherLog.flyBallOuts = (pitcherLog.flyBallOuts ?? 0) + 1;
+        if (detail.fielderPosition) {
+          recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "putOut");
+        }
         break;
 
       case "lineout":
         outs++;
         bs.atBats++;
+        if (detail.fielderPosition) {
+          recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "putOut");
+        }
         break;
 
       case "doublePlay": {
@@ -670,6 +703,24 @@ function simulateHalfInning(
         bs.atBats++;
         bs.groundedIntoDP = (bs.groundedIntoDP ?? 0) + 1;
         pitcherLog.groundBallOuts = (pitcherLog.groundBallOuts ?? 0) + 1;
+        if (detail.fielderPosition) {
+          const dpPos = detail.fielderPosition;
+          recordFielding(batterStatsMap, fielderMap, dpPos, "assist");
+          if (dpPos === 4) {
+            // 4-6-3: 2B→SSにPO(フォースアウト)→1BにPO
+            recordFielding(batterStatsMap, fielderMap, 6, "putOut");
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          } else if (dpPos === 6) {
+            // 6-4-3: SS→2BにPO(フォースアウト)→1BにPO
+            recordFielding(batterStatsMap, fielderMap, 4, "putOut");
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          } else {
+            // その他(5-6-3等): 処理野手A→SSにA→2BにPO→1BにPO
+            recordFielding(batterStatsMap, fielderMap, 6, "assist");
+            recordFielding(batterStatsMap, fielderMap, 4, "putOut");
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          }
+        }
         const dpAdvance = advanceRunners(bases, result, batter);
         bases = dpAdvance.bases;
         break;
@@ -680,6 +731,9 @@ function simulateHalfInning(
         // 犠飛は打数にカウントしない
         bs.sacrificeFlies = (bs.sacrificeFlies ?? 0) + 1;
         pitcherLog.flyBallOuts = (pitcherLog.flyBallOuts ?? 0) + 1;
+        if (detail.fielderPosition) {
+          recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "putOut");
+        }
         const sfAdvance = advanceRunners(bases, result, batter);
         bases = sfAdvance.bases;
         const sfScored = sfAdvance.runsScored;
@@ -718,6 +772,20 @@ function simulateHalfInning(
       case "fieldersChoice": {
         outs++;
         bs.atBats++;
+        if (detail.fielderPosition) {
+          recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "assist");
+          // アウトになった走者に応じてPOを記録
+          if (bases.third) {
+            // 3塁走者アウト: 捕手にPO
+            recordFielding(batterStatsMap, fielderMap, 2, "putOut");
+          } else if (bases.second) {
+            // 2塁走者アウト: 3BにPO
+            recordFielding(batterStatsMap, fielderMap, 5, "putOut");
+          } else {
+            // 1塁走者アウト: SSにPO
+            recordFielding(batterStatsMap, fielderMap, 6, "putOut");
+          }
+        }
         const fcAdvance = advanceRunners(bases, result, batter);
         bases = fcAdvance.bases;
         const fcScored = fcAdvance.runsScored;
@@ -730,6 +798,9 @@ function simulateHalfInning(
       case "error": {
         bs.atBats++;
         // エラーは安打にカウントしない
+        if (detail.fielderPosition) {
+          recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "error");
+        }
         const errAdvance = advanceRunners(bases, result, batter);
         bases = errAdvance.bases;
         const errScored = errAdvance.runsScored;

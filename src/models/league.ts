@@ -57,6 +57,9 @@ export interface PlayerGameStats {
   hitByPitch?: number;       // 死球
   sacrificeFlies?: number;   // 犠牲フライ
   groundedIntoDP?: number;   // 併殺打
+  putOuts?: number;          // 刺殺
+  assists?: number;          // 補殺
+  errors?: number;           // 失策
 }
 
 /** 投手の1試合の成績 */

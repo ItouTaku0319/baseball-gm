@@ -165,6 +165,8 @@ export interface BatterSeasonStats {
   stolenBases: number;
   caughtStealing: number;
   errors: number;
+  putOuts: number;         // 刺殺
+  assists: number;         // 補殺
   hitByPitch: number;      // 死球
   sacrificeFlies: number;  // 犠牲フライ
   groundedIntoDP: number;  // 併殺打
@@ -243,6 +245,8 @@ export function emptyBatterStats(): BatterSeasonStats {
     stolenBases: 0,
     caughtStealing: 0,
     errors: 0,
+    putOuts: 0,
+    assists: 0,
     hitByPitch: 0,
     sacrificeFlies: 0,
     groundedIntoDP: 0,

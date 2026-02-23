@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
+import { POSITION_NAMES } from "@/models/player";
+import type { Position } from "@/models/player";
 
 // ── Sort types ──
 
@@ -14,6 +16,8 @@ type BattingSort = BattingSortBasic | BattingSortAdv;
 type PitchingSortBasic = "era" | "wins" | "strikeouts" | "saves";
 type PitchingSortAdv = "fip" | "war" | "k9" | "kPerBb";
 type PitchingSort = PitchingSortBasic | PitchingSortAdv;
+
+type FieldingSortKey = "fieldingPct" | "putOuts" | "assists" | "errors";
 
 type LeagueFilter = "myTeam" | "central" | "pacific" | "all";
 
@@ -86,6 +90,23 @@ interface PitcherRow {
   bbPct: number;
   fip: number;
   war: number;
+}
+
+interface FielderRow {
+  playerId: string;
+  name: string;
+  teamId: string;
+  teamShortName: string;
+  teamColor: string;
+  leagueId: string;
+  position: string;
+  games: number;
+  putOuts: number;
+  assists: number;
+  errors: number;
+  totalChances: number;
+  fieldingPct: number;
+  rangeFactor: number;
 }
 
 // ── wOBA linear weights (MLB standard) ──
@@ -280,11 +301,12 @@ function EmptyRow({ cols }: { cols: number }) {
 export default function StatsPage() {
   const params = useParams();
   const { game, loadGame } = useGameStore();
-  const [tab, setTab] = useState<"batting" | "pitching">("batting");
+  const [tab, setTab] = useState<"batting" | "pitching" | "fielding">("batting");
   const [subTab, setSubTab] = useState<"basic" | "advanced">("basic");
   const [leagueFilter, setLeagueFilter] = useState<LeagueFilter>("myTeam");
   const [battingSort, setBattingSort] = useState<BattingSort>("avg");
   const [pitchingSort, setPitchingSort] = useState<PitchingSort>("era");
+  const [fieldingSort, setFieldingSort] = useState<FieldingSortKey>("fieldingPct");
   const [qualifiedOnly, setQualifiedOnly] = useState(true);
 
   useEffect(() => {
@@ -515,6 +537,46 @@ export default function StatsPage() {
     return rows;
   }, [game, teamLeagueMap]);
 
+  // ── Collect fielding stats ──
+
+  const fielders = useMemo(() => {
+    if (!game) return [] as FielderRow[];
+    const year = game.currentSeason.year;
+    const rows: FielderRow[] = [];
+
+    for (const [teamId, team] of Object.entries(game.teams)) {
+      for (const player of team.roster) {
+        const s = player.careerBattingStats[year];
+        if (!s || s.games === 0) continue;
+
+        const po = s.putOuts ?? 0;
+        const a = s.assists ?? 0;
+        const e = s.errors ?? 0;
+        const tc = po + a + e;
+
+        if (tc === 0) continue;
+
+        rows.push({
+          playerId: player.id,
+          name: player.name,
+          teamId,
+          teamShortName: team.shortName,
+          teamColor: team.color,
+          leagueId: teamLeagueMap.get(teamId) || "",
+          position: player.position,
+          games: s.games,
+          putOuts: po,
+          assists: a,
+          errors: e,
+          totalChances: tc,
+          fieldingPct: tc > 0 ? (po + a) / tc : 0,
+          rangeFactor: s.games > 0 ? ((po + a) / s.games) * 9 : 0,
+        });
+      }
+    }
+    return rows;
+  }, [game, teamLeagueMap]);
+
   // ── Qualification checks ──
 
   const isQualifiedBatter = (r: BatterRow) => {
@@ -570,6 +632,17 @@ export default function StatsPage() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pitchers, leagueFilter, qualifiedOnly, pitchingSort, teamGames, game?.myTeamId]);
+
+  const filteredFielders = useMemo(() => {
+    const rows = applyLeagueFilter(fielders);
+    const ascending = fieldingSort === "errors";
+    return [...rows].sort((a, b) => {
+      const va = a[fieldingSort as keyof FielderRow] as number;
+      const vb = b[fieldingSort as keyof FielderRow] as number;
+      return ascending ? va - vb : vb - va;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fielders, leagueFilter, fieldingSort, game?.myTeamId]);
 
   // ── Title leaders ──
 
@@ -651,11 +724,12 @@ export default function StatsPage() {
     }
   };
 
-  const handleMainTab = (t: "batting" | "pitching") => {
+  const handleMainTab = (t: "batting" | "pitching" | "fielding") => {
     setTab(t);
     setSubTab("basic");
     if (t === "batting") setBattingSort("avg");
-    else setPitchingSort("era");
+    else if (t === "pitching") setPitchingSort("era");
+    else setFieldingSort("fieldingPct");
   };
 
   if (!game) return <div className="p-8 text-gray-400">読み込み中...</div>;
@@ -737,6 +811,7 @@ export default function StatsPage() {
               [
                 ["batting", "打撃成績"],
                 ["pitching", "投手成績"],
+                ["fielding", "守備成績"],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -755,29 +830,31 @@ export default function StatsPage() {
 
           {/* サブタブ + フィルター */}
           <div className="bg-gray-800 border-x border-gray-600 px-4 pt-3 pb-3 flex flex-wrap items-center gap-3">
-            {/* 基本 / セイバー */}
-            <div className="flex bg-gray-900 rounded-lg p-0.5">
-              {(
-                [
-                  ["basic", "基本"],
-                  ["advanced", "セイバー"],
-                ] as const
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  onClick={() => handleSubTab(key)}
-                  className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                    subTab === key
-                      ? "bg-gray-700 text-white"
-                      : "text-gray-400 hover:text-white"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            {/* 基本 / セイバー（守備タブでは非表示） */}
+            {tab !== "fielding" && (
+              <div className="flex bg-gray-900 rounded-lg p-0.5">
+                {(
+                  [
+                    ["basic", "基本"],
+                    ["advanced", "セイバー"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => handleSubTab(key)}
+                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                      subTab === key
+                        ? "bg-gray-700 text-white"
+                        : "text-gray-400 hover:text-white"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
 
-            <div className="w-px h-5 bg-gray-700" />
+            {tab !== "fielding" && <div className="w-px h-5 bg-gray-700" />}
 
             {/* リーグフィルター */}
             <div className="flex gap-1">
@@ -805,15 +882,17 @@ export default function StatsPage() {
               ))}
             </div>
 
-            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer ml-auto">
-              <input
-                type="checkbox"
-                checked={qualifiedOnly}
-                onChange={(e) => setQualifiedOnly(e.target.checked)}
-                className="rounded bg-gray-700 border-gray-600"
-              />
-              規定到達のみ
-            </label>
+            {tab !== "fielding" && (
+              <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer ml-auto">
+                <input
+                  type="checkbox"
+                  checked={qualifiedOnly}
+                  onChange={(e) => setQualifiedOnly(e.target.checked)}
+                  className="rounded bg-gray-700 border-gray-600"
+                />
+                規定到達のみ
+              </label>
+            )}
           </div>
 
           {/* テーブル */}
@@ -834,18 +913,27 @@ export default function StatsPage() {
                   myTeamId={game.myTeamId}
                 />
               )
-            ) : subTab === "basic" ? (
-              <PitchingBasicTable
-                rows={filteredPitchers}
-                sort={pitchingSort as PitchingSortBasic}
-                onSort={(s) => setPitchingSort(s)}
-                myTeamId={game.myTeamId}
-              />
+            ) : tab === "pitching" ? (
+              subTab === "basic" ? (
+                <PitchingBasicTable
+                  rows={filteredPitchers}
+                  sort={pitchingSort as PitchingSortBasic}
+                  onSort={(s) => setPitchingSort(s)}
+                  myTeamId={game.myTeamId}
+                />
+              ) : (
+                <PitchingAdvTable
+                  rows={filteredPitchers}
+                  sort={pitchingSort as PitchingSortAdv}
+                  onSort={(s) => setPitchingSort(s)}
+                  myTeamId={game.myTeamId}
+                />
+              )
             ) : (
-              <PitchingAdvTable
-                rows={filteredPitchers}
-                sort={pitchingSort as PitchingSortAdv}
-                onSort={(s) => setPitchingSort(s)}
+              <FieldingTable
+                rows={filteredFielders}
+                sort={fieldingSort}
+                onSort={(s) => setFieldingSort(s)}
                 myTeamId={game.myTeamId}
               />
             )}
@@ -1105,6 +1193,63 @@ function PitchingAdvTable({
                 <td className={`${S.cellMono} ${sort === "fip" ? S.highlight : ""}`}>{fmtDec2(r.fip)}</td>
                 <td className={S.cellMono}>{fmtDec2(r.whip)}</td>
                 <td className={`${S.cellMono} ${sort === "war" ? S.highlight : ""}`}>{fmtWar(r.war)}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── 守備成績 ──
+
+function FieldingTable({
+  rows,
+  sort,
+  onSort,
+  myTeamId,
+}: {
+  rows: FielderRow[];
+  sort: FieldingSortKey;
+  onSort: (s: FieldingSortKey) => void;
+  myTeamId: string;
+}) {
+  return (
+    <div className={S.wrapper}>
+      <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
+        <thead>
+          <tr className={S.headerRow}>
+            <RankTh />
+            <NameTh />
+            <TeamTh />
+            <Th>守備</Th>
+            <Th>試合</Th>
+            <SortTh label="刺殺" sortKey="putOuts" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
+            <SortTh label="補殺" sortKey="assists" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
+            <SortTh label="失策" sortKey="errors" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
+            <Th>守備機会</Th>
+            <SortTh label="守備率" sortKey="fieldingPct" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
+            <Th>RF</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <EmptyRow cols={11} />
+          ) : (
+            rows.map((r, i) => (
+              <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
+                <RankCell rank={i + 1} />
+                <td className={S.nameCell}>{r.name}</td>
+                <TeamCell r={r} />
+                <td className={`${S.cell} text-center`}>{POSITION_NAMES[r.position as Position] ?? r.position}</td>
+                <td className={S.cell}>{r.games}</td>
+                <td className={`${S.cell} ${sort === "putOuts" ? S.highlight : ""}`}>{r.putOuts}</td>
+                <td className={`${S.cell} ${sort === "assists" ? S.highlight : ""}`}>{r.assists}</td>
+                <td className={`${S.cell} ${sort === "errors" ? S.highlight : ""}`}>{r.errors}</td>
+                <td className={S.cell}>{r.totalChances}</td>
+                <td className={`${S.cellMono} ${sort === "fieldingPct" ? S.highlight : ""}`}>{fmtRate(r.fieldingPct)}</td>
+                <td className={S.cellMono}>{fmtDec2(r.rangeFactor)}</td>
               </tr>
             ))
           )}
