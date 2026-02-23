@@ -294,6 +294,10 @@ function updatePlayerStats(
               hitBatsmen: existing.hitBatsmen + (pl.hitBatsmen ?? 0),
               groundBallOuts: existing.groundBallOuts + (pl.groundBallOuts ?? 0),
               flyBallOuts: existing.flyBallOuts + (pl.flyBallOuts ?? 0),
+              groundBalls: existing.groundBalls + (pl.groundBalls ?? 0),
+              flyBalls: existing.flyBalls + (pl.flyBalls ?? 0),
+              lineDrives: existing.lineDrives + (pl.lineDrives ?? 0),
+              popups: existing.popups + (pl.popups ?? 0),
             },
           },
         };

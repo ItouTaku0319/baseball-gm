@@ -83,22 +83,18 @@
 - [x] 成績ページに守備タブ追加（PO/A/E/守備機会/守備率/RF表示）
 - [x] errors累積バグ修正（season-advancement.ts）
 
-### Step 3: 守備指標（UZR等）
-- 簡易UZR: 守備位置の平均対比で守備貢献ランを算出
-- DRS (Defensive Runs Saved) も同様のアプローチで
-- 成績ページに守備指標タブ/列を追加
+### Step 3: 守備指標（UZR等） ✅ 完了
+- [x] 簡易UZR: 守備位置の平均対比で守備貢献ランを算出
+- [x] DRS (Defensive Runs Saved) も同様のアプローチで
+- [x] 成績ページの守備タブにUZR列を追加（プラスマイナス色分け表示）
 
-### Step 4: 投手の打球系指標
-- GB% (ゴロ率)、FB% (フライ率)、LD% (ライナー率)
-- GB/FB 比率
-- IFFB% (内野フライ率)
-- HR/FB (フライに対する本塁打率)
-- 成績ページの投手セイバー指標に追加
-
-### 備考
-- Step 1 が最も工数が大きい（simulation.ts の大幅改修）
-- Step 2-4 は Step 1 の上に乗せる形なので比較的軽い
-- 能力値 fielding / catching / arm は既にモデルに定義済み（野手・投手とも）
+### Step 4: 投手の打球系指標 ✅ 完了
+- [x] PitcherGameLog/PitcherSeasonStats に全打球タイプ記録（groundBalls/flyBalls/lineDrives/popups）
+- [x] GB% (ゴロ率)、FB% (フライ率)、LD% (ライナー率)
+- [x] GB/FB 比率
+- [x] IFFB% (内野フライ率)
+- [x] HR/FB (フライに対する本塁打率)
+- [x] 成績ページの投手セイバー指標に追加
 
 ## 球種のビジュアル表示（保留）
 - 現在はテーブル内テキスト表示（球種名+変化量）で仮実装

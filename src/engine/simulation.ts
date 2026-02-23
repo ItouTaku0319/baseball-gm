@@ -837,6 +837,24 @@ function simulateHalfInning(
       }
     }
 
+    // 全打球タイプをカウント（三振・四球・死球以外）
+    if (detail.battedBallType) {
+      switch (detail.battedBallType) {
+        case "ground_ball":
+          pitcherLog.groundBalls = (pitcherLog.groundBalls ?? 0) + 1;
+          break;
+        case "fly_ball":
+          pitcherLog.flyBalls = (pitcherLog.flyBalls ?? 0) + 1;
+          break;
+        case "line_drive":
+          pitcherLog.lineDrives = (pitcherLog.lineDrives ?? 0) + 1;
+          break;
+        case "popup":
+          pitcherLog.popups = (pitcherLog.popups ?? 0) + 1;
+          break;
+      }
+    }
+
     idx++;
   }
 

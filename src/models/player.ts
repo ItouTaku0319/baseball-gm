@@ -189,6 +189,10 @@ export interface PitcherSeasonStats {
   hitBatsmen: number;      // 与死球
   groundBallOuts: number;  // ゴロアウト数
   flyBallOuts: number;     // フライアウト数
+  groundBalls: number;     // 全ゴロ打球数（安打・エラー含む）
+  flyBalls: number;        // 全フライ打球数（HR含む）
+  lineDrives: number;      // 全ライナー打球数
+  popups: number;          // 全ポップフライ数
 }
 
 /** 選手データ */
@@ -271,5 +275,9 @@ export function emptyPitcherStats(): PitcherSeasonStats {
     hitBatsmen: 0,
     groundBallOuts: 0,
     flyBallOuts: 0,
+    groundBalls: 0,
+    flyBalls: 0,
+    lineDrives: 0,
+    popups: 0,
   };
 }

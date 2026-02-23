@@ -14,10 +14,10 @@ type BattingSortAdv = "ops" | "woba" | "wrcPlus" | "war";
 type BattingSort = BattingSortBasic | BattingSortAdv;
 
 type PitchingSortBasic = "era" | "wins" | "strikeouts" | "saves";
-type PitchingSortAdv = "fip" | "war" | "k9" | "kPerBb";
+type PitchingSortAdv = "fip" | "war" | "k9" | "kPerBb" | "gbPct";
 type PitchingSort = PitchingSortBasic | PitchingSortAdv;
 
-type FieldingSortKey = "fieldingPct" | "putOuts" | "assists" | "errors";
+type FieldingSortKey = "fieldingPct" | "putOuts" | "assists" | "errors" | "uzr";
 
 type LeagueFilter = "myTeam" | "central" | "pacific" | "all";
 
@@ -90,6 +90,13 @@ interface PitcherRow {
   bbPct: number;
   fip: number;
   war: number;
+  // 打球系指標
+  gbPct: number;
+  fbPct: number;
+  ldPct: number;
+  gbFb: number;
+  iffbPct: number;
+  hrFb: number;
 }
 
 interface FielderRow {
@@ -107,6 +114,8 @@ interface FielderRow {
   totalChances: number;
   fieldingPct: number;
   rangeFactor: number;
+  uzr: number;
+  drs: number;
 }
 
 // ── wOBA linear weights (MLB standard) ──
@@ -503,6 +512,19 @@ export default function StatsPage() {
         const runsSaved = ip > 0 ? ((repLevel - fip) / 9) * ip : 0;
         const war = runsSaved / 10;
 
+        // 打球系指標
+        const gb = s.groundBalls ?? 0;
+        const fb = s.flyBalls ?? 0;
+        const ld = s.lineDrives ?? 0;
+        const pu = s.popups ?? 0;
+        const totalBIP = gb + fb + ld + pu;
+        const gbPct = totalBIP > 0 ? gb / totalBIP : 0;
+        const fbPct = totalBIP > 0 ? fb / totalBIP : 0;
+        const ldPct = totalBIP > 0 ? ld / totalBIP : 0;
+        const gbFb = fb > 0 ? gb / fb : 0;
+        const iffbPct = (fb + pu) > 0 ? pu / (fb + pu) : 0;
+        const hrFb = fb > 0 ? s.homeRunsAllowed / fb : 0;
+
         rows.push({
           playerId: player.id,
           name: player.name,
@@ -531,6 +553,12 @@ export default function StatsPage() {
           bbPct,
           fip,
           war,
+          gbPct,
+          fbPct,
+          ldPct,
+          gbFb,
+          iffbPct,
+          hrFb,
         });
       }
     }
@@ -571,9 +599,45 @@ export default function StatsPage() {
           totalChances: tc,
           fieldingPct: tc > 0 ? (po + a) / tc : 0,
           rangeFactor: s.games > 0 ? ((po + a) / s.games) * 9 : 0,
+          uzr: 0,
+          drs: 0,
         });
       }
     }
+
+    // 2パス目: ポジション別平均を計算して UZR/DRS を算出
+    const posByPos = new Map<string, { totalPO: number; totalA: number; totalE: number; totalGames: number; count: number }>();
+    for (const r of rows) {
+      const pos = r.position;
+      const existing = posByPos.get(pos) || { totalPO: 0, totalA: 0, totalE: 0, totalGames: 0, count: 0 };
+      existing.totalPO += r.putOuts;
+      existing.totalA += r.assists;
+      existing.totalE += r.errors;
+      existing.totalGames += r.games;
+      existing.count++;
+      posByPos.set(pos, existing);
+    }
+
+    const RUNS_PER_PLAY = 0.8;
+    const RUNS_PER_ERROR = 0.7;
+    for (const r of rows) {
+      const posAvg = posByPos.get(r.position);
+      if (!posAvg || posAvg.totalGames === 0 || r.games === 0) continue;
+
+      const avgPOPerG = posAvg.totalPO / posAvg.totalGames;
+      const avgAPerG = posAvg.totalA / posAvg.totalGames;
+      const avgEPerG = posAvg.totalE / posAvg.totalGames;
+
+      const playerPOPerG = r.putOuts / r.games;
+      const playerAPerG = r.assists / r.games;
+      const playerEPerG = r.errors / r.games;
+
+      const rangeRuns = ((playerPOPerG + playerAPerG) - (avgPOPerG + avgAPerG)) * RUNS_PER_PLAY * r.games;
+      const errorRuns = (avgEPerG - playerEPerG) * RUNS_PER_ERROR * r.games;
+      r.uzr = rangeRuns + errorRuns;
+      r.drs = r.uzr;
+    }
+
     return rows;
   }, [game, teamLeagueMap]);
 
@@ -639,7 +703,7 @@ export default function StatsPage() {
     return [...rows].sort((a, b) => {
       const va = a[fieldingSort as keyof FielderRow] as number;
       const vb = b[fieldingSort as keyof FielderRow] as number;
-      return ascending ? va - vb : vb - va;
+      return ascending ? va - vb : vb - va; // errors は昇順、他（uzr含む）は降順
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fielders, leagueFilter, fieldingSort, game?.myTeamId]);
@@ -1172,11 +1236,17 @@ function PitchingAdvTable({
             <SortTh label="FIP" sortKey="fip" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
             <Th>WHIP</Th>
             <SortTh label="WAR" sortKey="war" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
+            <SortTh label="GB%" sortKey="gbPct" current={sort} onSort={(k) => onSort(k as PitchingSortAdv)} />
+            <Th>FB%</Th>
+            <Th>LD%</Th>
+            <Th>GB/FB</Th>
+            <Th>IFFB%</Th>
+            <Th>HR/FB</Th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <EmptyRow cols={13} />
+            <EmptyRow cols={19} />
           ) : (
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
@@ -1193,6 +1263,12 @@ function PitchingAdvTable({
                 <td className={`${S.cellMono} ${sort === "fip" ? S.highlight : ""}`}>{fmtDec2(r.fip)}</td>
                 <td className={S.cellMono}>{fmtDec2(r.whip)}</td>
                 <td className={`${S.cellMono} ${sort === "war" ? S.highlight : ""}`}>{fmtWar(r.war)}</td>
+                <td className={`${S.cell} ${sort === "gbPct" ? S.highlight : ""}`}>{fmtPct(r.gbPct)}</td>
+                <td className={S.cell}>{fmtPct(r.fbPct)}</td>
+                <td className={S.cell}>{fmtPct(r.ldPct)}</td>
+                <td className={S.cellMono}>{fmtDec2(r.gbFb)}</td>
+                <td className={S.cell}>{fmtPct(r.iffbPct)}</td>
+                <td className={S.cellMono}>{fmtRate(r.hrFb)}</td>
               </tr>
             ))
           )}
@@ -1231,11 +1307,12 @@ function FieldingTable({
             <Th>守備機会</Th>
             <SortTh label="守備率" sortKey="fieldingPct" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
             <Th>RF</Th>
+            <SortTh label="UZR" sortKey="uzr" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <EmptyRow cols={11} />
+            <EmptyRow cols={12} />
           ) : (
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
@@ -1250,6 +1327,9 @@ function FieldingTable({
                 <td className={S.cell}>{r.totalChances}</td>
                 <td className={`${S.cellMono} ${sort === "fieldingPct" ? S.highlight : ""}`}>{fmtRate(r.fieldingPct)}</td>
                 <td className={S.cellMono}>{fmtDec2(r.rangeFactor)}</td>
+                <td className={`${S.cellMono} ${sort === "uzr" ? S.highlight : ""} ${r.uzr > 0.5 ? "text-green-400" : r.uzr < -0.5 ? "text-red-400" : ""}`}>
+                  {r.uzr > 0 ? "+" : ""}{fmtDec1(r.uzr)}
+                </td>
               </tr>
             ))
           )}

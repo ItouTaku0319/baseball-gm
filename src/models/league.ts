@@ -74,6 +74,10 @@ export interface PitcherGameLog {
   hitBatsmen?: number;       // 与死球
   groundBallOuts?: number;   // ゴロアウト数
   flyBallOuts?: number;      // フライアウト数
+  groundBalls?: number;      // 全ゴロ打球数（安打・エラー含む）
+  flyBalls?: number;         // 全フライ打球数（HR含む）
+  lineDrives?: number;       // 全ライナー打球数
+  popups?: number;           // 全ポップフライ数
 }
 
 /** 試合結果 */
