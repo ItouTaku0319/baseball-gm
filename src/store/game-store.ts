@@ -1,5 +1,12 @@
 import { create } from "zustand";
 import type { GameState } from "@/models/game-state";
+import type { SaveMeta } from "@/db/database";
+import {
+  saveGameToDB,
+  loadGameFromDB,
+  listSaves,
+  deleteSaveFromDB,
+} from "@/db/save-load";
 import {
   startSeason as startSeasonEngine,
   simulateNextGame,
@@ -13,27 +20,22 @@ import {
   simulateAllPlayoffGames,
 } from "@/engine/playoffs";
 
-/**
- * ゲーム全体の状態管理
- * localStorage に保存してセーブ/ロード機能を実現する
- */
-
 interface GameStore {
   /** 現在のゲーム状態 */
   game: GameState | null;
   /** セーブデータ一覧 */
-  savedGames: { id: string; name: string; updatedAt: string }[];
+  savedGames: SaveMeta[];
 
   /** ゲーム状態をセット */
   setGame: (game: GameState) => void;
-  /** ゲームをlocalStorageに保存 */
-  saveGame: () => void;
-  /** ゲームをlocalStorageから読み込み */
-  loadGame: (id: string) => void;
+  /** ゲームをIndexedDBに保存 */
+  saveGame: () => Promise<void>;
+  /** ゲームをIndexedDBから読み込み */
+  loadGame: (id: string) => Promise<void>;
   /** セーブ一覧を読み込み */
-  loadSavedGamesList: () => void;
+  loadSavedGamesList: () => Promise<void>;
   /** セーブデータを削除 */
-  deleteSave: (id: string) => void;
+  deleteSave: (id: string) => Promise<void>;
 
   /** シーズンを開始 (preseason → regular_season) */
   startSeason: () => void;
@@ -51,45 +53,31 @@ interface GameStore {
   simAllPlayoffs: () => void;
 }
 
-const SAVE_PREFIX = "baseball-gm-save-";
-const SAVE_LIST_KEY = "baseball-gm-saves";
-
 export const useGameStore = create<GameStore>((set, get) => ({
   game: null,
   savedGames: [],
 
   setGame: (game) => set({ game }),
 
-  saveGame: () => {
+  saveGame: async () => {
     const { game } = get();
     if (!game) return;
 
     const updated = { ...game, updatedAt: new Date().toISOString() };
-    localStorage.setItem(SAVE_PREFIX + game.id, JSON.stringify(updated));
-
-    // セーブ一覧を更新
-    const list = JSON.parse(localStorage.getItem(SAVE_LIST_KEY) || "[]");
-    const existing = list.findIndex((s: { id: string }) => s.id === game.id);
-    const entry = {
-      id: game.id,
-      name: `シーズン ${updated.currentSeason.year}`,
-      updatedAt: updated.updatedAt,
-    };
-    if (existing >= 0) {
-      list[existing] = entry;
-    } else {
-      list.push(entry);
-    }
-    localStorage.setItem(SAVE_LIST_KEY, JSON.stringify(list));
-
     set({ game: updated });
-    get().loadSavedGamesList();
+    try {
+      await saveGameToDB(updated);
+      await get().loadSavedGamesList();
+    } catch (e) {
+      console.error("セーブ失敗:", e);
+    }
   },
 
-  loadGame: (id) => {
-    const data = localStorage.getItem(SAVE_PREFIX + id);
-    if (data) {
-      const game: GameState = JSON.parse(data);
+  loadGame: async (id) => {
+    try {
+      const game = await loadGameFromDB(id);
+      if (!game) return;
+
       // セーブ互換: lineupConfig / rosterLevels が未設定のチームを自動設定
       const newTeams = { ...game.teams };
       for (const [teamId, team] of Object.entries(newTeams)) {
@@ -107,26 +95,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
         }
         if (updated !== team) newTeams[teamId] = updated;
       }
-      // セーブ互換: 旧 SeasonPhase "playoffs" を "climax_first" に変換
+      // セーブ互換: 旧 SeasonPhase "playoffs" を "offseason" に変換
       let season = game.currentSeason;
       if ((season.phase as string) === "playoffs") {
         season = { ...season, phase: "offseason" };
       }
       set({ game: { ...game, teams: newTeams, currentSeason: season } });
+    } catch (e) {
+      console.error("ロード失敗:", e);
     }
   },
 
-  loadSavedGamesList: () => {
-    const list = JSON.parse(localStorage.getItem(SAVE_LIST_KEY) || "[]");
-    set({ savedGames: list });
+  loadSavedGamesList: async () => {
+    try {
+      const list = await listSaves();
+      set({ savedGames: list });
+    } catch (e) {
+      console.error("セーブ一覧取得失敗:", e);
+    }
   },
 
-  deleteSave: (id) => {
-    localStorage.removeItem(SAVE_PREFIX + id);
-    const list = JSON.parse(localStorage.getItem(SAVE_LIST_KEY) || "[]");
-    const filtered = list.filter((s: { id: string }) => s.id !== id);
-    localStorage.setItem(SAVE_LIST_KEY, JSON.stringify(filtered));
-    set({ savedGames: filtered });
+  deleteSave: async (id) => {
+    try {
+      await deleteSaveFromDB(id);
+      await get().loadSavedGamesList();
+    } catch (e) {
+      console.error("削除失敗:", e);
+    }
   },
 
   startSeason: () => {
@@ -134,7 +129,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!game) return;
     const newGame = startSeasonEngine(game);
     set({ game: newGame });
-    get().saveGame();
+    get().saveGame().catch(console.error);
   },
 
   simNext: () => {
@@ -142,7 +137,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!game || game.currentSeason.phase !== "regular_season") return;
     const newGame = simulateNextGame(game);
     set({ game: newGame });
-    get().saveGame();
+    get().saveGame().catch(console.error);
   },
 
   simDay: () => {
@@ -150,7 +145,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!game || game.currentSeason.phase !== "regular_season") return;
     const newGame = simulateDayEngine(game);
     set({ game: newGame });
-    get().saveGame();
+    get().saveGame().catch(console.error);
   },
 
   simWeek: () => {
@@ -158,7 +153,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!game || game.currentSeason.phase !== "regular_season") return;
     const newGame = simulateWeekEngine(game);
     set({ game: newGame });
-    get().saveGame();
+    get().saveGame().catch(console.error);
   },
 
   simToMyGame: () => {
@@ -166,7 +161,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!game || game.currentSeason.phase !== "regular_season") return;
     const newGame = simulateToNextMyGameEngine(game);
     set({ game: newGame });
-    get().saveGame();
+    get().saveGame().catch(console.error);
   },
 
   simPlayoffGame: () => {
@@ -176,7 +171,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (phase !== "climax_first" && phase !== "climax_final" && phase !== "japan_series") return;
     const newGame = simulatePlayoffGame(game);
     set({ game: newGame });
-    get().saveGame();
+    get().saveGame().catch(console.error);
   },
 
   simAllPlayoffs: () => {
@@ -186,6 +181,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (phase !== "climax_first" && phase !== "climax_final" && phase !== "japan_series") return;
     const newGame = simulateAllPlayoffGames(game);
     set({ game: newGame });
-    get().saveGame();
+    get().saveGame().catch(console.error);
   },
 }));

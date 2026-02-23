@@ -5,7 +5,8 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
 import { POSITION_NAMES } from "@/models/player";
-import type { Position } from "@/models/player";
+import type { Position, Player } from "@/models/player";
+import { usePlayerTooltip, PlayerTooltipTrigger, PlayerTooltipOverlay } from "@/components/player-tooltip";
 
 // ── Sort types ──
 
@@ -17,7 +18,7 @@ type PitchingSortBasic = "era" | "wins" | "strikeouts" | "saves";
 type PitchingSortAdv = "fip" | "war" | "k9" | "kPerBb" | "gbPct";
 type PitchingSort = PitchingSortBasic | PitchingSortAdv;
 
-type FieldingSortKey = "fieldingPct" | "putOuts" | "assists" | "errors" | "uzr";
+type FieldingSortKey = "games" | "fieldingPct" | "putOuts" | "assists" | "errors" | "uzr";
 
 type LeagueFilter = "myTeam" | "central" | "pacific" | "all";
 
@@ -315,12 +316,21 @@ export default function StatsPage() {
   const [leagueFilter, setLeagueFilter] = useState<LeagueFilter>("myTeam");
   const [battingSort, setBattingSort] = useState<BattingSort>("avg");
   const [pitchingSort, setPitchingSort] = useState<PitchingSort>("era");
-  const [fieldingSort, setFieldingSort] = useState<FieldingSortKey>("fieldingPct");
+  const [fieldingSort, setFieldingSort] = useState<FieldingSortKey>("games");
   const [qualifiedOnly, setQualifiedOnly] = useState(true);
 
   useEffect(() => {
     if (!game && params.id) loadGame(params.id as string);
   }, [game, params.id, loadGame]);
+
+  const playerMap = useMemo(() => {
+    if (!game) return new Map<string, Player>();
+    const map = new Map<string, Player>();
+    for (const team of Object.values(game.teams)) {
+      for (const p of team.roster) map.set(p.id, p);
+    }
+    return map;
+  }, [game]);
 
   // 自チームのリーグ
   const myLeagueId = useMemo(() => {
@@ -793,7 +803,7 @@ export default function StatsPage() {
     setSubTab("basic");
     if (t === "batting") setBattingSort("avg");
     else if (t === "pitching") setPitchingSort("era");
-    else setFieldingSort("fieldingPct");
+    else setFieldingSort("games");
   };
 
   if (!game) return <div className="p-8 text-gray-400">読み込み中...</div>;
@@ -968,6 +978,7 @@ export default function StatsPage() {
                   sort={battingSort as BattingSortBasic}
                   onSort={(s) => setBattingSort(s)}
                   myTeamId={game.myTeamId}
+                  playerMap={playerMap}
                 />
               ) : (
                 <BattingAdvTable
@@ -975,6 +986,7 @@ export default function StatsPage() {
                   sort={battingSort as BattingSortAdv}
                   onSort={(s) => setBattingSort(s)}
                   myTeamId={game.myTeamId}
+                  playerMap={playerMap}
                 />
               )
             ) : tab === "pitching" ? (
@@ -984,6 +996,7 @@ export default function StatsPage() {
                   sort={pitchingSort as PitchingSortBasic}
                   onSort={(s) => setPitchingSort(s)}
                   myTeamId={game.myTeamId}
+                  playerMap={playerMap}
                 />
               ) : (
                 <PitchingAdvTable
@@ -991,6 +1004,7 @@ export default function StatsPage() {
                   sort={pitchingSort as PitchingSortAdv}
                   onSort={(s) => setPitchingSort(s)}
                   myTeamId={game.myTeamId}
+                  playerMap={playerMap}
                 />
               )
             ) : (
@@ -999,6 +1013,7 @@ export default function StatsPage() {
                 sort={fieldingSort}
                 onSort={(s) => setFieldingSort(s)}
                 myTeamId={game.myTeamId}
+                playerMap={playerMap}
               />
             )}
           </div>
@@ -1015,14 +1030,17 @@ function BattingBasicTable({
   sort,
   onSort,
   myTeamId,
+  playerMap,
 }: {
   rows: BatterRow[];
   sort: BattingSortBasic;
   onSort: (s: BattingSortBasic) => void;
   myTeamId: string;
+  playerMap: Map<string, Player>;
 }) {
+  const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
   return (
-    <div className={S.wrapper}>
+    <div ref={containerRef} className={S.wrapper} style={{ position: "relative" }} onTouchMove={handleTouchMove}>
       <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
         <thead>
           <tr className={S.headerRow}>
@@ -1054,7 +1072,15 @@ function BattingBasicTable({
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
                 <RankCell rank={i + 1} />
-                <td className={S.nameCell}>{r.name}</td>
+                <PlayerTooltipTrigger
+                  playerId={r.playerId}
+                  name={r.name}
+                  className={S.nameCell}
+                  onMouseEnter={handleMouseEnter}
+                  onMouseLeave={handleMouseLeave}
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+                />
                 <TeamCell r={r} />
                 <td className={S.cell}>{r.games}</td>
                 <td className={S.cell}>{r.pa}</td>
@@ -1077,6 +1103,13 @@ function BattingBasicTable({
           )}
         </tbody>
       </table>
+      <PlayerTooltipOverlay
+        player={player}
+        x={tooltip.x}
+        y={tooltip.y}
+        visible={tooltip.visible}
+        containerRef={containerRef}
+      />
     </div>
   );
 }
@@ -1088,14 +1121,17 @@ function BattingAdvTable({
   sort,
   onSort,
   myTeamId,
+  playerMap,
 }: {
   rows: BatterRow[];
   sort: BattingSortAdv;
   onSort: (s: BattingSortAdv) => void;
   myTeamId: string;
+  playerMap: Map<string, Player>;
 }) {
+  const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
   return (
-    <div className={S.wrapper}>
+    <div ref={containerRef} className={S.wrapper} style={{ position: "relative" }} onTouchMove={handleTouchMove}>
       <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
         <thead>
           <tr className={S.headerRow}>
@@ -1121,7 +1157,15 @@ function BattingAdvTable({
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
                 <RankCell rank={i + 1} />
-                <td className={S.nameCell}>{r.name}</td>
+                <PlayerTooltipTrigger
+                  playerId={r.playerId}
+                  name={r.name}
+                  className={S.nameCell}
+                  onMouseEnter={handleMouseEnter}
+                  onMouseLeave={handleMouseLeave}
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+                />
                 <TeamCell r={r} />
                 <td className={S.cell}>{r.pa}</td>
                 <td className={S.cell}>{fmtPct(r.kPct)}</td>
@@ -1138,6 +1182,13 @@ function BattingAdvTable({
           )}
         </tbody>
       </table>
+      <PlayerTooltipOverlay
+        player={player}
+        x={tooltip.x}
+        y={tooltip.y}
+        visible={tooltip.visible}
+        containerRef={containerRef}
+      />
     </div>
   );
 }
@@ -1149,14 +1200,17 @@ function PitchingBasicTable({
   sort,
   onSort,
   myTeamId,
+  playerMap,
 }: {
   rows: PitcherRow[];
   sort: PitchingSortBasic;
   onSort: (s: PitchingSortBasic) => void;
   myTeamId: string;
+  playerMap: Map<string, Player>;
 }) {
+  const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
   return (
-    <div className={S.wrapper}>
+    <div ref={containerRef} className={S.wrapper} style={{ position: "relative" }} onTouchMove={handleTouchMove}>
       <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
         <thead>
           <tr className={S.headerRow}>
@@ -1183,7 +1237,15 @@ function PitchingBasicTable({
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
                 <RankCell rank={i + 1} />
-                <td className={S.nameCell}>{r.name}</td>
+                <PlayerTooltipTrigger
+                  playerId={r.playerId}
+                  name={r.name}
+                  className={S.nameCell}
+                  onMouseEnter={handleMouseEnter}
+                  onMouseLeave={handleMouseLeave}
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+                />
                 <TeamCell r={r} />
                 <td className={S.cell}>{r.games}</td>
                 <td className={`${S.cell} ${sort === "wins" ? S.highlight : ""}`}>{r.wins}</td>
@@ -1201,6 +1263,13 @@ function PitchingBasicTable({
           )}
         </tbody>
       </table>
+      <PlayerTooltipOverlay
+        player={player}
+        x={tooltip.x}
+        y={tooltip.y}
+        visible={tooltip.visible}
+        containerRef={containerRef}
+      />
     </div>
   );
 }
@@ -1212,14 +1281,17 @@ function PitchingAdvTable({
   sort,
   onSort,
   myTeamId,
+  playerMap,
 }: {
   rows: PitcherRow[];
   sort: PitchingSortAdv;
   onSort: (s: PitchingSortAdv) => void;
   myTeamId: string;
+  playerMap: Map<string, Player>;
 }) {
+  const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
   return (
-    <div className={S.wrapper}>
+    <div ref={containerRef} className={S.wrapper} style={{ position: "relative" }} onTouchMove={handleTouchMove}>
       <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
         <thead>
           <tr className={S.headerRow}>
@@ -1251,7 +1323,15 @@ function PitchingAdvTable({
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
                 <RankCell rank={i + 1} />
-                <td className={S.nameCell}>{r.name}</td>
+                <PlayerTooltipTrigger
+                  playerId={r.playerId}
+                  name={r.name}
+                  className={S.nameCell}
+                  onMouseEnter={handleMouseEnter}
+                  onMouseLeave={handleMouseLeave}
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+                />
                 <TeamCell r={r} />
                 <td className={S.cell}>{r.ipDisplay}</td>
                 <td className={`${S.cellMono} ${sort === "k9" ? S.highlight : ""}`}>{fmtDec2(r.k9)}</td>
@@ -1274,6 +1354,13 @@ function PitchingAdvTable({
           )}
         </tbody>
       </table>
+      <PlayerTooltipOverlay
+        player={player}
+        x={tooltip.x}
+        y={tooltip.y}
+        visible={tooltip.visible}
+        containerRef={containerRef}
+      />
     </div>
   );
 }
@@ -1285,14 +1372,17 @@ function FieldingTable({
   sort,
   onSort,
   myTeamId,
+  playerMap,
 }: {
   rows: FielderRow[];
   sort: FieldingSortKey;
   onSort: (s: FieldingSortKey) => void;
   myTeamId: string;
+  playerMap: Map<string, Player>;
 }) {
+  const { containerRef, tooltip, player, handleMouseEnter, handleMouseLeave, handleTouchStart, handleTouchMove, handleTouchEnd } = usePlayerTooltip(playerMap);
   return (
-    <div className={S.wrapper}>
+    <div ref={containerRef} className={S.wrapper} style={{ position: "relative" }} onTouchMove={handleTouchMove}>
       <table className={S.table} style={{ fontVariantNumeric: "tabular-nums" }}>
         <thead>
           <tr className={S.headerRow}>
@@ -1300,7 +1390,7 @@ function FieldingTable({
             <NameTh />
             <TeamTh />
             <Th>守備</Th>
-            <Th>試合</Th>
+            <SortTh label="試合" sortKey="games" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
             <SortTh label="刺殺" sortKey="putOuts" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
             <SortTh label="補殺" sortKey="assists" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
             <SortTh label="失策" sortKey="errors" current={sort} onSort={(k) => onSort(k as FieldingSortKey)} />
@@ -1317,10 +1407,18 @@ function FieldingTable({
             rows.map((r, i) => (
               <tr key={r.playerId} className={rowCls(i, r.teamId === myTeamId)}>
                 <RankCell rank={i + 1} />
-                <td className={S.nameCell}>{r.name}</td>
+                <PlayerTooltipTrigger
+                  playerId={r.playerId}
+                  name={r.name}
+                  className={S.nameCell}
+                  onMouseEnter={handleMouseEnter}
+                  onMouseLeave={handleMouseLeave}
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+                />
                 <TeamCell r={r} />
                 <td className={`${S.cell} text-center`}>{POSITION_NAMES[r.position as Position] ?? r.position}</td>
-                <td className={S.cell}>{r.games}</td>
+                <td className={`${S.cell} ${sort === "games" ? S.highlight : ""}`}>{r.games}</td>
                 <td className={`${S.cell} ${sort === "putOuts" ? S.highlight : ""}`}>{r.putOuts}</td>
                 <td className={`${S.cell} ${sort === "assists" ? S.highlight : ""}`}>{r.assists}</td>
                 <td className={`${S.cell} ${sort === "errors" ? S.highlight : ""}`}>{r.errors}</td>
@@ -1335,6 +1433,13 @@ function FieldingTable({
           )}
         </tbody>
       </table>
+      <PlayerTooltipOverlay
+        player={player}
+        x={tooltip.x}
+        y={tooltip.y}
+        visible={tooltip.visible}
+        containerRef={containerRef}
+      />
     </div>
   );
 }

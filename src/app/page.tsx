@@ -3,12 +3,17 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
+import { migrateFromLocalStorage } from "@/db/save-load";
 
 export default function Home() {
   const { savedGames, loadSavedGamesList, deleteSave } = useGameStore();
 
   useEffect(() => {
-    loadSavedGamesList();
+    const init = async () => {
+      await migrateFromLocalStorage();
+      await loadSavedGamesList();
+    };
+    init();
   }, [loadSavedGamesList]);
 
   return (

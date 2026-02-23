@@ -5,12 +5,17 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
 import {
-  PITCH_TYPE_NAMES,
   POSITION_NAMES,
   THROW_HAND_NAMES,
   BAT_SIDE_NAMES,
 } from "@/models/player";
-import type { Player, PitchRepertoire } from "@/models/player";
+import type { Player } from "@/models/player";
+import {
+  potentialColor,
+  AbilityCell,
+  VelocityCell,
+  PitchList,
+} from "@/components/player-ability-card";
 import { ICHI_GUN_MAX } from "@/models/team";
 import type { RosterLevel } from "@/models/team";
 import {
@@ -22,91 +27,6 @@ import {
 import { autoConfigureLineup } from "@/engine/lineup";
 
 type RosterTab = "ichi_gun" | "ni_gun";
-
-/** 能力値(1-100)のグレード文字を返す */
-function abilityGrade(val: number): string {
-  if (val >= 90) return "S";
-  if (val >= 80) return "A";
-  if (val >= 70) return "B";
-  if (val >= 60) return "C";
-  if (val >= 50) return "D";
-  if (val >= 40) return "E";
-  if (val >= 30) return "F";
-  return "G";
-}
-
-function gradeColor(grade: string): string {
-  switch (grade) {
-    case "S": return "text-red-500 font-bold";
-    case "A": return "text-red-400";
-    case "B": return "text-orange-400";
-    case "C": return "text-yellow-400";
-    case "D": return "text-lime-400";
-    case "E": return "text-green-500";
-    case "F": return "text-blue-400";
-    default:  return "text-gray-500";
-  }
-}
-
-function velocityGrade(v: number): string {
-  if (v >= 155) return "S";
-  if (v >= 150) return "A";
-  if (v >= 145) return "B";
-  if (v >= 140) return "C";
-  if (v >= 135) return "D";
-  if (v >= 130) return "E";
-  if (v >= 125) return "F";
-  return "G";
-}
-
-function potentialColor(grade: string): string {
-  switch (grade) {
-    case "S": return "text-red-500 font-bold";
-    case "A": return "text-red-400";
-    case "B": return "text-orange-400";
-    case "C": return "text-yellow-400";
-    case "D": return "text-lime-400";
-    default:  return "text-gray-500";
-  }
-}
-
-function AbilityCell({ val }: { val: number }) {
-  const grade = abilityGrade(val);
-  return (
-    <span className="inline-flex items-baseline gap-1">
-      <span className="text-gray-100">{val}</span>
-      <span className={`text-xs ${gradeColor(grade)}`}>{grade}</span>
-    </span>
-  );
-}
-
-function VelocityCell({ val }: { val: number }) {
-  const grade = velocityGrade(val);
-  return <span className={gradeColor(grade)}>{val}km</span>;
-}
-
-function pitchLevelColor(level: number): string {
-  if (level >= 6) return "text-red-400 font-bold";
-  if (level >= 5) return "text-orange-400";
-  if (level >= 4) return "text-yellow-400";
-  if (level >= 3) return "text-lime-400";
-  if (level >= 2) return "text-cyan-400";
-  return "text-cyan-300";
-}
-
-function PitchList({ pitches }: { pitches: PitchRepertoire[] }) {
-  if (pitches.length === 0) return <span className="text-gray-600">-</span>;
-  return (
-    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
-      {pitches.map((p) => (
-        <span key={p.type} className="whitespace-nowrap">
-          <span className="text-gray-400">{PITCH_TYPE_NAMES[p.type]}</span>
-          <span className={`ml-0.5 ${pitchLevelColor(p.level)}`}>{p.level}</span>
-        </span>
-      ))}
-    </div>
-  );
-}
 
 export default function RosterPage() {
   const params = useParams();
