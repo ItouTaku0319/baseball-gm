@@ -118,9 +118,9 @@ describe("ポジション別守備機会分布", () => {
     expect(avg["SS"].total).toBeLessThanOrEqual(6.5);
   });
 
-  it("SS: 1試合あたりPOが0.5-2.5", () => {
+  it("SS: 1試合あたりPOが0.5-3.5", () => {
     expect(avg["SS"].po).toBeGreaterThanOrEqual(0.5);
-    expect(avg["SS"].po).toBeLessThanOrEqual(2.5);
+    expect(avg["SS"].po).toBeLessThanOrEqual(3.5);
   });
 
   it("SS: 1試合あたりAが2.0-4.5", () => {

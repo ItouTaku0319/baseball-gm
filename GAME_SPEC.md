@@ -73,7 +73,7 @@ controlFactor  = pitcher.control / 100
 |---|---|---|
 | 死球 | 0.008 + (1 - controlFactor) × 0.007 | 0.3% |
 | 四球 | 0.075 + eyeFactor × 0.05 - controlFactor × 0.04 | 2% |
-| 三振 | 0.14 + velocityFactor × 0.08 - contactFactor × 0.06 + finisherBonus | 5% |
+| 三振 | 0.20 + velocityFactor × 0.08 - contactFactor × 0.10 + finisherBonus | 5% |
 | インプレー | 残りの確率 | - |
 
 ### 打球物理エンジン
@@ -104,9 +104,9 @@ controlFactor  = pitcher.control / 100
 
 #### 打球速度の生成
 ```
-基本: 120 + (power - 50) × 0.5 + (contact - 50) × 0.15
+基本: 132 + (power - 50) × 0.15 + (contact - 50) × 0.15
 変化球ペナルティ: (breakingPower - 50) × 0.15
-分布: ガウス乱数 (σ=18 km/h)
+分布: ガウス乱数 (σ=18 km/h), 範囲: [80, 170]
 ```
 
 #### 打球タイプ分類
@@ -149,9 +149,17 @@ controlFactor  = pitcher.control / 100
 
 #### 本塁打判定 (飛距離ベース)
 ```
-推定飛距離: 放物運動 × dragFactor(0.60)
+推定飛距離: 放物運動 × dragFactor(0.70)
 フェンス距離: 100 + 22 × sin(direction × π / 90) (両翼100m, 中堅122m)
-ratio = 飛距離 / フェンス距離
+
+弾道キャリーファクター: [0.90, 1.00, 1.05, 1.10] (弾道1-4)
+  弾道1: -10% (ゴロ打ちタイプはキャリーが弱い)
+  弾道2: 基準
+  弾道3: +5%
+  弾道4: +10% (フライ打ちタイプは最大飛距離が出る)
+
+effectiveDistance = 飛距離 × trajectoryCarryFactor
+ratio = effectiveDistance / フェンス距離
 ratio ≥ 1.05 → HR確定
 0.95 ≤ ratio < 1.05 → フェンス際ランダム (パワー補正付き)
 ratio < 0.95 → HR不可

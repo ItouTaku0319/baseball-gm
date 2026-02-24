@@ -238,14 +238,14 @@ function generatePitchLocation(
 
 /** 打球角度と速度から打球タイプを分類する */
 export function classifyBattedBallType(launchAngle: number, exitVelocity: number): BattedBallType {
-  if (launchAngle >= 50) return "popup";
+  if (launchAngle >= 38) return "popup";
   if (launchAngle < 10) return "ground_ball";
   // 10-19°: ライナー帯（低速・低角度の弱い打球はゴロ扱い）
   if (launchAngle < 20) {
     if (launchAngle < 15 && exitVelocity < 100) return "ground_ball";
     return "line_drive";
   }
-  // 22°以上: フライ
+  // 20-39°: フライ
   return "fly_ball";
 }
 
@@ -262,7 +262,7 @@ export function estimateDistance(exitVelocityKmh: number, launchAngleDeg: number
   const vCosT = v * Math.cos(theta);
   const baseDistance = vCosT * (vSinT + Math.sqrt(vSinT * vSinT + 2 * g * h)) / g;
 
-  const dragFactor = 0.60; // 空気抵抗補正(約40%減)
+  const dragFactor = 0.70; // 空気抵抗補正(約30%減)
   return baseDistance * dragFactor;
 }
 
@@ -306,7 +306,7 @@ export function generateBattedBall(batter: Player, pitcher: Player): BattedBall 
   const launchAngle = clamp(gaussianRandom(angleMean, 16), -15, 70);
 
   // --- 3. 打球速度 (80-185 km/h) ---
-  const velMean = 120 + (power - 50) * 0.5 + (contact - 50) * 0.15;
+  const velMean = 132 + (power - 50) * 0.15 + (contact - 50) * 0.15;
   const breakingPenalty = (breakingPower - 50) * 0.15;
   const exitVelocity = clamp(gaussianRandom(velMean - breakingPenalty, 18), 80, 170);
 
@@ -431,7 +431,14 @@ function resolvePlayWithAI(
   if (ball.type === "fly_ball") {
     const distance = estimateDistance(ball.exitVelocity, ball.launchAngle);
     const fenceDist = getFenceDistance(ball.direction);
-    const ratio = distance / fenceDist;
+
+    // 弾道によるHR飛距離補正（低弾道=ゴロ打ちでキャリーが落ちる、高弾道=控えめにボーナス）
+    const trajectory = batter.batting.trajectory ?? 2;
+    const trajectoryCarryFactors = [0.90, 1.00, 1.05, 1.10]; // 弾道1-4
+    const trajectoryCarryFactor = trajectoryCarryFactors[Math.min(3, Math.max(0, trajectory - 1))];
+
+    const effectiveDistance = distance * trajectoryCarryFactor;
+    const ratio = effectiveDistance / fenceDist;
 
     if (ratio >= 1.05) {
       const best = findBestFielder(fieldingResult);

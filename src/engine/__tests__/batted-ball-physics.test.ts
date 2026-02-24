@@ -173,8 +173,9 @@ describe("classifyBattedBallType", () => {
     expect(classifyBattedBallType(55, 130)).toBe("popup");
   });
 
-  it("15° + 90km/h → ground_ball (低速ライナーはゴロ扱い)", () => {
-    expect(classifyBattedBallType(15, 90)).toBe("ground_ball");
+  it("15° + 90km/h → line_drive (15°は低速でもライナー)", () => {
+    // 低速ゴロ判定は launchAngle < 15 の場合のみ
+    expect(classifyBattedBallType(15, 90)).toBe("line_drive");
   });
 });
 
