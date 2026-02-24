@@ -140,7 +140,7 @@ describe("calcBallLanding: estimateDistance との比較", () => {
   // ただし calcBallLanding は座標も返し、estimateDistance はスカラーのみ
 
   it("同じ入力で似た飛距離を返す", () => {
-    // fielding-ai.ts と simulation.ts で同じ dragFactor=0.61 を使っている
+    // fielding-ai.ts と simulation.ts で同じ dragFactor=0.70 を使っている
 
     const configs = [
       { dir: 45, angle: 25, vel: 140 },
