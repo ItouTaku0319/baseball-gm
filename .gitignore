@@ -42,3 +42,8 @@ next-env.d.ts
 
 # json
 *.json
+
+# temp files
+/tmp/
+tmp-*
+*.stackdump
