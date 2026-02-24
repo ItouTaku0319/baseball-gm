@@ -137,7 +137,7 @@ function getFenceArrivalTime(
   const v = exitVelocityKmh / 3.6;
   const theta = launchAngleDeg * Math.PI / 180;
   const vx = v * Math.cos(theta);
-  const dragFactor = 0.70;
+  const dragFactor = 0.63;
   const fenceDist = getFenceDistance(directionDeg);
   if (vx * dragFactor <= 0) return Infinity;
   return fenceDist / (vx * dragFactor);
@@ -154,7 +154,7 @@ function getBallStateAtTime(
   const theta = launchAngleDeg * Math.PI / 180;
   const g = 9.8;
   const h0 = 1.2;
-  const dragFactor = 0.70;
+  const dragFactor = 0.63;
 
   const vx = v * Math.cos(theta);
   const vy = v * Math.sin(theta);
@@ -470,7 +470,7 @@ function computeTrajectoryPoints(
   const h = 1.2;
   const vx = v * Math.cos(theta);
   const vy = v * Math.sin(theta);
-  const dragFactor = 0.70;
+  const dragFactor = 0.63;
 
   const disc = vy * vy + 2 * g * h;
   if (disc < 0) return [{ x: 0, y: h }];
