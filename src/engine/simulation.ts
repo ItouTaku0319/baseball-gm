@@ -1,6 +1,8 @@
 import type { Team } from "@/models/team";
 import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog } from "@/models/league";
 import type { Player, PitchRepertoire } from "@/models/player";
+import { calcBallLanding, evaluateFielders, resolveHitTypeFromLanding } from "./fielding-ai";
+import type { BallLanding, FielderDecision } from "./fielding-ai";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
 export function calcBreakingPower(pitches: PitchRepertoire[] | undefined): number {
@@ -153,10 +155,12 @@ function clamp(value: number, min: number, max: number): number {
 export function classifyBattedBallType(launchAngle: number, exitVelocity: number): BattedBallType {
   if (launchAngle >= 50) return "popup";
   if (launchAngle < 10) return "ground_ball";
-  if (launchAngle < 25) {
-    if (exitVelocity < 130) return "ground_ball";
+  // 10-19°: ライナー帯（低速・低角度の弱い打球はゴロ扱い）
+  if (launchAngle < 20) {
+    if (launchAngle < 15 && exitVelocity < 100) return "ground_ball";
     return "line_drive";
   }
+  // 22°以上: フライ
   return "fly_ball";
 }
 
@@ -173,7 +177,7 @@ export function estimateDistance(exitVelocityKmh: number, launchAngleDeg: number
   const vCosT = v * Math.cos(theta);
   const baseDistance = vCosT * (vSinT + Math.sqrt(vSinT * vSinT + 2 * g * h)) / g;
 
-  const dragFactor = 0.70; // 空気抵抗補正(約30%減)
+  const dragFactor = 0.61; // 空気抵抗補正(約39%減)
   return baseDistance * dragFactor;
 }
 
@@ -266,147 +270,328 @@ function assignPopupFielder(direction: number): FielderPosition {
   return 3;                  // 1B
 }
 
-/** 打球物理データからフィールダーを決定する */
-export function determineFielderFromBall(ball: BattedBall): FielderPosition {
-  if (ball.type === "popup") {
-    return assignPopupFielder(ball.direction);
-  }
 
-  if (ball.type === "fly_ball") {
-    return assignOutfielder(ball.direction);
+/** fieldingResultから最も到達が早い野手を探す */
+function findBestFielder(
+  fieldingResult: Map<FielderPosition, FielderDecision>
+): FielderDecision | null {
+  let best: FielderDecision | null = null;
+  for (const decision of fieldingResult.values()) {
+    if (decision.role === "primary") return decision;
   }
-
-  if (ball.type === "ground_ball") {
-    return assignInfielder(ball.direction, ball.exitVelocity);
+  for (const decision of fieldingResult.values()) {
+    if (!best || decision.timeToReach < best.timeToReach) {
+      best = decision;
+    }
   }
-
-  // ライナー: 方向と速度で内野/外野を振り分け
-  if (ball.exitVelocity > 145 || ball.launchAngle > 16) {
-    return assignOutfielder(ball.direction);
-  }
-  return assignInfielder(ball.direction, ball.exitVelocity);
+  return best;
 }
 
-/** 打球物理ベースでインプレーの結果を判定する */
-function resolveInPlayFromBall(
+// 塁の座標 (メートル) — ダイヤモンド: 1辺27.4m
+const BASE_POSITIONS = {
+  home:  { x: 0, y: 0 },
+  first: { x: 19.4, y: 19.4 },
+  second: { x: 0, y: 38.8 },
+  third: { x: -19.4, y: 19.4 },
+} as const;
+const BASE_LENGTH = 27.4; // 塁間距離(m)
+
+// ポジション別の1Bへの送球距離 (デフォルト守備位置から)
+const THROW_DIST_TO_FIRST: Record<number, number> = {
+  1: 19.4, // P (0,18.4) → 1B
+  2: 26.7, // C (0,1) → 1B
+  3: 9.0,  // 1B (20,28) → 1B (自分の近く)
+  4: 19.3, // 2B (10,36) → 1B
+  5: 40.3, // 3B (-20,28) → 1B
+  6: 33.8, // SS (-10,36) → 1B
+  7: 55.0, // LF → 1B
+  8: 65.0, // CF → 1B
+  9: 55.0, // RF → 1B
+};
+
+function getThrowDistToFirst(pos: FielderPosition): number {
+  return THROW_DIST_TO_FIRST[pos] ?? 30;
+}
+
+/**
+ * 守備AIによるインプレー結果判定
+ *
+ * 打球タイプごとに異なるメカニクス:
+ *
+ * ゴロ:
+ *   1. 野手がボール経路に到達 → 捕球(高確率)
+ *   2. 捕球後、1Bへ送球 → 走者との競争で安打/アウト判定
+ *   3. 到達できない → 外野手が回収 → ヒット(距離ベースで長打判定)
+ *
+ * フライ/ライナー:
+ *   1. 野手が着地点に到達 → 捕球試行(余裕度+打球速度で成功率)
+ *   2. 到達できない → ヒット → 回収+送球 vs 走者の進塁で長打判定
+ */
+function resolvePlayWithAI(
   ball: BattedBall,
-  fielderPos: FielderPosition,
+  landing: BallLanding,
+  fieldingResult: Map<FielderPosition, FielderDecision>,
+  _fielderMap: Map<FielderPosition, Player>,
   batter: Player,
-  _pitcher: Player,
-  fielderMap: Map<FielderPosition, Player>,
   bases: BaseRunners,
   outs: number
-): AtBatResult {
-  const fielder = fielderMap.get(fielderPos) ?? createDummyFielder();
-  const { fielding, catching } = getFieldingAbility(fielder, fielderPos);
-  const fieldingFactor = fielding / 100;
-  const catchingFactor = catching / 100;
+): { result: AtBatResult; fielderPos: FielderPosition } {
+  // === ポップフライ → 常にアウト ===
+  if (ball.type === "popup") {
+    const best = findBestFielder(fieldingResult);
+    return { result: "popout", fielderPos: best?.position ?? assignPopupFielder(ball.direction) };
+  }
 
-  // ポップフライ → 常にアウト
-  if (ball.type === "popup") return "popout";
-
-  // --- 本塁打判定 (フライのみ: ライナーはHR対象外) ---
+  // === フライ → HR判定（フェンス越え）===
   if (ball.type === "fly_ball") {
     const distance = estimateDistance(ball.exitVelocity, ball.launchAngle);
     const fenceDist = getFenceDistance(ball.direction);
     const ratio = distance / fenceDist;
 
     if (ratio >= 1.05) {
-      // フェンス超え確定
-      return "homerun";
+      const best = findBestFielder(fieldingResult);
+      return { result: "homerun", fielderPos: best?.position ?? assignOutfielder(ball.direction) };
     } else if (ratio >= 0.95) {
-      // フェンス際: パワー補正付きランダム
       const powerBonus = (batter.batting.power - 50) * 0.002;
       const hrChance = (ratio - 0.95) / 0.10 + powerBonus;
-      if (Math.random() < clamp(hrChance, 0.01, 0.90)) return "homerun";
+      if (Math.random() < clamp(hrChance, 0.01, 0.90)) {
+        const best = findBestFielder(fieldingResult);
+        return { result: "homerun", fielderPos: best?.position ?? assignOutfielder(ball.direction) };
+      }
     }
   }
 
-  // --- ゴロ処理 ---
+  // === 最適野手を取得 ===
+  const best = findBestFielder(fieldingResult);
+  if (!best) {
+    return { result: "single", fielderPos: 8 };
+  }
+
+  const fielderPos = best.position;
+  const skill = best.skill;
+  const fieldingRate = (skill.fielding * 0.6 + skill.catching * 0.4) / 100;
+
+  // 野手がボール地点に到達する時間
+  const fielderArrivalTime = best.timeToReach;
+  // ボールが野手の位置に到達する時間（ゴロ=経路通過時間、フライ=滞空時間）
+  const ballArrivalTime = best.ballArrivalTime;
+
+  // =====================================
+  // ゴロ専用処理
+  // =====================================
   if (ball.type === "ground_ball") {
+    return resolveGroundBall(
+      ball, landing, best, fieldingResult, batter, bases, outs, fieldingRate
+    );
+  }
+
+  // =====================================
+  // フライ / ライナー処理
+  // =====================================
+  return resolveFlyOrLineDrive(
+    ball, landing, best, fieldingResult, batter, bases, outs, fieldingRate
+  );
+}
+
+/**
+ * ゴロの結果判定
+ *
+ * 1. 野手がボール経路に到達できるか (timing)
+ * 2. 到達 → 捕球 → 送球 → 走者との競争
+ * 3. 不到達 → 外野へ抜ける → 回収 → 長打判定
+ */
+function resolveGroundBall(
+  ball: BattedBall,
+  landing: BallLanding,
+  best: FielderDecision,
+  fieldingResult: Map<FielderPosition, FielderDecision>,
+  batter: Player,
+  bases: BaseRunners,
+  outs: number,
+  fieldingRate: number
+): { result: AtBatResult; fielderPos: FielderPosition } {
+  const fielderPos = best.position;
+  const skill = best.skill;
+
+  // 走者パラメータ
+  const runnerSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
+  const timePerBase = BASE_LENGTH / runnerSpeed;
+
+  if (best.timeToReach <= best.ballArrivalTime) {
+    // === 野手がボール到達前に到着 → 捕球試行 ===
+
+    // ゴロ捕球成功率: 非常に高い (97-99.5%)
+    const margin = best.ballArrivalTime - best.timeToReach;
+    const marginBonus = Math.min(0.015, margin * 0.01);
+    const fieldRate = clamp(0.97 + fieldingRate * 0.02 + marginBonus, 0.97, 0.995);
+
+    if (Math.random() >= fieldRate) {
+      // === 捕球失策 → エラー ===
+      return { result: "error", fielderPos };
+    }
+
+    // === 捕球成功 → 1Bへ送球、走者との競争 ===
+    // ボール確保時間 (腰を落として捕球→グラブ内で確保)
+    const secureTime = 0.3 + (1 - skill.fielding / 100) * 0.3; // 0.3-0.6秒
+    // 持ち替え+送球モーション時間
+    const transferTime = 0.6 + (1 - skill.arm / 100) * 0.4; // 0.6-1.0秒
+
+    // 送球速度 (m/s)
+    const throwSpeed = 25 + (skill.arm / 100) * 15;
+
+    // 野手がボールを捕った時点
+    const fieldTime = Math.max(best.timeToReach, best.ballArrivalTime);
+
+    // 野手位置から1Bへの送球距離 (デフォルト守備位置ベース)
+    const throwDist = getThrowDistToFirst(fielderPos);
+
+    // 守備完了時間 = 野手捕球時 + 確保 + 持ち替え + 送球飛行時間
+    const defenseTime = fieldTime + secureTime + transferTime + throwDist / throwSpeed;
+
+    // 走者の1B到達時間 = バット→走り出し(0.3s) + 塁間
+    const runnerTo1B = 0.3 + timePerBase;
+
+    if (runnerTo1B < defenseTime) {
+      // === 走者がセーフ → 内野安打 ===
+      return { result: "infieldHit", fielderPos };
+    }
+
+    // === 送球が間に合う → アウト ===
+    // 併殺判定
     if (bases.first && outs < 2) {
       const dpRate = 0.12 + (1 - batter.batting.speed / 100) * 0.06;
-      if (Math.random() < dpRate) return "doublePlay";
+      if (Math.random() < dpRate) {
+        return { result: "doublePlay", fielderPos };
+      }
     }
-
-    // ゴロ安打判定（野手の間を抜ける打球）
-    const speedFactor = clamp((ball.exitVelocity - 100) / 80, 0, 1);
-    const fielderSkill = (fielding + catching) / 200;
-    const groundHitRate = 0.18 + speedFactor * 0.08 - fielderSkill * 0.10;
-    const contactBonus = (batter.batting.contact - 50) / 100 * 0.05;
-    const finalGroundHitRate = clamp(groundHitRate + contactBonus, 0.08, 0.30);
-    if (Math.random() < finalGroundHitRate) return "single";
-
-    const speedBonus = batter.batting.speed / 100;
-    const velPenalty = Math.max(0, (ball.exitVelocity - 100)) * 0.001;
-    const infieldHitRate = 0.04 + speedBonus * 0.08 - fieldingFactor * 0.03 - velPenalty;
-    if (Math.random() < Math.max(0.01, infieldHitRate)) return "infieldHit";
-
-    const velErrorBonus = Math.max(0, (ball.exitVelocity - 130)) * 0.0005;
-    const errorRate = 0.03 - fieldingFactor * 0.015 - catchingFactor * 0.01 + velErrorBonus;
-    if (Math.random() < Math.max(0.005, errorRate)) return "error";
-
+    // フィルダースチョイス判定
     if (bases.first || bases.second || bases.third) {
-      if (Math.random() < 0.05) return "fieldersChoice";
+      if (Math.random() < 0.05) {
+        return { result: "fieldersChoice", fielderPos };
+      }
     }
-
-    return "groundout";
+    return { result: "groundout", fielderPos };
   }
 
-  // --- フライ処理 ---
-  if (ball.type === "fly_ball") {
-    const hitRate = 0.12 - fieldingFactor * 0.03 + (ball.exitVelocity - 120) * 0.0005;
-    if (Math.random() < Math.max(0.05, hitRate)) {
-      return determineHitType(ball.type, batter);
+  // === 野手が間に合わない → ボールが外野へ抜ける ===
+  // 外野手(backup)がボールを回収
+  let retriever = best;
+  for (const decision of fieldingResult.values()) {
+    if (decision.position >= 7 && decision.timeToReach < retriever.timeToReach * 2.5) {
+      retriever = decision;
+      break;
     }
-
-    if (bases.third && outs < 2) {
-      if (Math.random() < 0.15) return "sacrificeFly";
-    }
-
-    const errorRate = 0.015 - fieldingFactor * 0.008;
-    if (Math.random() < Math.max(0.002, errorRate)) return "error";
-
-    return "flyout";
   }
 
-  // --- ライナー処理 ---
-  const hitRate = 0.62 + (batter.batting.contact / 100) * 0.05 - fieldingFactor * 0.03;
-  if (Math.random() < Math.max(0.50, hitRate)) {
-    return determineHitType(ball.type, batter);
-  }
-
-  return "lineout";
+  // 回収 → 送球 → 走者の進塁判定
+  return resolveHitAdvancement(ball, landing, retriever, batter);
 }
 
-/** 安打時の長打タイプを決定する */
-function determineHitType(
-  battedBallType: BattedBallType,
-  batter: Player
-): "single" | "double" | "triple" {
-  const speedFactor = batter.batting.speed / 100;
-  const powerFactor = batter.batting.power / 100;
-  const roll = Math.random();
+/**
+ * フライ・ライナーの結果判定
+ *
+ * 1. 野手が着地点に到達できるか (timing)
+ * 2. 到達 → 捕球試行 (余裕度 + 打球速度で成功率決定)
+ * 3. 不到達 → ヒット → 回収+送球で長打判定
+ */
+function resolveFlyOrLineDrive(
+  ball: BattedBall,
+  landing: BallLanding,
+  best: FielderDecision,
+  fieldingResult: Map<FielderPosition, FielderDecision>,
+  batter: Player,
+  bases: BaseRunners,
+  outs: number,
+  fieldingRate: number
+): { result: AtBatResult; fielderPos: FielderPosition } {
+  const fielderPos = best.position;
 
-  if (battedBallType === "fly_ball") {
-    const tripleRate = 0.06 + speedFactor * 0.04;
-    if (roll < tripleRate) return "triple";
-    return "double";
+  if (best.timeToReach <= best.ballArrivalTime) {
+    // === 野手が着地前に到着 → 捕球試行 ===
+
+    const margin = best.ballArrivalTime - best.timeToReach;
+
+    // 到達した野手の捕球成功率: 余裕があれば高い、ギリギリなら低い
+    // margin >= 1.0s → ほぼ確実 (97-99%)
+    // margin ~= 0s  → 難しい (85-95%)
+    const marginFactor = clamp(margin / 1.0, 0, 1); // 0-1に正規化
+    const baseCatchRate = 0.85 + marginFactor * 0.12; // 0.85-0.97
+    const skillBonus = fieldingRate * 0.03; // 0-0.03
+    const catchRate = clamp(baseCatchRate + skillBonus, 0.85, 0.99);
+
+    if (Math.random() < catchRate) {
+      // === 捕球成功 → アウト ===
+      if (ball.type === "fly_ball") {
+        // 犠飛判定
+        if (bases.third && outs < 2 && Math.random() < 0.15) {
+          return { result: "sacrificeFly", fielderPos };
+        }
+        return { result: "flyout", fielderPos };
+      }
+      return { result: "lineout", fielderPos };
+    } else {
+      // === 捕球失敗 → エラー ===
+      return { result: "error", fielderPos };
+    }
   }
 
-  if (battedBallType === "line_drive") {
-    const doubleRate = 0.20 + powerFactor * 0.08;
-    const tripleRate = doubleRate + 0.02 + speedFactor * 0.02;
-    if (roll < doubleRate) return "double";
-    if (roll < tripleRate) return "triple";
-    return "single";
-  }
-
-  // ground_ball (内野安打含む): ほぼ単打
-  const doubleRate = 0.08 + speedFactor * 0.03;
-  if (roll < doubleRate) return "double";
-  return "single";
+  // === 野手が間に合わない → ヒット確定 ===
+  return resolveHitAdvancement(ball, landing, best, batter);
 }
+
+/**
+ * ヒット確定後の進塁判定 (物理ベース)
+ * ボール回収位置から各塁への送球時間 vs 走者の到達時間
+ */
+function resolveHitAdvancement(
+  ball: BattedBall,
+  landing: BallLanding,
+  retriever: FielderDecision,
+  batter: Player,
+): { result: AtBatResult; fielderPos: FielderPosition } {
+  const retrieverSkill = retriever.skill;
+
+  // 野手のボール回収時間
+  const pickupTime = 0.3 + (1 - retrieverSkill.catching / 100) * 0.4;
+  const totalFielderTime = retriever.timeToReach + pickupTime;
+
+  // 送球速度: 肩力ベース (25-40 m/s)
+  const throwSpeed = 25 + (retrieverSkill.arm / 100) * 15;
+
+  // 走者の走塁速度: 走力ベース (6.5-9.0 m/s)
+  const runnerSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
+  const timePerBase = BASE_LENGTH / runnerSpeed;
+
+  // ボール位置からの送球距離
+  const ballPos = landing.position;
+  const throwTo2B = Math.sqrt(
+    (ballPos.x - BASE_POSITIONS.second.x) ** 2 +
+    (ballPos.y - BASE_POSITIONS.second.y) ** 2
+  );
+  const throwTo3B = Math.sqrt(
+    (ballPos.x - BASE_POSITIONS.third.x) ** 2 +
+    (ballPos.y - BASE_POSITIONS.third.y) ** 2
+  );
+
+  // 走者の各塁到達時間（1Bは既にセーフ確定）
+  const runnerTo2B = 0.3 + timePerBase * 2;
+  const runnerTo3B = 0.3 + timePerBase * 3;
+
+  // 守備の各塁への送球完了時間
+  const defenseTo2B = totalFielderTime + throwTo2B / throwSpeed;
+  const defenseTo3B = totalFielderTime + throwTo3B / throwSpeed;
+
+  // 走者がセーフな最大進塁数を計算 (1B はヒット確定なので最低1)
+  let basesReached = 1;
+  if (runnerTo2B < defenseTo2B) basesReached = 2;
+  if (basesReached >= 2 && runnerTo3B < defenseTo3B) basesReached = 3;
+
+  const fielderPos = retriever.position;
+  if (basesReached >= 3) return { result: "triple", fielderPos };
+  if (basesReached >= 2) return { result: "double", fielderPos };
+  return { result: "single", fielderPos };
+}
+
 
 /** 1打席の結果を決定する */
 function simulateAtBat(
@@ -455,12 +640,13 @@ function simulateAtBat(
     return { result: "strikeout", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null };
   }
 
-  // インプレー: 打球物理データを生成 → フィールダーを幾何学的に決定 → 結果判定
+  // インプレー: 打球物理データ → 着地位置 → 守備AI → 結果判定
   const ball = generateBattedBall(batter, pitcher);
-  const fielderPos = determineFielderFromBall(ball);
-  const result = resolveInPlayFromBall(ball, fielderPos, batter, pitcher, fielderMap, bases, outs);
+  const landing = calcBallLanding(ball.direction, ball.launchAngle, ball.exitVelocity);
+  const fieldingResult = evaluateFielders(landing, ball.type, fielderMap);
+  const aiResult = resolvePlayWithAI(ball, landing, fieldingResult, fielderMap, batter, bases, outs);
 
-  return { result, battedBallType: ball.type, fielderPosition: fielderPos, direction: ball.direction, launchAngle: ball.launchAngle, exitVelocity: ball.exitVelocity };
+  return { result: aiResult.result, battedBallType: ball.type, fielderPosition: aiResult.fielderPos, direction: ball.direction, launchAngle: ball.launchAngle, exitVelocity: ball.exitVelocity };
 }
 
 /** 個人成績マップを取得・初期化するヘルパー */

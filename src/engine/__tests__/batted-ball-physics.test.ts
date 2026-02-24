@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateBattedBall, classifyBattedBallType, determineFielderFromBall, gaussianRandom } from "@/engine/simulation";
+import { generateBattedBall, classifyBattedBallType, gaussianRandom } from "@/engine/simulation";
 import type { Player } from "@/models/player";
 
 function createTestBatter(overrides: Partial<Player> = {}): Player {
@@ -178,71 +178,7 @@ describe("classifyBattedBallType", () => {
   });
 });
 
-describe("determineFielderFromBall ゾーン分布", () => {
-  const N = 2000;
-
-  it("ゴロ方向10°: 3Bが最多", () => {
-    const counts: Record<number, number> = {};
-    for (let i = 0; i < N; i++) {
-      const pos = determineFielderFromBall({ direction: 10, launchAngle: 0, exitVelocity: 120, type: "ground_ball" });
-      counts[pos] = (counts[pos] || 0) + 1;
-    }
-    const maxPos = Number(Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]);
-    expect(maxPos).toBe(5); // 3B
-  });
-
-  it("ゴロ方向30°: SSが最多", () => {
-    const counts: Record<number, number> = {};
-    for (let i = 0; i < N; i++) {
-      const pos = determineFielderFromBall({ direction: 30, launchAngle: 0, exitVelocity: 120, type: "ground_ball" });
-      counts[pos] = (counts[pos] || 0) + 1;
-    }
-    const maxPos = Number(Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]);
-    expect(maxPos).toBe(6); // SS
-  });
-
-  it("ゴロ方向70°: 1Bが最多", () => {
-    const counts: Record<number, number> = {};
-    for (let i = 0; i < N; i++) {
-      const pos = determineFielderFromBall({ direction: 70, launchAngle: 0, exitVelocity: 120, type: "ground_ball" });
-      counts[pos] = (counts[pos] || 0) + 1;
-    }
-    const maxPos = Number(Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]);
-    expect(maxPos).toBe(3); // 1B
-  });
-
-  it("フライ方向15°: LFが最多", () => {
-    const counts: Record<number, number> = {};
-    for (let i = 0; i < N; i++) {
-      const pos = determineFielderFromBall({ direction: 15, launchAngle: 30, exitVelocity: 130, type: "fly_ball" });
-      counts[pos] = (counts[pos] || 0) + 1;
-    }
-    const maxPos = Number(Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]);
-    expect(maxPos).toBe(7); // LF
-  });
-
-  it("フライ方向45°: CFが最多", () => {
-    const counts: Record<number, number> = {};
-    for (let i = 0; i < N; i++) {
-      const pos = determineFielderFromBall({ direction: 45, launchAngle: 30, exitVelocity: 130, type: "fly_ball" });
-      counts[pos] = (counts[pos] || 0) + 1;
-    }
-    const maxPos = Number(Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]);
-    expect(maxPos).toBe(8); // CF
-  });
-
-  it("フライ方向75°: RFが最多", () => {
-    const counts: Record<number, number> = {};
-    for (let i = 0; i < N; i++) {
-      const pos = determineFielderFromBall({ direction: 75, launchAngle: 30, exitVelocity: 130, type: "fly_ball" });
-      counts[pos] = (counts[pos] || 0) + 1;
-    }
-    const maxPos = Number(Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]);
-    expect(maxPos).toBe(9); // RF
-  });
-});
-
-describe("resolveInPlayFromBall バレルゾーン", () => {
+describe("classifyBattedBallType フライ判定", () => {
   it("高角度(22-38°) + フライ → fly_ball", () => {
     expect(classifyBattedBallType(28, 160)).toBe("fly_ball");
     expect(classifyBattedBallType(35, 155)).toBe("fly_ball");

@@ -1,0 +1,337 @@
+import type { Player } from "../models/player";
+
+/** フィールド上の2D座標 (メートル) */
+export interface FieldPosition2D {
+  x: number; // 左右(m): 正=1塁側(ライト方向), 負=3塁側(レフト方向)
+  y: number; // 前後(m): 0=ホーム, 正=外野方向
+}
+
+/** ポジション番号 (1=P, 2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF) */
+type FielderPosition = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
+/** 守備役割 */
+type FielderRole = "primary" | "backup" | "cover_base" | "relay" | "none";
+
+/** 1野手の判断結果 */
+export interface FielderDecision {
+  position: FielderPosition;
+  role: FielderRole;
+  distanceToBall: number;     // ボールまでの距離(m)
+  timeToReach: number;        // 野手の到達時間(秒)
+  ballArrivalTime: number;    // ボールが野手地点に到達する時間(秒)
+  canReach: boolean;          // 野手がボールより先に到達できるか
+  skill: { fielding: number; catching: number; arm: number };
+}
+
+/** 打球の着地情報 */
+export interface BallLanding {
+  position: FieldPosition2D; // 着地座標
+  distance: number;          // ホームからの距離(m)
+  flightTime: number;        // ボールの飛行/到達時間(秒)
+  isGroundBall: boolean;     // ゴロかどうか
+}
+
+/** 守備配置 (将来拡張用) */
+export interface DefensiveAlignment {
+  positions: Map<FielderPosition, FieldPosition2D>;
+}
+
+/** デフォルト守備位置 */
+export const DEFAULT_FIELDER_POSITIONS: ReadonlyMap<FielderPosition, FieldPosition2D> = new Map([
+  [1, { x: 0,   y: 18.4 }], // P (ピッチャーマウンド)
+  [2, { x: 0,   y: 1.0  }], // C
+  [3, { x: 20,  y: 28   }], // 1B
+  [4, { x: 10,  y: 36   }], // 2B
+  [5, { x: -20, y: 28   }], // 3B
+  [6, { x: -10, y: 36   }], // SS
+  [7, { x: -26, y: 65   }], // LF
+  [8, { x: 0,   y: 73   }], // CF
+  [9, { x: 26,  y: 65   }], // RF
+]);
+
+/** 投手は pitching 側、野手は batting 側から守備能力を取得 */
+function getFieldingSkill(
+  player: Player,
+  pos: FielderPosition
+): { fielding: number; catching: number; arm: number } {
+  if (pos === 1) {
+    return {
+      fielding: player.pitching?.fielding ?? 50,
+      catching: player.pitching?.catching ?? 50,
+      arm: player.pitching?.arm ?? 50,
+    };
+  }
+  return {
+    fielding: player.batting.fielding,
+    catching: player.batting.catching,
+    arm: player.batting.arm,
+  };
+}
+
+/**
+ * 打球物理データから着地位置を計算
+ * @param direction 打球方向 (0=レフト線, 45=センター, 90=ライト線)
+ * @param launchAngle 打球角度 (度)
+ * @param exitVelocity 打球速度 (km/h)
+ */
+export function calcBallLanding(
+  direction: number,
+  launchAngle: number,
+  exitVelocity: number
+): BallLanding {
+  const isGroundBall = launchAngle < 10;
+  const angleRad = (direction - 45) * Math.PI / 180;
+
+  if (isGroundBall) {
+    // ゴロ: 摩擦減速モデル (最大55m)
+    const v0 = exitVelocity / 3.6; // km/h → m/s
+    const groundDistance = Math.min(55, v0 * 1.2);
+    const groundTime = groundDistance / (v0 * 0.7); // 平均速度 = 初速の70%
+
+    const x = groundDistance * Math.sin(angleRad);
+    const y = groundDistance * Math.cos(angleRad);
+
+    return {
+      position: { x, y },
+      distance: groundDistance,
+      flightTime: groundTime,
+      isGroundBall: true,
+    };
+  }
+
+  // フライ/ライナー: 放物運動 + 空気抵抗補正 (dragFactor=0.70)
+  const v0 = exitVelocity / 3.6;
+  const theta = launchAngle * Math.PI / 180;
+  const g = 9.8;
+  const h = 1.2; // 打点高さ(m)
+
+  const vy0 = v0 * Math.sin(theta);
+  const vx  = v0 * Math.cos(theta);
+  const tUp = vy0 / g;
+  const maxH = h + (vy0 * vy0) / (2 * g);
+  const tDown = Math.sqrt(2 * maxH / g);
+  const flightTime = (tUp + tDown) * 0.85; // 空気抵抗で短縮
+  const distance = vx * flightTime * 0.61; // dragFactor (simulation.tsと同期)
+
+  const x = distance * Math.sin(angleRad);
+  const y = distance * Math.cos(angleRad);
+
+  return {
+    position: { x, y },
+    distance,
+    flightTime,
+    isGroundBall: false,
+  };
+}
+
+/**
+ * 全9野手の守備判断を計算
+ * @param landing 打球着地情報
+ * @param battedBallType 打球タイプ
+ * @param fielderMap ポジション → 選手マッピング
+ * @param alignment 守備配置 (省略でデフォルト)
+ */
+export function evaluateFielders(
+  landing: BallLanding,
+  battedBallType: string,
+  fielderMap: Map<FielderPosition, Player>,
+  alignment?: DefensiveAlignment
+): Map<FielderPosition, FielderDecision> {
+  const positions = alignment?.positions ?? DEFAULT_FIELDER_POSITIONS;
+
+  const ALL_POSITIONS: FielderPosition[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const INFIELD_POSITIONS: FielderPosition[]  = [1, 2, 3, 4, 5, 6];
+  const OUTFIELD_POSITIONS: FielderPosition[] = [7, 8, 9];
+
+  // 各野手の到達時間を計算
+  const entries: {
+    pos: FielderPosition;
+    timeToReach: number;
+    ballArrivalTime: number;
+    distanceToBall: number;
+    canReach: boolean;
+  }[] = [];
+
+  for (const pos of ALL_POSITIONS) {
+    const player = fielderMap.get(pos);
+    const fielderPos = positions.get(pos);
+    if (!player || !fielderPos) continue;
+
+    const skill = getFieldingSkill(player, pos);
+
+    // 反応時間: 守備力が高いほど短い (0.3-0.6秒)
+    let reactionTime = 0.3 + (1 - skill.fielding / 100) * 0.3;
+    // ライナーは軌道が低く速いため読みづらい → 反応遅延 +0.3-0.5秒
+    if (battedBallType === "line_drive") {
+      reactionTime += 0.3 + (1 - skill.fielding / 100) * 0.2;
+    }
+    // 走力: batting.speed 依存 (5-8 m/s)
+    const runSpeed = 5.0 + (player.batting.speed / 100) * 3.0;
+
+    let distanceToBall: number;
+    let timeToReach: number;
+    let ballArrival: number;
+    let canReach: boolean;
+
+    if (landing.isGroundBall) {
+      // ゴロ: ボール経路（ホーム→着地位置の直線）への垂直距離で判定
+      const pathLen = Math.sqrt(
+        landing.position.x * landing.position.x + landing.position.y * landing.position.y
+      );
+      if (pathLen < 1) {
+        distanceToBall = Math.sqrt(
+          (landing.position.x - fielderPos.x) ** 2 + (landing.position.y - fielderPos.y) ** 2
+        );
+        timeToReach = reactionTime + distanceToBall / runSpeed;
+        ballArrival = 0.1;
+        canReach = true;
+      } else {
+        const pathDirX = landing.position.x / pathLen;
+        const pathDirY = landing.position.y / pathLen;
+        const projDist = fielderPos.x * pathDirX + fielderPos.y * pathDirY;
+        const lateralDist = Math.abs(fielderPos.x * pathDirY - fielderPos.y * pathDirX);
+        const avgSpeed = pathLen / landing.flightTime;
+
+        if (projDist > 0 && projDist < pathLen) {
+          // 野手の射影がボール経路上にある → 経路上で捕球を試みる
+          distanceToBall = lateralDist;
+          ballArrival = projDist / avgSpeed;
+          timeToReach = reactionTime + lateralDist / runSpeed;
+          canReach = timeToReach <= ballArrival;
+        } else {
+          // 野手の射影がボール経路外（外野手等）→ ボール停止位置へ走る
+          const dx = landing.position.x - fielderPos.x;
+          const dy = landing.position.y - fielderPos.y;
+          distanceToBall = Math.sqrt(dx * dx + dy * dy);
+          ballArrival = landing.flightTime; // ボール停止時間
+          timeToReach = reactionTime + distanceToBall / runSpeed;
+          canReach = timeToReach <= ballArrival + 1.0; // 停止後1秒以内ならOK
+        }
+      }
+    } else {
+      // フライ/ライナー: 着地位置への直線距離で判定
+      const dx = landing.position.x - fielderPos.x;
+      const dy = landing.position.y - fielderPos.y;
+      distanceToBall = Math.sqrt(dx * dx + dy * dy);
+      timeToReach = reactionTime + distanceToBall / runSpeed;
+      ballArrival = landing.flightTime;
+      canReach = timeToReach <= landing.flightTime;
+    }
+
+    entries.push({ pos, timeToReach, ballArrivalTime: ballArrival, distanceToBall, canReach });
+  }
+
+  // 打球タイプに応じた優先グループを決定
+  let priorityGroup: FielderPosition[];
+  if (battedBallType === "ground_ball") {
+    priorityGroup = INFIELD_POSITIONS;
+  } else if (battedBallType === "fly_ball" || battedBallType === "popup") {
+    priorityGroup = OUTFIELD_POSITIONS;
+  } else {
+    // ライナーは全員対象
+    priorityGroup = ALL_POSITIONS;
+  }
+
+  // 優先グループ内で canReach=true の野手を到達時間昇順で並べる
+  const reachable = entries
+    .filter(e => priorityGroup.includes(e.pos) && e.canReach)
+    .sort((a, b) => a.timeToReach - b.timeToReach);
+
+  // 全体でも到達時間昇順
+  const allSorted = [...entries].sort((a, b) => a.timeToReach - b.timeToReach);
+
+  // primary: 優先グループで最速到達（canReach優先、いなければ全員から最速）
+  const primaryPos: FielderPosition | null =
+    reachable[0]?.pos ?? allSorted[0]?.pos ?? null;
+  // backup: 2番目
+  const backupPos: FielderPosition | null =
+    reachable[1]?.pos ?? allSorted.find(e => e.pos !== primaryPos)?.pos ?? null;
+
+  // 1Bカバー: 1B(pos=3)がprimaryでない場合に割当
+  const firstBaseCoverPos: FielderPosition | null =
+    primaryPos !== 3 && fielderMap.has(3) ? 3 : null;
+
+  // 外野ヒット時の中継位置: SS(6)または2B(4)を外野ヒット時のリレーに割当
+  const relayPos: FielderPosition | null =
+    (battedBallType === "fly_ball" || battedBallType === "line_drive") &&
+    landing.distance >= 60
+      ? ([6, 4] as FielderPosition[]).find(p => p !== primaryPos && fielderMap.has(p)) ?? null
+      : null;
+
+  // 結果Mapを構築
+  const result = new Map<FielderPosition, FielderDecision>();
+
+  for (const e of entries) {
+    const player = fielderMap.get(e.pos)!;
+    const skill = getFieldingSkill(player, e.pos);
+
+    let role: FielderRole = "none";
+    if (e.pos === primaryPos) {
+      role = "primary";
+    } else if (e.pos === backupPos) {
+      role = "backup";
+    } else if (e.pos === firstBaseCoverPos) {
+      role = "cover_base";
+    } else if (e.pos === relayPos) {
+      role = "relay";
+    }
+
+    result.set(e.pos, {
+      position: e.pos,
+      role,
+      distanceToBall: e.distanceToBall,
+      timeToReach: e.timeToReach,
+      ballArrivalTime: e.ballArrivalTime,
+      canReach: e.canReach,
+      skill,
+    });
+  }
+
+  return result;
+}
+
+/** デフォルト守備配置を返す */
+export function getDefaultAlignment(): DefensiveAlignment {
+  return {
+    positions: new Map(DEFAULT_FIELDER_POSITIONS),
+  };
+}
+
+/**
+ * 着地位置から長打タイプを判定
+ * 守備AIがヒットと判定した後に呼ばれる
+ * @param landing 打球着地情報
+ * @param batterSpeed 打者走力 (1-100)
+ * @param fenceDistance フェンス距離 (m)
+ */
+export function resolveHitTypeFromLanding(
+  landing: BallLanding,
+  batterSpeed: number,
+  fenceDistance: number
+): "single" | "double" | "triple" {
+  const dist = landing.distance;
+  const speedFactor = batterSpeed / 100;
+
+  // フェンス際 (フェンス距離の90%以上): トリプル高確率
+  if (dist >= fenceDistance * 0.90) {
+    if (Math.random() < 0.70 + speedFactor * 0.15) return "triple";
+    return "double";
+  }
+
+  // 外野深め (80m以上)
+  if (dist >= 80) {
+    const tripleRate = 0.05 + speedFactor * 0.08;
+    if (Math.random() < tripleRate) return "triple";
+    return "double";
+  }
+
+  // 外野中間 (60-80m)
+  if (dist >= 60) {
+    const doubleRate = 0.12 + speedFactor * 0.10;
+    if (Math.random() < doubleRate) return "double";
+    return "single";
+  }
+
+  // 外野浅め・内野付近 (< 60m): 常にシングル
+  return "single";
+}

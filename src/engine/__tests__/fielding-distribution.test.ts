@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { simulateGame, generateBattedBall, classifyBattedBallType, determineFielderFromBall } from "@/engine/simulation";
+import { simulateGame, generateBattedBall, classifyBattedBallType } from "@/engine/simulation";
 import type { Player } from "@/models/player";
 import type { Team } from "@/models/team";
 
@@ -193,10 +193,6 @@ describe("新物理エンジン export確認", () => {
 
   it("classifyBattedBallType がexportされている", () => {
     expect(typeof classifyBattedBallType).toBe("function");
-  });
-
-  it("determineFielderFromBall がexportされている", () => {
-    expect(typeof determineFielderFromBall).toBe("function");
   });
 
   it("generateBattedBall の戻り値が有効", () => {
