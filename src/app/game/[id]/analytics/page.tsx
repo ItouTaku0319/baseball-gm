@@ -594,9 +594,9 @@ function SeasonDataTab() {
               <div className="space-y-3">
                 {/* 三振・四死球 */}
                 {[
-                  { label: "三振 (K%)", value: battedBallStats.k, color: "bg-red-600" },
-                  { label: "四死球 (BB%)", value: battedBallStats.bb, color: "bg-cyan-600" },
-                ].map(({ label, value, color }) => {
+                  { label: "三振 (K%)", value: battedBallStats.k, bg: "#dc2626" },
+                  { label: "四死球 (BB%)", value: battedBallStats.bb, bg: "#0891b2" },
+                ].map(({ label, value, bg }) => {
                   const pctVal = battedBallStats.total > 0 ? (value / battedBallStats.total) * 100 : 0;
                   return (
                     <div key={label}>
@@ -608,8 +608,8 @@ function SeasonDataTab() {
                       </div>
                       <div className="w-full bg-gray-700 rounded-full h-3">
                         <div
-                          className={`${color} h-3 rounded-full transition-all`}
-                          style={{ width: `${pctVal}%` }}
+                          className="h-3 rounded-full transition-all"
+                          style={{ width: `${pctVal}%`, backgroundColor: bg }}
                         />
                       </div>
                     </div>
