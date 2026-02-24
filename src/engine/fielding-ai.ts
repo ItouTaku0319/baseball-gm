@@ -111,7 +111,7 @@ export function calcBallLanding(
   const maxH = h + (vy0 * vy0) / (2 * g);
   const tDown = Math.sqrt(2 * maxH / g);
   const flightTime = (tUp + tDown) * 0.85; // 空気抵抗で短縮
-  const distance = vx * flightTime * 0.61; // dragFactor (simulation.tsと同期)
+  const distance = vx * flightTime * 0.60; // dragFactor (simulation.tsと同期)
 
   const x = distance * Math.sin(angleRad);
   const y = distance * Math.cos(angleRad);

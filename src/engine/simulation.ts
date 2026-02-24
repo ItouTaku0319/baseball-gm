@@ -262,7 +262,7 @@ export function estimateDistance(exitVelocityKmh: number, launchAngleDeg: number
   const vCosT = v * Math.cos(theta);
   const baseDistance = vCosT * (vSinT + Math.sqrt(vSinT * vSinT + 2 * g * h)) / g;
 
-  const dragFactor = 0.61; // 空気抵抗補正(約39%減)
+  const dragFactor = 0.60; // 空気抵抗補正(約40%減)
   return baseDistance * dragFactor;
 }
 
@@ -635,50 +635,42 @@ function resolveHitAdvancement(
   batter: Player,
 ): { result: AtBatResult; fielderPos: FielderPosition } {
   const retrieverSkill = retriever.skill;
-
-  // === ボールの着地後バウンド・ロールを計算 ===
-  // 深い打球ほどロールが長い → 長打発生
-  // 浅い打球はほぼ止まる → シングル
   const fenceDist = getFenceDistance(ball.direction);
 
+  // === ボール回収時間の計算 ===
+  // 捕球できなかったボールは着地後にバウンド・ロールして不規則に動く
+  // 深い打球ほどバウンドが大きく、追跡に時間がかかる
+  const pickupTime = 0.3 + (1 - retrieverSkill.catching / 100) * 0.4;
+
+  let bouncePenalty: number;
   let rollDistance: number;
-  let rollTime: number;
 
   if (landing.isGroundBall) {
-    // ゴロが外野に抜けた場合: まだ転がっているがすぐ減速
-    const v0 = ball.exitVelocity / 3.6;
-    const remainSpeed = v0 * 0.20;
-    rollDistance = Math.min(10, remainSpeed * 0.3);
-    rollTime = rollDistance > 1 ? rollDistance / (remainSpeed * 0.3 + 1) : 0;
+    // ゴロが外野に抜けた場合: 比較的予測しやすいがまだ転がっている
+    bouncePenalty = 0.5 + Math.random() * 0.5; // 0.5-1.0s
+    rollDistance = 3;
   } else {
-    // フライ/ライナー着地後のバウンド＋ロール
-    // 着地距離に応じたロール量: 浅い(50m以下)=ほぼ無し, 深い(90m+)=大きい
-    const depthRatio = clamp((landing.distance - 50) / 45, 0, 1);
-    const v0 = ball.exitVelocity / 3.6;
-    const cosAngle = Math.cos(ball.launchAngle * Math.PI / 180);
-    const landingSpeed = v0 * cosAngle * 0.18 * depthRatio; // 浅いとほぼ0
+    // フライ/ライナー: 着地後のバウンドは不規則、深いほど大きい
+    const depthFactor = clamp((landing.distance - 50) / 50, 0, 1); // 0 (浅い) → 1 (深い)
+    bouncePenalty = 1.4 + depthFactor * 2.2 + Math.random() * 0.8; // 1.4-4.4s
 
-    rollDistance = Math.min(15, landingSpeed * 1.0);
-    rollTime = landingSpeed > 1 ? rollDistance / (landingSpeed * 0.5 + 1) : 0;
-
-    // フェンス際: 壁に当たってリバウンド → 追加時間
-    const totalDist = landing.distance + rollDistance;
-    if (totalDist >= fenceDist * 0.85) {
-      rollTime += 1.0 + Math.random() * 0.8; // フェンス際で+1.0-1.8秒
-      rollDistance = Math.min(rollDistance, Math.max(0, fenceDist - landing.distance));
+    // フェンス際: 壁リバウンドでさらに不規則
+    if (landing.distance >= fenceDist * 0.90) {
+      bouncePenalty += 0.6 + Math.random() * 0.6; // +0.6-1.2s
     }
+
+    rollDistance = clamp((landing.distance - 50) * 0.15, 0, 12);
   }
 
-  // ボールの最終停止位置（着地位置からロール方向に延伸）
+  // ボールの停止位置（ロール方向に延伸、送球距離計算用）
   const angleRad = (ball.direction - 45) * Math.PI / 180;
   const retrievalPos = {
     x: landing.position.x + rollDistance * Math.sin(angleRad),
     y: landing.position.y + rollDistance * Math.cos(angleRad),
   };
 
-  // 野手のボール回収時間 = 着地点への到達 + ロール追跡 + ピックアップ
-  const pickupTime = 0.3 + (1 - retrieverSkill.catching / 100) * 0.4;
-  const totalFielderTime = retriever.timeToReach + rollTime + pickupTime;
+  // 野手の総回収時間
+  const totalFielderTime = retriever.timeToReach + bouncePenalty + pickupTime;
 
   // 送球速度: 肩力ベース (25-40 m/s)
   const throwSpeed = 25 + (retrieverSkill.arm / 100) * 15;
@@ -706,9 +698,10 @@ function resolveHitAdvancement(
   const defenseTo3B = totalFielderTime + throwTo3B / throwSpeed;
 
   // 走者がセーフな最大進塁数を計算 (1B はヒット確定なので最低1)
+  // 3Bへの進塁はリスクが高いため、走者は十分な余裕がある場合のみ試みる
   let basesReached = 1;
   if (runnerTo2B < defenseTo2B) basesReached = 2;
-  if (basesReached >= 2 && runnerTo3B < defenseTo3B) basesReached = 3;
+  if (basesReached >= 2 && runnerTo3B < defenseTo3B - 1.5) basesReached = 3;
 
   const fielderPos = retriever.position;
   if (basesReached >= 3) return { result: "triple", fielderPos };

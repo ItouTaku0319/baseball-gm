@@ -147,10 +147,10 @@ function detectAnomalies(logs: AtBatLog[]): Anomaly[] {
       );
     }
 
-    // 短距離長打: estimatedDistance < 60m + result in ["double","triple"]
+    // 短距離長打: estimatedDistance < 50m + result in ["double","triple"]
     if (
       dist !== null &&
-      dist < 60 &&
+      dist < 50 &&
       (result === "double" || result === "triple")
     ) {
       counts.shortDistanceLongHit++;
