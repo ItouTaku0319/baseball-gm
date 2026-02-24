@@ -551,16 +551,29 @@ function SeasonDataTab() {
 
           {/* 打席詳細ログ */}
           <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
-            <h3 className="text-base font-semibold mb-4 text-gray-200">
-              打席詳細ログ ({seasonAtBatLogs.length.toLocaleString()}件)
-            </h3>
-            {seasonAtBatLogs.length === 0 ? (
-              <p className="text-gray-500 text-sm">
-                自チームの試合のみ打席データを記録しています
-              </p>
-            ) : (
-              <AtBatLogTable logs={seasonAtBatLogs} getName={getName} />
-            )}
+            {(() => {
+              const filteredLogs = outcomeFilter === "all"
+                ? seasonAtBatLogs
+                : outcomeFilter === "hit"
+                  ? seasonAtBatLogs.filter((l) => isHitOrError(l.result))
+                  : seasonAtBatLogs.filter((l) => isOut(l.result));
+              return (
+                <>
+                  <h3 className="text-base font-semibold mb-4 text-gray-200">
+                    打席詳細ログ ({filteredLogs.length.toLocaleString()}件)
+                  </h3>
+                  {filteredLogs.length === 0 ? (
+                    <p className="text-gray-500 text-sm">
+                      {seasonAtBatLogs.length === 0
+                        ? "自チームの試合のみ打席データを記録しています"
+                        : "該当する打席データがありません"}
+                    </p>
+                  ) : (
+                    <AtBatLogTable logs={filteredLogs} getName={getName} />
+                  )}
+                </>
+              );
+            })()}
           </div>
         </>
       )}
