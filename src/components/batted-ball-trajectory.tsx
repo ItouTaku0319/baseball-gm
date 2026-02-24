@@ -128,6 +128,21 @@ function getGroundBallTime(exitVelocityKmh: number, distM: number): number {
   return vGround > 0 ? distM / vGround : 2.0;
 }
 
+/** フライボールがフェンスの水平距離に到達する時刻を計算 */
+function getFenceArrivalTime(
+  exitVelocityKmh: number,
+  launchAngleDeg: number,
+  directionDeg: number
+): number {
+  const v = exitVelocityKmh / 3.6;
+  const theta = launchAngleDeg * Math.PI / 180;
+  const vx = v * Math.cos(theta);
+  const dragFactor = 0.61;
+  const fenceDist = getFenceDistance(directionDeg);
+  if (vx * dragFactor <= 0) return Infinity;
+  return fenceDist / (vx * dragFactor);
+}
+
 /** フライ打球の時刻tにおける状態（地面投影位置・高さ）を返す */
 function getBallStateAtTime(
   exitVelocityKmh: number,
@@ -291,8 +306,14 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints }: Animate
   // ホームラン: フェンス越えエフェクト
   const hrFenceDist = isHomerun && log.direction !== null ? getFenceDistance(log.direction) : null;
   const hrFencePos = hrFenceDist && log.direction !== null ? toFieldSvg(hrFenceDist, log.direction) : null;
+
+  const fenceArrivalTime = useMemo(() => {
+    if (!isHomerun || !hasFieldData || exitVelocity <= 0 || launchAngle <= 0 || log.direction === null) return Infinity;
+    return getFenceArrivalTime(exitVelocity, Math.max(launchAngle, 5), log.direction);
+  }, [isHomerun, hasFieldData, exitVelocity, launchAngle, log.direction]);
+
   const ballBeyondFence = isHomerun && hrFenceDist && hasFieldData && ballGroundPos
-    ? estimatedDist >= hrFenceDist && currentTime / totalTime > 0.7
+    ? estimatedDist >= hrFenceDist && currentTime >= fenceArrivalTime
     : false;
 
   const outsBeforePlay = log.outsBeforePlay ?? null;
