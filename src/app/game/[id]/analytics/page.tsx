@@ -617,14 +617,14 @@ function SeasonDataTab() {
                 })}
                 {/* 区切り */}
                 <div className="border-t border-gray-600 my-1" />
-                {/* 打球タイプ（インプレー内の割合） */}
+                {/* 打球タイプ（打席全体に対する割合） */}
                 {[
                   { label: "ゴロ (GB%)", value: battedBallStats.gb, color: "bg-green-600" },
                   { label: "フライ (FB%)", value: battedBallStats.fb, color: "bg-blue-600" },
                   { label: "ライナー (LD%)", value: battedBallStats.ld, color: "bg-yellow-500" },
                   { label: "ポップ (PU%)", value: battedBallStats.pu, color: "bg-gray-500" },
                 ].map(({ label, value, color }) => {
-                  const pctVal = battedBallStats.bip > 0 ? (value / battedBallStats.bip) * 100 : 0;
+                  const pctVal = battedBallStats.total > 0 ? (value / battedBallStats.total) * 100 : 0;
                   return (
                     <div key={label}>
                       <div className="flex justify-between text-sm mb-1">
