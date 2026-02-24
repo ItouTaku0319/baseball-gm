@@ -37,6 +37,7 @@ src/
 │           ├── schedule/page.tsx  # スケジュール（日程・結果）
 │           ├── stats/page.tsx     # 成績（打撃/投手・セイバー指標）
 │           ├── analytics/page.tsx # 打球分析（シーズンデータ・診断シミュ）
+│           ├── pitching/page.tsx  # 投球分析（ストライクゾーン・球種分析）
 │           ├── draft/page.tsx     # ドラフト（未実装UI）
 │           └── trade/page.tsx     # トレード（未実装UI）
 ├── components/             # 共通UIコンポーネント
@@ -252,6 +253,7 @@ PMは常に人間に状況が伝わる状態を維持すること。
 | 順位表 | `app/game/[id]/standings/page.tsx` |
 | スケジュール | `app/game/[id]/schedule/page.tsx` |
 | 打球分析 | `app/game/[id]/analytics/page.tsx` |
+| 投球分析 | `app/game/[id]/pitching/page.tsx` |
 
 **注意**: `models/player.ts` や `store/game-store.ts` は多くの機能から参照されるため、これらを変更するタスクは他と並列にしない。
 
@@ -287,6 +289,7 @@ PMは常に人間に状況が伝わる状態を維持すること。
 - **打順画面UI改修**: フィールド図(SVG)+打順カードリストの2カラム(lgブレイクポイント)レスポンシブ。選択ベースのswap操作（1回目選択→2回目swap/差替え）。ベンチ選手は選択中のみクリック可能。ローテ/リリーフもドロップダウンから投手カード形式に変更、役割バッジ(守護神/SU/中継ぎ)付き。
 - **選手総合値(Overall)**: 野手=`contact*2.2+power*2.2+speed*1.5+eye*1.5+fielding*1.2+arm*0.8+catching*0.6`、投手=`velNorm*2.0+control*2.5+stamina*1.5+mental*1.0+pitchBonus*3.0`（velNorm=(vel-120)/45*100, pitchBonus=min(100,Σlevel*12)）。1-999スケール、100刻みでS〜Gランク。gradeColor共用で色分け。ロスター・打順カード・投手カードに表示。
 - **守備AI (fielding-ai.ts)**: 旧ゾーンベース守備(determineFielderFromBall/resolveInPlayFromBall/determineHitType)を全面置き換え。2Dフィールド座標系で9野手の到達時間を物理計算し、ゴロは「捕球→送球→走者との競争」、フライ/ライナーは「着地前に到達→捕球試行」で結果判定。長打は回収位置からの送球時間vs走者の進塁時間で自然に決まる。内野ゴロ二塁打などの異常パターンが構造的に発生しなくなった。dragFactor=0.61、ライナー反応遅延+0.3-0.5s、外野デフォルト位置65-73m。1000試合テスト: AVG.254, HR/試合1.37, K%18.5%, BB%7.6%, BABIP.302, GO/AO1.08（全指標NPB範囲内、異常0件）。
+- **投球分析(pitching/page.tsx)**: PitchTypeに`fastball`追加。各打席の「決め球」1球をselectPitch(重み付き抽選: ストレート=球速依存, 変化球=レベル依存, 結果で重み調整)とgeneratePitchLocation(制球で分散制御, 結果別コース傾向: 三振=低め外角, 四球=ゾーン外, HR=高め甘め)で逆算生成。collectAtBatLogs=true時のみ生成（パフォーマンス影響なし）。投球分析ページでストライクゾーンSVG(球種色ドット)・球種別成績テーブル・9分割コースヒートマップ(被打率色付け)・打席ログを表示。
 
 ## 指標について
 https://1point02.jp/op/gnav/glossary/gls_index.aspx?cp=101

@@ -143,6 +143,11 @@ export default function GameDashboard() {
       label: "打球分析",
       desc: "打球データ・バランス診断",
     },
+    {
+      href: `/game/${game.id}/pitching`,
+      label: "投球分析",
+      desc: "投球コース・球種分析",
+    },
   ];
 
   return (

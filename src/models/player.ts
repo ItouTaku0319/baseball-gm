@@ -44,6 +44,7 @@ export const BAT_SIDE_NAMES: Record<BatSide, string> = {
 
 /** 球種タイプ */
 export type PitchType =
+  | "fastball"
   | "slider"
   | "curve"
   | "fork"
@@ -57,6 +58,7 @@ export type PitchType =
 
 /** 球種の日本語名 */
 export const PITCH_TYPE_NAMES: Record<PitchType, string> = {
+  fastball: "ストレート",
   slider: "スライダー",
   curve: "カーブ",
   fork: "フォーク",
@@ -71,6 +73,7 @@ export const PITCH_TYPE_NAMES: Record<PitchType, string> = {
 
 /** 球種の略称 */
 export const PITCH_SHORT_NAMES: Record<PitchType, string> = {
+  fastball: "ストレート",
   slider: "スラ",
   curve: "カーブ",
   fork: "フォーク",
@@ -85,6 +88,7 @@ export const PITCH_SHORT_NAMES: Record<PitchType, string> = {
 
 /** 球種→方向矢印 */
 export const PITCH_DIR_ARROWS: Record<PitchType, string> = {
+  fastball: "↑",
   slider: "←", cutter: "←",
   curve: "↙", screwball: "↙",
   fork: "↓", changeup: "↓", splitter: "↓", knuckle: "↓",
@@ -94,6 +98,7 @@ export const PITCH_DIR_ARROWS: Record<PitchType, string> = {
 
 /** 球種の表示順 (方向順) */
 export const PITCH_DIR_ORDER: Record<PitchType, number> = {
+  fastball: -10,
   slider: 0, cutter: 1,
   curve: 10, screwball: 11,
   fork: 20, changeup: 21, splitter: 22, knuckle: 23,

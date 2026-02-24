@@ -1,6 +1,6 @@
 import type { Team } from "@/models/team";
 import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog } from "@/models/league";
-import type { Player, PitchRepertoire } from "@/models/player";
+import type { Player, PitchRepertoire, PitchType } from "@/models/player";
 import { calcBallLanding, evaluateFielders, resolveHitTypeFromLanding } from "./fielding-ai";
 import type { BallLanding, FielderDecision } from "./fielding-ai";
 
@@ -149,6 +149,91 @@ export function gaussianRandom(mean: number, stdDev: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/** 投手の球種レパートリーから打席結果に応じた球種を選ぶ */
+function selectPitch(pitcher: Player, result: AtBatResult): PitchType {
+  const pit = pitcher.pitching!;
+  const vel = pit.velocity <= 100 ? 120 + (pit.velocity / 100) * 45 : pit.velocity;
+  const fastballWeight = 3 + (vel - 130) / 10;
+
+  const candidates: { type: PitchType; weight: number }[] = [
+    { type: "fastball", weight: Math.max(1, fastballWeight) },
+  ];
+  for (const p of pit.pitches) {
+    candidates.push({ type: p.type, weight: p.level * 0.8 });
+  }
+
+  for (const c of candidates) {
+    if (result === "strikeout") {
+      if (c.type === "fork" || c.type === "splitter" || c.type === "slider") c.weight *= 2.0;
+      else if (c.type !== "fastball") c.weight *= 1.5;
+    } else if (result === "walk" || result === "hitByPitch") {
+      if (c.type === "fastball") c.weight *= 2.0;
+    } else if (result === "homerun") {
+      if (c.type === "fastball" || c.type === "changeup") c.weight *= 1.8;
+    }
+  }
+
+  const totalWeight = candidates.reduce((s, c) => s + c.weight, 0);
+  let r = Math.random() * totalWeight;
+  for (const c of candidates) {
+    r -= c.weight;
+    if (r <= 0) return c.type;
+  }
+  return candidates[candidates.length - 1].type;
+}
+
+/** 制球と打席結果に応じたコース(x,y)を生成。-1〜1がゾーン内 */
+function generatePitchLocation(
+  pitcher: Player,
+  result: AtBatResult,
+  pitchType: PitchType
+): { x: number; y: number } {
+  const control = pitcher.pitching?.control ?? 50;
+  const spread = 1.5 - (control / 100) * 0.8;
+
+  let meanX = 0;
+  let meanY = 0;
+
+  switch (result) {
+    case "strikeout":
+      meanX = (Math.random() > 0.5 ? 1 : -1) * 0.6;
+      meanY = -0.6;
+      if (pitchType === "fork" || pitchType === "splitter" || pitchType === "sinker") {
+        meanY = -1.0;
+      }
+      break;
+    case "walk":
+    case "hitByPitch":
+      meanX = (Math.random() > 0.5 ? 1 : -1) * 1.3;
+      meanY = gaussianRandom(0, 0.5);
+      break;
+    case "homerun":
+      meanX = gaussianRandom(0, 0.3);
+      meanY = 0.4;
+      break;
+    case "groundout":
+    case "doublePlay":
+    case "fieldersChoice":
+      meanY = -0.4;
+      meanX = gaussianRandom(0, 0.5);
+      break;
+    case "flyout":
+    case "popout":
+    case "sacrificeFly":
+      meanY = 0.3;
+      meanX = gaussianRandom(0, 0.5);
+      break;
+    default:
+      meanX = gaussianRandom(0, 0.4);
+      meanY = gaussianRandom(0, 0.3);
+      break;
+  }
+
+  const x = clamp(gaussianRandom(meanX, spread * 0.4), -2, 2);
+  const y = clamp(gaussianRandom(meanY, spread * 0.4), -2, 2);
+  return { x, y };
 }
 
 /** 打球角度と速度から打球タイプを分類する */
@@ -551,9 +636,49 @@ function resolveHitAdvancement(
 ): { result: AtBatResult; fielderPos: FielderPosition } {
   const retrieverSkill = retriever.skill;
 
-  // 野手のボール回収時間
+  // === ボールの着地後バウンド・ロールを計算 ===
+  // 深い打球ほどロールが長い → 長打発生
+  // 浅い打球はほぼ止まる → シングル
+  const fenceDist = getFenceDistance(ball.direction);
+
+  let rollDistance: number;
+  let rollTime: number;
+
+  if (landing.isGroundBall) {
+    // ゴロが外野に抜けた場合: まだ転がっているがすぐ減速
+    const v0 = ball.exitVelocity / 3.6;
+    const remainSpeed = v0 * 0.20;
+    rollDistance = Math.min(10, remainSpeed * 0.3);
+    rollTime = rollDistance > 1 ? rollDistance / (remainSpeed * 0.3 + 1) : 0;
+  } else {
+    // フライ/ライナー着地後のバウンド＋ロール
+    // 着地距離に応じたロール量: 浅い(50m以下)=ほぼ無し, 深い(90m+)=大きい
+    const depthRatio = clamp((landing.distance - 50) / 45, 0, 1);
+    const v0 = ball.exitVelocity / 3.6;
+    const cosAngle = Math.cos(ball.launchAngle * Math.PI / 180);
+    const landingSpeed = v0 * cosAngle * 0.18 * depthRatio; // 浅いとほぼ0
+
+    rollDistance = Math.min(15, landingSpeed * 1.0);
+    rollTime = landingSpeed > 1 ? rollDistance / (landingSpeed * 0.5 + 1) : 0;
+
+    // フェンス際: 壁に当たってリバウンド → 追加時間
+    const totalDist = landing.distance + rollDistance;
+    if (totalDist >= fenceDist * 0.85) {
+      rollTime += 1.0 + Math.random() * 0.8; // フェンス際で+1.0-1.8秒
+      rollDistance = Math.min(rollDistance, Math.max(0, fenceDist - landing.distance));
+    }
+  }
+
+  // ボールの最終停止位置（着地位置からロール方向に延伸）
+  const angleRad = (ball.direction - 45) * Math.PI / 180;
+  const retrievalPos = {
+    x: landing.position.x + rollDistance * Math.sin(angleRad),
+    y: landing.position.y + rollDistance * Math.cos(angleRad),
+  };
+
+  // 野手のボール回収時間 = 着地点への到達 + ロール追跡 + ピックアップ
   const pickupTime = 0.3 + (1 - retrieverSkill.catching / 100) * 0.4;
-  const totalFielderTime = retriever.timeToReach + pickupTime;
+  const totalFielderTime = retriever.timeToReach + rollTime + pickupTime;
 
   // 送球速度: 肩力ベース (25-40 m/s)
   const throwSpeed = 25 + (retrieverSkill.arm / 100) * 15;
@@ -562,15 +687,14 @@ function resolveHitAdvancement(
   const runnerSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
   const timePerBase = BASE_LENGTH / runnerSpeed;
 
-  // ボール位置からの送球距離
-  const ballPos = landing.position;
+  // ボール回収位置からの送球距離
   const throwTo2B = Math.sqrt(
-    (ballPos.x - BASE_POSITIONS.second.x) ** 2 +
-    (ballPos.y - BASE_POSITIONS.second.y) ** 2
+    (retrievalPos.x - BASE_POSITIONS.second.x) ** 2 +
+    (retrievalPos.y - BASE_POSITIONS.second.y) ** 2
   );
   const throwTo3B = Math.sqrt(
-    (ballPos.x - BASE_POSITIONS.third.x) ** 2 +
-    (ballPos.y - BASE_POSITIONS.third.y) ** 2
+    (retrievalPos.x - BASE_POSITIONS.third.x) ** 2 +
+    (retrievalPos.y - BASE_POSITIONS.third.y) ** 2
   );
 
   // 走者の各塁到達時間（1Bは既にセーフ確定）
@@ -1269,6 +1393,8 @@ function simulateHalfInning(
       const dist = (detail.exitVelocity != null && detail.launchAngle != null)
         ? estimateDistance(detail.exitVelocity, detail.launchAngle)
         : null;
+      const pitchType = selectPitch(pitcher, detail.result);
+      const pitchLocation = generatePitchLocation(pitcher, detail.result, pitchType);
       atBatLogs.push({
         inning: inning ?? 0,
         halfInning: halfInning ?? "top",
@@ -1283,6 +1409,8 @@ function simulateHalfInning(
         estimatedDistance: dist,
         basesBeforePlay: basesBeforeAtBat,
         outsBeforePlay: outsBeforeAtBat,
+        pitchType,
+        pitchLocation,
       });
     }
 

@@ -1,4 +1,5 @@
 import type { TeamRecord } from "./team";
+import type { PitchType } from "./player";
 
 /** リーグ構成 */
 export interface League {
@@ -115,6 +116,8 @@ export interface AtBatLog {
   estimatedDistance: number | null;
   basesBeforePlay: [boolean, boolean, boolean] | null;
   outsBeforePlay: number | null;
+  pitchType?: PitchType;
+  pitchLocation?: { x: number; y: number };
 }
 
 /** 1イニングのスコア */
