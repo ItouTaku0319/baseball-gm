@@ -385,11 +385,11 @@ function updatePlayoffPlayerStats(
             ...player.careerPitchingStats,
             [year]: {
               games: existing.games + 1,
-              gamesStarted: existing.gamesStarted + 1,
+              gamesStarted: existing.gamesStarted + (pl.isStarter ? 1 : 0),
               wins: existing.wins + (isWinner ? 1 : 0),
               losses: existing.losses + (isLoser ? 1 : 0),
               saves: existing.saves + (isSave ? 1 : 0),
-              holds: existing.holds,
+              holds: existing.holds + ((result.holdPitcherIds ?? []).includes(player.id) ? 1 : 0),
               inningsPitched: existing.inningsPitched + pl.inningsPitched,
               hits: existing.hits + pl.hits,
               earnedRuns: existing.earnedRuns + pl.earnedRuns,

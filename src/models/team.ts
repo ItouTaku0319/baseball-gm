@@ -3,6 +3,9 @@ import type { Player } from "./player";
 /** 投手の役割 */
 export type PitcherRole = "starter" | "setup" | "closer" | "middle_reliever";
 
+/** 先発投手の起用方針 */
+export type StarterUsagePolicy = "stamina_limit" | "win_eligible" | "performance";
+
 /** 1軍/2軍の所属レベル */
 export type RosterLevel = "ichi_gun" | "ni_gun";
 
@@ -25,6 +28,8 @@ export interface TeamLineupConfig {
   setupIds: string[];
   /** 次に投げる先発のインデックス */
   rotationIndex: number;
+  /** 先発の起用方針 (optional, デフォルト="performance") */
+  starterUsagePolicy?: StarterUsagePolicy;
 }
 
 /** チームデータ */

@@ -445,6 +445,41 @@ function RotationEditor({
       <h2 className="text-lg font-semibold mb-3 text-blue-400">
         先発ローテーション ({config.startingRotation.length}人)
       </h2>
+
+      {/* 先発起用方針 */}
+      <div className="mb-6 bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <h3 className="text-sm font-semibold mb-3 text-gray-300">先発投手の起用方針</h3>
+        <div className="space-y-2">
+          {([
+            { value: "performance", label: "調子次第", desc: "スタミナ30%以下 or 自責点4以上で交代（デフォルト）" },
+            { value: "win_eligible", label: "勝利投手優先", desc: "5回以上＋リード時にスタミナ40%以下で交代" },
+            { value: "stamina_limit", label: "スタミナ限界", desc: "スタミナ15%以下まで続投（完投重視）" },
+          ] as const).map((opt) => (
+            <label
+              key={opt.value}
+              className={`flex items-start gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
+                (config.starterUsagePolicy ?? "performance") === opt.value
+                  ? "bg-blue-900/40 border border-blue-500/50"
+                  : "bg-gray-900/50 border border-gray-700/50 hover:bg-gray-800"
+              }`}
+            >
+              <input
+                type="radio"
+                name="starterUsagePolicy"
+                value={opt.value}
+                checked={(config.starterUsagePolicy ?? "performance") === opt.value}
+                onChange={() => onChange({ ...config, starterUsagePolicy: opt.value })}
+                className="mt-1"
+              />
+              <div>
+                <div className="text-white text-sm font-medium">{opt.label}</div>
+                <div className="text-gray-400 text-xs">{opt.desc}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+
       <div className="space-y-2 mb-4">
         {config.startingRotation.map((playerId, i) => {
           const player = playerMap.get(playerId);

@@ -79,6 +79,8 @@ export interface PitcherGameLog {
   flyBalls?: number;         // 全フライ打球数（HR含む）
   lineDrives?: number;       // 全ライナー打球数
   popups?: number;           // 全ポップフライ数
+  pitchCount?: number;       // 投球数
+  isStarter?: boolean;       // 先発フラグ
 }
 
 /** 試合結果 */
@@ -93,6 +95,8 @@ export interface GameResult {
   losingPitcherId: string | null;
   /** セーブ投手ID */
   savePitcherId: string | null;
+  /** ホールド投手ID配列 */
+  holdPitcherIds?: string[];
   /** 各選手の打撃成績 */
   playerStats: PlayerGameStats[];
   /** 投手成績 */
@@ -118,6 +122,7 @@ export interface AtBatLog {
   outsBeforePlay: number | null;
   pitchType?: PitchType;
   pitchLocation?: { x: number; y: number };
+  pitchCountInAtBat?: number;  // 打席の投球数
 }
 
 /** 1イニングのスコア */

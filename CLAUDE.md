@@ -301,6 +301,10 @@ https://1point02.jp/op/gnav/glossary/gls_index.aspx?cp=101
 
 - **estimatedDistanceにcarryFactor適用+フェンス高さHR判定(v9)**: (1) AtBatLog記録時のestimatedDistanceにフライ/ポップフライ打球にTRAJECTORY_CARRY_FACTORSを適用。表示飛距離とHR判定飛距離の乖離を解消（旧: 表示80mでHR→新: 表示104mでHR）。(2) `FENCE_HEIGHT(4.0m)`を`physics-constants.ts`に追加。HR判定に「フェンス水平距離到達時の打球高さ≥FENCE_HEIGHT」の条件を追加。低弾道でギリギリフェンスに届く打球がフェンス直撃で通常フライ扱いになる。(3) batted-ball-trajectory.tsxのサイドビューでフェンス高さ描画にFENCE_HEIGHT定数を使用。(4) ポップフライ(≥38°)もHR判定の対象に。従来はポップフライ=常にアウトだったが、十分な速度・距離があればフェンスを越えてHRになる。(5) 急角度キャリー減衰: 35°以下=フルキャリー、35-50°=線形減衰、50°以上=キャリー無し。バックスピン揚力は急角度で水平成分に効きにくいため。10000試合検証: HR/試合2.37, HR/FB%15.6%, 得点/試合7.77。
 
+- **打球軌道ビュー改善(v10)**: (1) フライアウト系(flyout/lineout/popout/sacrificeFly)でバウンドしないように修正。守備選手がキャッチするため着地後のバウンド物理を無効化し、ボールは着地点で停止。(2) フェンス直撃打球の跳ね返り表現を追加。非HRフライで飛距離>フェンス距離の場合、フェンスに当たって内野方向に跳ね返るアニメーション。`getFenceBounceBackStateAtTime`(フィールドビュー用)と`computeFenceBounceBackPoints`(サイドビュー用)を新規追加。フェンス反発係数0.25、2回バウンド+転がり。フェンス衝撃エフェクト(黄色二重円)を0.3秒間表示。サイドビューでは軌道をフェンス位置で切り詰めて跳ね返り軌道を描画。
+
+- **投手スタミナ消費・能力低下・投手交代AI**: `simulateAtBat()`を1球ずつのカウント進行にリファクタ。`PitcherGameState`(player, log, pitchCount, currentStamina)と`TeamGameState`(batters, currentPitcher, bullpen, usedPitcherIds, pitcherLogs等)を導入。スタミナ消費: `STAMINA_PER_PITCH=0.7`/球、stamina=70の投手は約100球で枯渇。疲労ペナルティ: スタミナ50%以下から線形低下(MAX velocity-12.5%, control-25%, pitchLevel-12.5%)。イニング間交代: `shouldChangePitcher()`でstarterUsagePolicy(performance/win_eligible/stamina_limit)に応じた判定、8-9回リード時は守護神/SUへの継投。イニング途中交代: 3失点以上+2アウト未満、満塁+0アウト+スタミナ30%以下、スタミナ10%以下。役割別リリーフ選択: `selectNextPitcher()`で9回守護神→8回SU→中継ぎ→ビハインド下位→大量リード下位の優先順。勝敗投手判定: イニングごとの累積スコア推移からリード逆転時の投手を特定、先発5回以上は降板時リード条件付き。セーブ/ホールド: NPB準拠の簡易判定。サヨナラ処理: 9回以降裏でホームがリードした時点でハーフイニング即終了。
+
 ## 既知の問題
 <!-- 今は直さないが把握しておくべき問題を記録する。 -->
 

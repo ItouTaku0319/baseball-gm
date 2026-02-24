@@ -22,6 +22,69 @@ export function calcBreakingPower(pitches: PitchRepertoire[] | undefined): numbe
 /** 打球タイプ */
 type BattedBallType = "ground_ball" | "line_drive" | "fly_ball" | "popup";
 
+/** 試合中の投手状態 */
+interface PitcherGameState {
+  player: Player;
+  log: PitcherGameLog;
+  pitchCount: number;
+  currentStamina: number;
+}
+
+/** チームの試合中状態 */
+interface TeamGameState {
+  batters: Player[];
+  batterIndex: number;
+  currentPitcher: PitcherGameState;
+  bullpen: Player[];
+  usedPitcherIds: Set<string>;
+  pitcherLogs: PitcherGameLog[];
+  catcher: Player;
+  fullRoster: Player[];
+}
+
+/** 1球ごとのスタミナ消費量 */
+const STAMINA_PER_PITCH = 0.7;
+
+/** 疲労による能力低下率を算出 (0.0 ~ 0.25) */
+function getFatiguePenalty(pitcherState: PitcherGameState): number {
+  const stamina = pitcherState.player.pitching!.stamina;
+  const ratio = pitcherState.currentStamina / stamina;
+  if (ratio >= 0.5) return 0;
+  return (1 - ratio / 0.5) * 0.25;
+}
+
+/** 疲労を考慮した投手能力を返す */
+function getEffectivePitcherAbilities(pitcherState: PitcherGameState): {
+  velocity: number;
+  control: number;
+  pitches: { type: PitchType; level: number }[];
+  stamina: number;
+  mentalToughness: number;
+  arm: number;
+  fielding: number;
+  catching: number;
+} {
+  const pit = pitcherState.player.pitching!;
+  const penalty = getFatiguePenalty(pitcherState);
+  const vel = pit.velocity <= 100 ? 120 + (pit.velocity / 100) * 45 : pit.velocity;
+  const effectiveVelocity = vel * (1 - penalty * 0.5);
+  const effectiveControl = pit.control * (1 - penalty);
+  const effectivePitches = pit.pitches.map(p => ({
+    ...p,
+    level: Math.max(1, Math.round(p.level * (1 - penalty * 0.5)))
+  }));
+  return {
+    velocity: effectiveVelocity,
+    control: effectiveControl,
+    pitches: effectivePitches,
+    stamina: pit.stamina,
+    mentalToughness: pit.mentalToughness,
+    arm: pit.arm,
+    fielding: pit.fielding,
+    catching: pit.catching,
+  };
+}
+
 /** ポジション番号 (1=P, 2=C, 3=1B, 4=2B, 5=3B, 6=SS, 7=LF, 8=CF, 9=RF) */
 type FielderPosition = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
@@ -743,60 +806,116 @@ function resolveHitAdvancement(
 }
 
 
-/** 1打席の結果を決定する */
+/** 1打席の結果を決定する（1球ずつシミュレーション） */
 function simulateAtBat(
   batter: Player,
   pitcher: Player,
   fielderMap: Map<FielderPosition, Player>,
   bases: BaseRunners,
-  outs: number
-): AtBatDetail {
+  outs: number,
+  pitcherState?: PitcherGameState
+): AtBatDetail & { pitchCount: number } {
   const bat = batter.batting;
-  const pit = pitcher.pitching!;
+  let balls = 0;
+  let strikes = 0;
+  let pitchCount = 0;
 
-  const breakingPower = calcBreakingPower(pit.pitches);
-  const contactFactor = (bat.contact - breakingPower * 0.5) / 100;
-  const eyeFactor = (bat.eye - pit.control * 0.3) / 100;
-  // 旧データ(1-100)と新データ(120-165)の互換
-  const vel = pit.velocity <= 100 ? 120 + (pit.velocity / 100) * 45 : pit.velocity;
-  const velocityFactor = (vel - 120) / 45;
-  const controlFactor = pit.control / 100;
+  while (true) {
+    // 疲労を考慮した投手能力を取得
+    const effPit = pitcherState
+      ? getEffectivePitcherAbilities(pitcherState)
+      : (() => {
+          const pit = pitcher.pitching!;
+          const vel = pit.velocity <= 100 ? 120 + (pit.velocity / 100) * 45 : pit.velocity;
+          return { velocity: vel, control: pit.control, pitches: pit.pitches, stamina: pit.stamina, mentalToughness: pit.mentalToughness, arm: pit.arm, fielding: pit.fielding, catching: pit.catching };
+        })();
 
-  const roll = Math.random();
-  let cumulative = 0;
+    // 死球チェック（ゾーン外投球の低確率）
+    if (Math.random() < 0.003) {
+      pitchCount++;
+      if (pitcherState) {
+        pitcherState.currentStamina -= STAMINA_PER_PITCH;
+        if (pitcherState.currentStamina < 0) pitcherState.currentStamina = 0;
+      }
+      return { result: "hitByPitch", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null, pitchCount };
+    }
 
-  // 死球率
-  const hbpRate = 0.008 + (1 - controlFactor) * 0.007;
-  cumulative += Math.max(0.003, hbpRate);
-  if (roll < cumulative) {
-    return { result: "hitByPitch", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null };
+    // ゾーン内投球率: 制球依存。カウント補正あり
+    let zoneRate = 0.35 + (effPit.control / 100) * 0.30;
+    if (strikes > balls) zoneRate -= 0.05;  // 投手有利カウント: ボール球を使いやすい
+    if (balls > strikes) zoneRate += 0.05;  // 打者有利カウント: ストライクを取りにいく
+
+    const inZone = Math.random() < zoneRate;
+
+    // スイング判定
+    let swings: boolean;
+    if (inZone) {
+      const swingRate = 0.55 + (bat.eye / 100) * 0.20;
+      swings = Math.random() < swingRate;
+    } else {
+      const chaseRate = 0.40 - (bat.eye / 100) * 0.25;
+      swings = Math.random() < chaseRate;
+    }
+
+    pitchCount++;
+    if (pitcherState) {
+      pitcherState.currentStamina -= STAMINA_PER_PITCH;
+      if (pitcherState.currentStamina < 0) pitcherState.currentStamina = 0;
+    }
+
+    if (swings) {
+      // コンタクト率: ミート能力 - 球種レベル依存
+      const avgPitchLevel = effPit.pitches.length > 0
+        ? effPit.pitches.reduce((s, p) => s + p.level, 0) / effPit.pitches.length
+        : 3;
+      const contactRate = 0.50 + (bat.contact / 100) * 0.40 - (avgPitchLevel / 7) * 0.15;
+
+      if (Math.random() < contactRate) {
+        // コンタクト成功
+        const foulRate = 0.40 - (bat.contact / 100) * 0.10;
+        if (Math.random() < foulRate) {
+          // ファウル
+          if (strikes < 2) strikes++;
+          // 2ストライク時はファウルでカウント変わらず
+        } else {
+          // インプレー
+          const ball = generateBattedBall(batter, pitcher);
+          const landing = calcBallLanding(ball.direction, ball.launchAngle, ball.exitVelocity);
+          const fieldingResult = evaluateFielders(landing, ball.type, fielderMap);
+          const aiResult = resolvePlayWithAI(ball, landing, fieldingResult, fielderMap, batter, bases, outs);
+          return {
+            result: aiResult.result,
+            battedBallType: ball.type,
+            fielderPosition: aiResult.fielderPos,
+            direction: ball.direction,
+            launchAngle: ball.launchAngle,
+            exitVelocity: ball.exitVelocity,
+            pitchCount,
+          };
+        }
+      } else {
+        // 空振り
+        strikes++;
+      }
+    } else {
+      // スイングしなかった
+      if (inZone) {
+        // 見逃しストライク
+        strikes++;
+      } else {
+        // ボール
+        balls++;
+      }
+    }
+
+    // カウント判定
+    if (balls >= 4) {
+      return { result: "walk", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null, pitchCount };
+    }
+    if (strikes >= 3) {
+      return { result: "strikeout", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null, pitchCount };
+    }
   }
-
-  // 四球率
-  const walkRate = 0.075 + eyeFactor * 0.05 - controlFactor * 0.04;
-  cumulative += Math.max(0.02, walkRate);
-  if (roll < cumulative) {
-    return { result: "walk", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null };
-  }
-
-  // 三振率
-  const maxPitchLevel = pit.pitches && pit.pitches.length > 0
-    ? Math.max(...pit.pitches.map(p => p.level))
-    : 0;
-  const finisherBonus = maxPitchLevel >= 5 ? (maxPitchLevel - 4) * 0.015 : 0;
-  const strikeoutRate = 0.20 + velocityFactor * 0.08 - contactFactor * 0.10 + finisherBonus;
-  cumulative += Math.max(0.05, strikeoutRate);
-  if (roll < cumulative) {
-    return { result: "strikeout", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null };
-  }
-
-  // インプレー: 打球物理データ → 着地位置 → 守備AI → 結果判定
-  const ball = generateBattedBall(batter, pitcher);
-  const landing = calcBallLanding(ball.direction, ball.launchAngle, ball.exitVelocity);
-  const fieldingResult = evaluateFielders(landing, ball.type, fielderMap);
-  const aiResult = resolvePlayWithAI(ball, landing, fieldingResult, fielderMap, batter, bases, outs);
-
-  return { result: aiResult.result, battedBallType: ball.type, fielderPosition: aiResult.fielderPos, direction: ball.direction, launchAngle: ball.launchAngle, exitVelocity: ball.exitVelocity };
 }
 
 /** 個人成績マップを取得・初期化するヘルパー */
@@ -1035,9 +1154,301 @@ function attemptStolenBases(
   return { bases: newBases, additionalOuts };
 }
 
-/** 捕手を取得 (position === "C" の選手、いなければ最初の野手) */
+/** リリーフ投手を取得: 1軍投手のうち先発ローテ以外 */
+function getReliefPitchers(team: Team): Player[] {
+  const active = getActivePlayers(team);
+  const pitchers = active.filter(p => p.isPitcher);
+  const rotationIds = new Set(team.lineupConfig?.startingRotation ?? []);
+  const relievers = pitchers.filter(p => !rotationIds.has(p.id));
+  return relievers.sort((a, b) => {
+    const aVal = (a.pitching?.stamina ?? 0) + (a.pitching?.control ?? 0) + (a.pitching?.velocity ?? 0);
+    const bVal = (b.pitching?.stamina ?? 0) + (b.pitching?.control ?? 0) + (b.pitching?.velocity ?? 0);
+    return bVal - aVal;
+  });
+}
+
+/** 投手交代が必要か判定（イニング間チェック） */
+function shouldChangePitcher(
+  pitcherState: PitcherGameState,
+  inning: number,
+  teamScore: number,
+  opponentScore: number,
+  team: Team
+): boolean {
+  const stamina = pitcherState.player.pitching!.stamina;
+  const ratio = pitcherState.currentStamina / stamina;
+  const isStarter = pitcherState.log.isStarter === true;
+  const policy = team.lineupConfig?.starterUsagePolicy ?? "performance";
+  const leadAmount = teamScore - opponentScore;
+
+  // リリーフ投手はスタミナ20%以下で交代
+  if (!isStarter) {
+    if (ratio <= 0.20) return true;
+    return false;
+  }
+
+  // 先発投手の起用方針
+  switch (policy) {
+    case "stamina_limit":
+      // スタミナ限界: スタミナ15%以下で交代（最も遅い交代）
+      if (ratio <= 0.15) return true;
+      if (pitcherState.log.earnedRuns >= 7) return true;
+      break;
+
+    case "win_eligible":
+      // 勝利投手優先: 5回以上＋リード時にスタミナ40%以下で交代
+      if (inning >= 5 && leadAmount > 0 && ratio <= 0.40) return true;
+      if (ratio <= 0.20) return true;
+      if (pitcherState.log.earnedRuns >= 5) return true;
+      break;
+
+    case "performance":
+    default:
+      // 調子次第(デフォルト): スタミナ30%以下 or 自責点4以上で交代
+      if (ratio <= 0.30) return true;
+      if (pitcherState.log.earnedRuns >= 4) return true;
+      if (inning >= 7 && ratio <= 0.40) return true;
+      break;
+  }
+
+  // 8回以降: リード時に守護神/SUへの継投を検討（全方針共通）
+  if (inning >= 8 && leadAmount >= 1 && leadAmount <= 4) {
+    const config = team.lineupConfig;
+    const closerId = config?.closerId;
+    const setupIds = config?.setupIds ?? [];
+    const currentId = pitcherState.player.id;
+
+    if (inning >= 9 && closerId && currentId !== closerId) return true;
+    if (inning === 8 && setupIds.length > 0 && !setupIds.includes(currentId)) return true;
+  }
+
+  return false;
+}
+
+/** 次のリリーフ投手を選択（役割対応版） */
+function selectNextPitcher(
+  gameState: TeamGameState,
+  teamScore: number,
+  opponentScore: number,
+  inning: number,
+  team: Team
+): Player | null {
+  const config = team.lineupConfig;
+  const closerId = config?.closerId;
+  const setupIds = new Set(config?.setupIds ?? []);
+
+  const available = gameState.bullpen.filter(p => !gameState.usedPitcherIds.has(p.id));
+  if (available.length === 0) return null;
+
+  const leadAmount = teamScore - opponentScore;
+
+  // 9回 + リード1-3点 → 守護神
+  if (inning >= 9 && leadAmount >= 1 && leadAmount <= 3 && closerId) {
+    const closer = available.find(p => p.id === closerId);
+    if (closer) return closer;
+  }
+
+  // 8回 + リード1-4点 → セットアッパー
+  if (inning >= 8 && leadAmount >= 1 && leadAmount <= 4) {
+    const setup = available.find(p => setupIds.has(p.id));
+    if (setup) return setup;
+  }
+
+  // 5-7回 + リード1-3点 → ブルペン上位（守護神・SU以外）
+  if (inning >= 5 && inning <= 7 && leadAmount >= 1 && leadAmount <= 3) {
+    const midReliever = available.find(p => p.id !== closerId && !setupIds.has(p.id));
+    if (midReliever) return midReliever;
+  }
+
+  // ビハインド → ブルペン下位から消費（守護神・SUを温存）
+  if (leadAmount < 0) {
+    const lowPriority = available.filter(p => p.id !== closerId && !setupIds.has(p.id));
+    if (lowPriority.length > 0) return lowPriority[lowPriority.length - 1];
+    return available[available.length - 1];
+  }
+
+  // 大量リード（5点以上）→ 下位投手から消費
+  if (leadAmount >= 5) {
+    const lowPriority = available.filter(p => p.id !== closerId && !setupIds.has(p.id));
+    if (lowPriority.length > 0) return lowPriority[lowPriority.length - 1];
+    return available[available.length - 1];
+  }
+
+  // その他 → bullpen順の先頭
+  return available[0];
+}
+
+/** 投手交代を実行 */
+function changePitcher(gameState: TeamGameState, newPitcher: Player): void {
+  gameState.currentPitcher.log.pitchCount = gameState.currentPitcher.pitchCount;
+  gameState.pitcherLogs.push(gameState.currentPitcher.log);
+
+  gameState.usedPitcherIds.add(newPitcher.id);
+  gameState.currentPitcher = {
+    player: newPitcher,
+    log: {
+      playerId: newPitcher.id,
+      inningsPitched: 0,
+      hits: 0,
+      earnedRuns: 0,
+      walks: 0,
+      strikeouts: 0,
+      homeRunsAllowed: 0,
+      pitchCount: 0,
+      isStarter: false,
+    },
+    pitchCount: 0,
+    currentStamina: newPitcher.pitching!.stamina,
+  };
+}
+
+/**
+ * 勝利/敗戦投手を判定
+ * 先発が5回以上投げてチームが勝った場合は先発に勝利、
+ * それ以外はリードが最後に変わった時点の投手を判定する
+ */
+function determineWinLossPitcher(
+  innings: InningScore[],
+  homePitcherPerInning: string[],
+  awayPitcherPerInning: string[],
+  allHomeLogs: PitcherGameLog[],
+  allAwayLogs: PitcherGameLog[],
+  homeScore: number,
+  awayScore: number,
+): { winningPitcherId: string | null; losingPitcherId: string | null } {
+  if (homeScore === awayScore) return { winningPitcherId: null, losingPitcherId: null };
+
+  const homeWins = homeScore > awayScore;
+
+  let cumHome = 0;
+  let cumAway = 0;
+  let lastGoAheadInning = 0;
+
+  for (let i = 0; i < innings.length; i++) {
+    const prevHome = cumHome;
+    const prevAway = cumAway;
+    cumAway += innings[i].top;
+    cumHome += innings[i].bottom;
+
+    if (homeWins) {
+      if (cumHome > cumAway && prevHome <= prevAway) {
+        lastGoAheadInning = i;
+      }
+    } else {
+      if (cumAway > cumHome && prevAway <= prevHome) {
+        lastGoAheadInning = i;
+      }
+    }
+  }
+
+  let winPitcherId: string | null = null;
+  let losePitcherId: string | null = null;
+
+  if (homeWins) {
+    winPitcherId = homePitcherPerInning[lastGoAheadInning] ?? null;
+    losePitcherId = awayPitcherPerInning[lastGoAheadInning] ?? null;
+
+    const homeStarter = allHomeLogs.find(l => l.isStarter);
+    if (homeStarter && homeStarter.inningsPitched >= 15) {
+      // 先発が5回以上投球した場合: 先発が降板時点でリードしていた場合のみ勝利投手
+      const starterLastInning = homePitcherPerInning.lastIndexOf(homeStarter.playerId);
+      if (starterLastInning >= 0) {
+        let homeAtEnd = 0, awayAtEnd = 0;
+        for (let i = 0; i <= starterLastInning; i++) {
+          awayAtEnd += innings[i].top;
+          homeAtEnd += innings[i].bottom;
+        }
+        if (homeAtEnd > awayAtEnd) {
+          winPitcherId = homeStarter.playerId;
+        }
+      }
+    }
+  } else {
+    winPitcherId = awayPitcherPerInning[lastGoAheadInning] ?? null;
+    losePitcherId = homePitcherPerInning[lastGoAheadInning] ?? null;
+
+    const awayStarter = allAwayLogs.find(l => l.isStarter);
+    if (awayStarter && awayStarter.inningsPitched >= 15) {
+      // 先発が5回以上投球した場合: 先発が降板時点でリードしていた場合のみ勝利投手
+      const starterLastInning = awayPitcherPerInning.lastIndexOf(awayStarter.playerId);
+      if (starterLastInning >= 0) {
+        let homeAtEnd = 0, awayAtEnd = 0;
+        for (let i = 0; i <= starterLastInning; i++) {
+          awayAtEnd += innings[i].top;
+          homeAtEnd += innings[i].bottom;
+        }
+        if (awayAtEnd > homeAtEnd) {
+          winPitcherId = awayStarter.playerId;
+        }
+      }
+    }
+  }
+
+  return { winningPitcherId: winPitcherId, losingPitcherId: losePitcherId };
+}
+
+/** セーブ判定（NPB準拠） */
+function determineSavePitcher(
+  allLogs: PitcherGameLog[],
+  winningPitcherId: string | null,
+  finalLeadAmount: number,
+  lastPitcherId: string,
+): string | null {
+  if (!winningPitcherId) return null;
+
+  // 勝利投手ではない
+  if (lastPitcherId === winningPitcherId) return null;
+
+  // チーム最後の投手のログ
+  const lastLog = allLogs.find(l => l.playerId === lastPitcherId);
+  if (!lastLog) return null;
+
+  // 1/3イニング（アウト1つ）以上投球
+  if (lastLog.inningsPitched < 1) return null;
+
+  // リードを守り切って試合終了
+  if (finalLeadAmount <= 0) return null;
+
+  // 最終スコア差3以内 or 3イニング（9アウト）以上投球
+  if (finalLeadAmount <= 3 || lastLog.inningsPitched >= 9) {
+    return lastPitcherId;
+  }
+
+  return null;
+}
+
+/** ホールド判定（NPB準拠） */
+function determineHoldPitchers(
+  allLogs: PitcherGameLog[],
+  winningPitcherId: string | null,
+  losingPitcherId: string | null,
+  savePitcherId: string | null,
+): string[] {
+  const holdPitcherIds: string[] = [];
+
+  for (const log of allLogs) {
+    // 先発/勝利/敗戦/セーブ投手は除外
+    if (log.isStarter) continue;
+    if (log.playerId === winningPitcherId) continue;
+    if (log.playerId === losingPitcherId) continue;
+    if (log.playerId === savePitcherId) continue;
+
+    // アウト1つ以上記録
+    if (log.inningsPitched < 1) continue;
+
+    // 自責点2以下（リードを保護して降板）
+    if (log.earnedRuns <= 2) {
+      holdPitcherIds.push(log.playerId);
+    }
+  }
+
+  return holdPitcherIds;
+}
+
+/** 捕手を取得 (1軍の position === "C" の選手、いなければ1軍の最初の選手) */
 function getCatcher(team: Team): Player {
-  return team.roster.find((p) => p.position === "C") || team.roster[0];
+  const active = getActivePlayers(team);
+  return active.find((p) => p.position === "C") || active[0];
 }
 
 /** 1軍選手のみ取得 */
@@ -1088,30 +1499,34 @@ function getBattingOrder(team: Team): Player[] {
 /** 1イニングの半分 (表 or 裏) をシミュレート */
 function simulateHalfInning(
   battingTeam: Player[],
-  pitcher: Player,
+  defensiveState: TeamGameState,
   fieldingTeam: Player[],
   batterIndex: number,
   batterStatsMap: Map<string, PlayerGameStats>,
-  pitcherLog: PitcherGameLog,
-  catcher: Player,
-  fullRoster?: Player[],
   options?: SimulateGameOptions,
   atBatLogs?: AtBatLog[],
   inning?: number,
-  halfInning?: "top" | "bottom"
+  halfInning?: "top" | "bottom",
+  defensiveTeam?: Team,
+  teamScore?: number,
+  opponentScore?: number,
 ): { runs: number; hits: number; nextBatterIndex: number } {
   let outs = 0;
   let runs = 0;
   let hits = 0;
   let bases: BaseRunners = { first: null, second: null, third: null };
   let idx = batterIndex;
+  let inningRuns = 0;
 
-  const fielderMap = buildFielderMap(fieldingTeam, pitcher, fullRoster);
+  // イニング内の投手交代追跡: 最後に交代したタイミングのアウト数
+  let outsAtLastPitcherChange = 0;
+
+  let fielderMap = buildFielderMap(fieldingTeam, defensiveState.currentPitcher.player, defensiveState.fullRoster);
 
   while (outs < 3) {
     // 盗塁試行 (打席前)
     if (bases.first || bases.second) {
-      const stealResult = attemptStolenBases(bases, outs, catcher, batterStatsMap, fielderMap);
+      const stealResult = attemptStolenBases(bases, outs, defensiveState.catcher, batterStatsMap, fielderMap);
       bases = stealResult.bases;
       outs += stealResult.additionalOuts;
       if (outs >= 3) break;
@@ -1124,7 +1539,15 @@ function simulateHalfInning(
       bases.second !== null,
       bases.third !== null,
     ];
-    const detail = simulateAtBat(batter, pitcher, fielderMap, bases, outs);
+
+    // 打席開始時の投手を取得（その打席の結果はこの投手に記録する）
+    const pitcherState = defensiveState.currentPitcher;
+    const pitcher = pitcherState.player;
+    const pitcherLog = pitcherState.log;
+
+    const detail = simulateAtBat(batter, pitcher, fielderMap, bases, outs, pitcherState);
+    // 投球数をpitcherStateに累積
+    pitcherState.pitchCount += detail.pitchCount;
     const result = detail.result;
     const bs = getOrCreateBatterStats(batterStatsMap, batter.id);
 
@@ -1283,6 +1706,7 @@ function simulateHalfInning(
         bases = sfAdvance.bases;
         const sfScored = sfAdvance.runsScored;
         runs += sfScored;
+        inningRuns += sfScored;
         bs.rbi += sfScored;
         pitcherLog.earnedRuns += sfScored;
         for (const runner of sfAdvance.scoredRunners) {
@@ -1299,6 +1723,7 @@ function simulateHalfInning(
           bases = advance.bases;
           const scored = advance.runsScored;
           runs += scored;
+          inningRuns += scored;
           bs.rbi += scored;
           pitcherLog.earnedRuns += scored;
           for (const runner of advance.scoredRunners) {
@@ -1315,6 +1740,7 @@ function simulateHalfInning(
           bases = advance.bases;
           const scored = advance.runsScored;
           runs += scored;
+          inningRuns += scored;
           bs.rbi += scored;
           pitcherLog.earnedRuns += scored;
           for (const runner of advance.scoredRunners) {
@@ -1344,6 +1770,7 @@ function simulateHalfInning(
         bases = fcAdvance.bases;
         const fcScored = fcAdvance.runsScored;
         runs += fcScored;
+        inningRuns += fcScored;
         bs.rbi += fcScored;
         pitcherLog.earnedRuns += fcScored;
         for (const runner of fcAdvance.scoredRunners) {
@@ -1362,6 +1789,7 @@ function simulateHalfInning(
         bases = errAdvance.bases;
         const errScored = errAdvance.runsScored;
         runs += errScored;
+        inningRuns += errScored;
         // エラーによる失点は自責点に含まない
         for (const runner of errAdvance.scoredRunners) {
           getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
@@ -1388,12 +1816,22 @@ function simulateHalfInning(
         bases = hitAdvance.bases;
         const hitScored = hitAdvance.runsScored;
         runs += hitScored;
+        inningRuns += hitScored;
         bs.rbi += hitScored;
         pitcherLog.earnedRuns += hitScored;
         for (const runner of hitAdvance.scoredRunners) {
           getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
         }
         break;
+      }
+    }
+
+    // サヨナラ判定: 9回以降の裏、攻撃チーム(home)がリードを取ったら即終了
+    if (halfInning === "bottom" && (inning ?? 0) >= 9 && teamScore != null && opponentScore != null) {
+      if (opponentScore + runs > teamScore) {
+        defensiveState.currentPitcher.log.inningsPitched += (outs - outsAtLastPitcherChange);
+        idx++;
+        return { runs, hits, nextBatterIndex: idx };
       }
     }
 
@@ -1448,14 +1886,45 @@ function simulateHalfInning(
         outsBeforePlay: outsBeforeAtBat,
         pitchType,
         pitchLocation,
+        pitchCountInAtBat: detail.pitchCount,
       });
     }
 
     idx++;
+
+    // === イニング途中の投手交代判定 ===
+    if (defensiveTeam && teamScore != null && opponentScore != null && outs < 3) {
+      const currentPitcher = defensiveState.currentPitcher;
+      const staminaRatio = currentPitcher.currentStamina / currentPitcher.player.pitching!.stamina;
+
+      let shouldChangeMidInning = false;
+
+      // そのイニング3失点以上 + 1アウト以下
+      if (inningRuns >= 3 && outs < 2) shouldChangeMidInning = true;
+
+      // 満塁 + 0アウト + スタミナ30%以下
+      if (bases.first && bases.second && bases.third && outs === 0 && staminaRatio <= 0.30) shouldChangeMidInning = true;
+
+      // スタミナ10%以下（即時交代）
+      if (staminaRatio <= 0.10) shouldChangeMidInning = true;
+
+      if (shouldChangeMidInning) {
+        const next = selectNextPitcher(defensiveState, teamScore, opponentScore + runs, inning ?? 1, defensiveTeam);
+        if (next) {
+          // 交代前の投手のイニング内アウト数を記録
+          defensiveState.currentPitcher.log.inningsPitched += (outs - outsAtLastPitcherChange);
+          changePitcher(defensiveState, next);
+          // 新投手のfielderMapを再構築
+          fielderMap = buildFielderMap(fieldingTeam, defensiveState.currentPitcher.player, defensiveState.fullRoster);
+          outsAtLastPitcherChange = outs;
+          inningRuns = 0;
+        }
+      }
+    }
   }
 
-  // 3アウトで1イニング分
-  pitcherLog.inningsPitched += 3;
+  // イニング終了: 最後の投手の残りアウト分を記録
+  defensiveState.currentPitcher.log.inningsPitched += (3 - outsAtLastPitcherChange);
 
   return { runs, hits, nextBatterIndex: idx };
 }
@@ -1471,87 +1940,189 @@ export interface SimulateGameOptions {
 export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateGameOptions): GameResult {
   const homePitcher = getStartingPitcher(homeTeam);
   const awayPitcher = getStartingPitcher(awayTeam);
-  const homeBatters = getBattingOrder(homeTeam);
-  const awayBatters = getBattingOrder(awayTeam);
-  const homeCatcher = getCatcher(homeTeam);
-  const awayCatcher = getCatcher(awayTeam);
 
-  // 個人成績マップ
   const batterStatsMap = new Map<string, PlayerGameStats>();
-  const homePitcherLog: PitcherGameLog = {
-    playerId: homePitcher.id,
-    inningsPitched: 0,
-    hits: 0,
-    earnedRuns: 0,
-    walks: 0,
-    strikeouts: 0,
-    homeRunsAllowed: 0,
+
+  const homeState: TeamGameState = {
+    batters: getBattingOrder(homeTeam),
+    batterIndex: 0,
+    currentPitcher: {
+      player: homePitcher,
+      log: {
+        playerId: homePitcher.id,
+        inningsPitched: 0,
+        hits: 0,
+        earnedRuns: 0,
+        walks: 0,
+        strikeouts: 0,
+        homeRunsAllowed: 0,
+        pitchCount: 0,
+        isStarter: true,
+      },
+      pitchCount: 0,
+      currentStamina: homePitcher.pitching!.stamina,
+    },
+    bullpen: getReliefPitchers(homeTeam),
+    usedPitcherIds: new Set([homePitcher.id]),
+    pitcherLogs: [],
+    catcher: getCatcher(homeTeam),
+    fullRoster: getActivePlayers(homeTeam),
   };
-  const awayPitcherLog: PitcherGameLog = {
-    playerId: awayPitcher.id,
-    inningsPitched: 0,
-    hits: 0,
-    earnedRuns: 0,
-    walks: 0,
-    strikeouts: 0,
-    homeRunsAllowed: 0,
+
+  const awayState: TeamGameState = {
+    batters: getBattingOrder(awayTeam),
+    batterIndex: 0,
+    currentPitcher: {
+      player: awayPitcher,
+      log: {
+        playerId: awayPitcher.id,
+        inningsPitched: 0,
+        hits: 0,
+        earnedRuns: 0,
+        walks: 0,
+        strikeouts: 0,
+        homeRunsAllowed: 0,
+        pitchCount: 0,
+        isStarter: true,
+      },
+      pitchCount: 0,
+      currentStamina: awayPitcher.pitching!.stamina,
+    },
+    bullpen: getReliefPitchers(awayTeam),
+    usedPitcherIds: new Set([awayPitcher.id]),
+    pitcherLogs: [],
+    catcher: getCatcher(awayTeam),
+    fullRoster: getActivePlayers(awayTeam),
   };
 
   const innings: InningScore[] = [];
   let homeScore = 0;
   let awayScore = 0;
-  let homeBatterIdx = 0;
-  let awayBatterIdx = 0;
   const atBatLogs: AtBatLog[] = [];
+
+  // 各イニングの守備投手を追跡（勝敗投手判定用）
+  const homePitcherPerInning: string[] = [];
+  const awayPitcherPerInning: string[] = [];
 
   // 9イニング
   for (let i = 0; i < 9; i++) {
-    // 表 (アウェイチームの攻撃 → ホームチームが守備)
+    homePitcherPerInning.push(homeState.currentPitcher.player.id);
+
+    // 表 (アウェイ攻撃 → ホーム守備)
     const topResult = simulateHalfInning(
-      awayBatters, homePitcher, homeBatters, awayBatterIdx, batterStatsMap, homePitcherLog, homeCatcher,
-      getActivePlayers(homeTeam), options, atBatLogs, i + 1, "top"
+      awayState.batters, homeState, homeState.batters,
+      awayState.batterIndex, batterStatsMap,
+      options, atBatLogs, i + 1, "top",
+      homeTeam, homeScore, awayScore
     );
     awayScore += topResult.runs;
-    awayBatterIdx = topResult.nextBatterIndex;
+    awayState.batterIndex = topResult.nextBatterIndex;
 
-    // 裏 (ホームチームの攻撃 → アウェイチームが守備)
-    // 9回裏でホームチームがリードしていたらスキップ
+    // 裏 (ホーム攻撃 → アウェイ守備)
     let bottomRuns = 0;
+    awayPitcherPerInning.push(awayState.currentPitcher.player.id);
     if (!(i === 8 && homeScore > awayScore)) {
       const bottomResult = simulateHalfInning(
-        homeBatters, awayPitcher, awayBatters, homeBatterIdx, batterStatsMap, awayPitcherLog, awayCatcher,
-        getActivePlayers(awayTeam), options, atBatLogs, i + 1, "bottom"
+        homeState.batters, awayState, awayState.batters,
+        homeState.batterIndex, batterStatsMap,
+        options, atBatLogs, i + 1, "bottom",
+        awayTeam, awayScore, homeScore
       );
       bottomRuns = bottomResult.runs;
       homeScore += bottomRuns;
-      homeBatterIdx = bottomResult.nextBatterIndex;
+      homeState.batterIndex = bottomResult.nextBatterIndex;
     }
 
     innings.push({ top: topResult.runs, bottom: bottomRuns });
 
-    // 9回裏でサヨナラ
     if (i === 8 && homeScore > awayScore) break;
+
+    // イニング間の投手交代判定
+    if (shouldChangePitcher(homeState.currentPitcher, i + 1, homeScore, awayScore, homeTeam)) {
+      const next = selectNextPitcher(homeState, homeScore, awayScore, i + 2, homeTeam);
+      if (next) changePitcher(homeState, next);
+    }
+    if (shouldChangePitcher(awayState.currentPitcher, i + 1, awayScore, homeScore, awayTeam)) {
+      const next = selectNextPitcher(awayState, awayScore, homeScore, i + 2, awayTeam);
+      if (next) changePitcher(awayState, next);
+    }
   }
 
   // 延長 (最大12回まで)
   while (homeScore === awayScore && innings.length < 12) {
     const extInning = innings.length + 1;
+
+    homePitcherPerInning.push(homeState.currentPitcher.player.id);
     const topResult = simulateHalfInning(
-      awayBatters, homePitcher, homeBatters, awayBatterIdx, batterStatsMap, homePitcherLog, homeCatcher,
-      getActivePlayers(homeTeam), options, atBatLogs, extInning, "top"
+      awayState.batters, homeState, homeState.batters,
+      awayState.batterIndex, batterStatsMap,
+      options, atBatLogs, extInning, "top",
+      homeTeam, homeScore, awayScore
     );
     awayScore += topResult.runs;
-    awayBatterIdx = topResult.nextBatterIndex;
+    awayState.batterIndex = topResult.nextBatterIndex;
 
+    awayPitcherPerInning.push(awayState.currentPitcher.player.id);
     const bottomResult = simulateHalfInning(
-      homeBatters, awayPitcher, awayBatters, homeBatterIdx, batterStatsMap, awayPitcherLog, awayCatcher,
-      getActivePlayers(awayTeam), options, atBatLogs, extInning, "bottom"
+      homeState.batters, awayState, awayState.batters,
+      homeState.batterIndex, batterStatsMap,
+      options, atBatLogs, extInning, "bottom",
+      awayTeam, awayScore, homeScore
     );
     homeScore += bottomResult.runs;
-    homeBatterIdx = bottomResult.nextBatterIndex;
+    homeState.batterIndex = bottomResult.nextBatterIndex;
 
     innings.push({ top: topResult.runs, bottom: bottomResult.runs });
+
+    // 延長中の投手交代判定（同点継続時のみ）
+    if (homeScore === awayScore) {
+      if (shouldChangePitcher(homeState.currentPitcher, extInning, homeScore, awayScore, homeTeam)) {
+        const next = selectNextPitcher(homeState, homeScore, awayScore, extInning + 1, homeTeam);
+        if (next) changePitcher(homeState, next);
+      }
+      if (shouldChangePitcher(awayState.currentPitcher, extInning, awayScore, homeScore, awayTeam)) {
+        const next = selectNextPitcher(awayState, awayScore, homeScore, extInning + 1, awayTeam);
+        if (next) changePitcher(awayState, next);
+      }
+    }
   }
+
+  // 全投手ログを収集
+  homeState.currentPitcher.log.pitchCount = homeState.currentPitcher.pitchCount;
+  awayState.currentPitcher.log.pitchCount = awayState.currentPitcher.pitchCount;
+  const allHomeLogs = [...homeState.pitcherLogs, homeState.currentPitcher.log];
+  const allAwayLogs = [...awayState.pitcherLogs, awayState.currentPitcher.log];
+
+  // 勝敗投手判定
+  const { winningPitcherId, losingPitcherId } = determineWinLossPitcher(
+    innings, homePitcherPerInning, awayPitcherPerInning,
+    allHomeLogs, allAwayLogs, homeScore, awayScore
+  );
+
+  // セーブ判定
+  let savePitcherId: string | null = null;
+  if (homeScore !== awayScore) {
+    if (homeScore > awayScore) {
+      savePitcherId = determineSavePitcher(
+        allHomeLogs, winningPitcherId, homeScore - awayScore,
+        homeState.currentPitcher.player.id
+      );
+    } else {
+      savePitcherId = determineSavePitcher(
+        allAwayLogs, winningPitcherId, awayScore - homeScore,
+        awayState.currentPitcher.player.id
+      );
+    }
+  }
+
+  // ホールド判定
+  const homeHolds = determineHoldPitchers(
+    allHomeLogs, winningPitcherId, losingPitcherId, savePitcherId
+  );
+  const awayHolds = determineHoldPitchers(
+    allAwayLogs, winningPitcherId, losingPitcherId, savePitcherId
+  );
+  const holdPitcherIds = [...homeHolds, ...awayHolds];
 
   // 打者の出場試合数を記録
   for (const stats of batterStatsMap.values()) {
@@ -1562,11 +2133,12 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
     homeScore,
     awayScore,
     innings,
-    winningPitcherId: homeScore > awayScore ? homePitcher.id : awayScore > homeScore ? awayPitcher.id : null,
-    losingPitcherId: homeScore > awayScore ? awayPitcher.id : awayScore > homeScore ? homePitcher.id : null,
-    savePitcherId: null,
+    winningPitcherId,
+    losingPitcherId,
+    savePitcherId,
+    holdPitcherIds,
     playerStats: Array.from(batterStatsMap.values()),
-    pitcherStats: [homePitcherLog, awayPitcherLog],
+    pitcherStats: [...allHomeLogs, ...allAwayLogs],
     atBatLogs: options?.collectAtBatLogs ? atBatLogs : undefined,
   };
 }
