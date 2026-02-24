@@ -81,28 +81,155 @@ function AtBatLogTable({
   maxRows?: number;
 }) {
   const [selectedLog, setSelectedLog] = useState<AtBatLog | null>(null);
+  const [resultFilter, setResultFilter] = useState<string>("all");
+  const [ballTypeFilter, setBallTypeFilter] = useState<string>("all");
+  const [sortKey, setSortKey] = useState<string>("inning");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  const filteredLogs = useMemo(() => {
+    let result = logs;
+    if (resultFilter !== "all") {
+      switch (resultFilter) {
+        case "hit":
+          result = result.filter(l => ["single", "double", "triple", "homerun", "infieldHit", "error"].includes(l.result));
+          break;
+        case "out":
+          result = result.filter(l => ["groundout", "flyout", "lineout", "popout", "doublePlay", "sacrificeFly", "fieldersChoice"].includes(l.result));
+          break;
+        case "strikeout":
+          result = result.filter(l => l.result === "strikeout");
+          break;
+        case "walk":
+          result = result.filter(l => l.result === "walk" || l.result === "hitByPitch");
+          break;
+        case "homerun":
+          result = result.filter(l => l.result === "homerun");
+          break;
+      }
+    }
+    if (ballTypeFilter !== "all") {
+      result = result.filter(l => l.battedBallType === ballTypeFilter);
+    }
+    return result;
+  }, [logs, resultFilter, ballTypeFilter]);
+
+  const sortedLogs = useMemo(() => {
+    const sorted = [...filteredLogs];
+    sorted.sort((a, b) => {
+      let va: number | string | null = null;
+      let vb: number | string | null = null;
+      switch (sortKey) {
+        case "inning": va = a.inning; vb = b.inning; break;
+        case "result": va = a.result; vb = b.result; break;
+        case "direction": va = a.direction; vb = b.direction; break;
+        case "launchAngle": va = a.launchAngle; vb = b.launchAngle; break;
+        case "exitVelocity": va = a.exitVelocity; vb = b.exitVelocity; break;
+        case "estimatedDistance": va = a.estimatedDistance ?? null; vb = b.estimatedDistance ?? null; break;
+      }
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      const cmp = typeof va === "string" ? va.localeCompare(vb as string) : (va as number) - (vb as number);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return sorted;
+  }, [filteredLogs, sortKey, sortDir]);
+
+  const handleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir(["exitVelocity", "estimatedDistance", "launchAngle"].includes(key) ? "desc" : "asc");
+    }
+  };
+
+  const sortArrow = (key: string) => sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : "";
 
   return (
     <>
+      {/* フィルタバー */}
+      <div className="flex items-center gap-3 mb-2 text-xs">
+        <label className="flex items-center gap-1 text-gray-400">
+          結果
+          <select
+            value={resultFilter}
+            onChange={e => setResultFilter(e.target.value)}
+            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-gray-200 text-xs"
+          >
+            <option value="all">全て</option>
+            <option value="hit">ヒット</option>
+            <option value="out">アウト</option>
+            <option value="strikeout">三振</option>
+            <option value="walk">四球・死球</option>
+            <option value="homerun">ホームラン</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1 text-gray-400">
+          打球
+          <select
+            value={ballTypeFilter}
+            onChange={e => setBallTypeFilter(e.target.value)}
+            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-gray-200 text-xs"
+          >
+            <option value="all">全て</option>
+            <option value="ground_ball">ゴロ</option>
+            <option value="fly_ball">フライ</option>
+            <option value="line_drive">ライナー</option>
+            <option value="popup">ポップフライ</option>
+          </select>
+        </label>
+        <span className="ml-auto text-gray-500">{sortedLogs.length.toLocaleString()}件</span>
+      </div>
       <div className="max-h-[600px] overflow-y-auto">
         <table className="w-full text-xs" style={{ fontVariantNumeric: "tabular-nums" }}>
           <thead className="sticky top-0 bg-gray-800">
             <tr className="text-gray-400 border-b border-gray-700">
-              <th className="text-right py-2 px-2">回</th>
+              <th
+                className="text-right py-2 px-2 cursor-pointer hover:text-gray-200 select-none"
+                onClick={() => handleSort("inning")}
+              >
+                回{sortArrow("inning")}
+              </th>
               <th className="text-center py-2 px-2">半</th>
               <th className="text-left py-2 px-2">打者</th>
               <th className="text-left py-2 px-2">投手</th>
-              <th className="text-left py-2 px-2">結果</th>
+              <th
+                className="text-left py-2 px-2 cursor-pointer hover:text-gray-200 select-none"
+                onClick={() => handleSort("result")}
+              >
+                結果{sortArrow("result")}
+              </th>
               <th className="text-left py-2 px-2">打球</th>
-              <th className="text-right py-2 px-2">方向°</th>
-              <th className="text-right py-2 px-2">角度°</th>
-              <th className="text-right py-2 px-2">速度</th>
-              <th className="text-right py-2 px-2 text-xs text-gray-400">飛距離</th>
+              <th
+                className="text-right py-2 px-2 cursor-pointer hover:text-gray-200 select-none"
+                onClick={() => handleSort("direction")}
+              >
+                方向°{sortArrow("direction")}
+              </th>
+              <th
+                className="text-right py-2 px-2 cursor-pointer hover:text-gray-200 select-none"
+                onClick={() => handleSort("launchAngle")}
+              >
+                角度°{sortArrow("launchAngle")}
+              </th>
+              <th
+                className="text-right py-2 px-2 cursor-pointer hover:text-gray-200 select-none"
+                onClick={() => handleSort("exitVelocity")}
+              >
+                速度{sortArrow("exitVelocity")}
+              </th>
+              <th
+                className="text-right py-2 px-2 cursor-pointer hover:text-gray-200 select-none text-xs text-gray-400"
+                onClick={() => handleSort("estimatedDistance")}
+              >
+                飛距離{sortArrow("estimatedDistance")}
+              </th>
               <th className="text-center py-2 px-2">守備</th>
             </tr>
           </thead>
           <tbody>
-            {logs.slice(0, maxRows).map((log, i) => (
+            {sortedLogs.slice(0, maxRows).map((log, i) => (
               <tr
                 key={i}
                 onClick={() => log.battedBallType ? setSelectedLog(log) : undefined}
@@ -143,9 +270,9 @@ function AtBatLogTable({
             ))}
           </tbody>
         </table>
-        {logs.length > maxRows && (
+        {sortedLogs.length > maxRows && (
           <p className="text-center text-gray-500 text-xs py-2">
-            最大{maxRows}件表示 (全{logs.length.toLocaleString()}件)
+            最大{maxRows}件表示 (全{sortedLogs.length.toLocaleString()}件)
           </p>
         )}
       </div>
