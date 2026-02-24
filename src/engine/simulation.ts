@@ -3,6 +3,13 @@ import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog
 import type { Player, PitchRepertoire, PitchType } from "@/models/player";
 import { calcBallLanding, evaluateFielders, resolveHitTypeFromLanding } from "./fielding-ai";
 import type { BallLanding, FielderDecision } from "./fielding-ai";
+import {
+  GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR,
+  FENCE_BASE, FENCE_CENTER_EXTRA, FENCE_HEIGHT,
+  GROUND_BALL_ANGLE_THRESHOLD, GROUND_BALL_MAX_DISTANCE,
+  GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO,
+  TRAJECTORY_CARRY_FACTORS,
+} from "./physics-constants";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
 export function calcBreakingPower(pitches: PitchRepertoire[] | undefined): number {
@@ -239,7 +246,7 @@ function generatePitchLocation(
 /** 打球角度と速度から打球タイプを分類する */
 export function classifyBattedBallType(launchAngle: number, exitVelocity: number): BattedBallType {
   if (launchAngle >= 38) return "popup";
-  if (launchAngle < 10) return "ground_ball";
+  if (launchAngle < GROUND_BALL_ANGLE_THRESHOLD) return "ground_ball";
   // 10-19°: ライナー帯（低速・低角度の弱い打球はゴロ扱い）
   if (launchAngle < 20) {
     if (launchAngle < 15 && exitVelocity < 100) return "ground_ball";
@@ -251,24 +258,26 @@ export function classifyBattedBallType(launchAngle: number, exitVelocity: number
 
 /** 推定打球飛距離(メートル)を放物運動+空気抵抗補正で計算 */
 export function estimateDistance(exitVelocityKmh: number, launchAngleDeg: number): number {
-  if (launchAngleDeg <= 0) return 0;
+  if (launchAngleDeg <= 0) {
+    // ゴロ: 摩擦減速モデル（calcBallLanding と同じロジック）
+    const v0 = exitVelocityKmh / 3.6;
+    return Math.min(GROUND_BALL_MAX_DISTANCE, v0 * GROUND_BALL_SPEED_FACTOR);
+  }
 
-  const v = exitVelocityKmh / 3.6; // km/h → m/s
+  const v0 = exitVelocityKmh / 3.6;
   const theta = launchAngleDeg * Math.PI / 180;
-  const g = 9.8;
-  const h = 1.2; // 打点高さ(m)
-
-  const vSinT = v * Math.sin(theta);
-  const vCosT = v * Math.cos(theta);
-  const baseDistance = vCosT * (vSinT + Math.sqrt(vSinT * vSinT + 2 * g * h)) / g;
-
-  const dragFactor = 0.70; // 空気抵抗補正(約30%減)
-  return baseDistance * dragFactor;
+  const vy0 = v0 * Math.sin(theta);
+  const vx = v0 * Math.cos(theta);
+  const tUp = vy0 / GRAVITY;
+  const maxH = BAT_HEIGHT + (vy0 * vy0) / (2 * GRAVITY);
+  const tDown = Math.sqrt(2 * maxH / GRAVITY);
+  const flightTime = (tUp + tDown) * FLIGHT_TIME_FACTOR;
+  return vx * flightTime * DRAG_FACTOR;
 }
 
 /** フェンス距離(メートル): NPB標準 両翼100m, 中堅122m */
 export function getFenceDistance(directionDeg: number): number {
-  return 100 + 22 * Math.sin(directionDeg * Math.PI / 90);
+  return FENCE_BASE + FENCE_CENTER_EXTRA * Math.sin(directionDeg * Math.PI / 90);
 }
 
 /** 打球の物理データを生成する */
@@ -288,7 +297,7 @@ export function generateBattedBall(batter: Player, pitcher: Player): BattedBall 
   const direction = clamp(gaussianRandom(dirMean, 18), 0, 90);
 
   // --- 2. 打球角度 (-15° ~ 70°) ---
-  let angleMean = 12 + (power - 50) * 0.08 - (contact - 50) * 0.04;
+  let angleMean = 10 + (power - 50) * 0.08 - (contact - 50) * 0.04;
   // 弾道(trajectory)による角度補正: 弾道1=-3°, 2=±0°, 3=+3°, 4=+6°
   const trajectory = batter.batting.trajectory ?? 2;
   angleMean += (trajectory - 2) * 3;
@@ -421,35 +430,52 @@ function resolvePlayWithAI(
   bases: BaseRunners,
   outs: number
 ): { result: AtBatResult; fielderPos: FielderPosition } {
-  // === ポップフライ → 常にアウト ===
-  if (ball.type === "popup") {
-    const best = findBestFielder(fieldingResult);
-    return { result: "popout", fielderPos: best?.position ?? assignPopupFielder(ball.direction) };
-  }
-
-  // === フライ → HR判定（フェンス越え）===
-  if (ball.type === "fly_ball") {
+  // === フライ系（fly_ball / popup）→ HR判定（フェンス越え）===
+  if (ball.type === "fly_ball" || ball.type === "popup") {
     const distance = estimateDistance(ball.exitVelocity, ball.launchAngle);
     const fenceDist = getFenceDistance(ball.direction);
 
     // 弾道によるHR飛距離補正（低弾道=ゴロ打ちでキャリーが落ちる、高弾道=控えめにボーナス）
     const trajectory = batter.batting.trajectory ?? 2;
-    const trajectoryCarryFactors = [0.90, 1.00, 1.05, 1.10]; // 弾道1-4
-    const trajectoryCarryFactor = trajectoryCarryFactors[Math.min(3, Math.max(0, trajectory - 1))];
+    const baseCarryFactor = TRAJECTORY_CARRY_FACTORS[Math.min(3, Math.max(0, trajectory - 1))];
+
+    // 急角度ではキャリー効果が減衰（バックスピン揚力は急角度で水平成分に効きにくい）
+    // 35°以下: フルキャリー、35-50°: 線形減衰、50°以上: キャリー無し
+    let trajectoryCarryFactor = baseCarryFactor;
+    if (ball.launchAngle > 35) {
+      const taper = Math.max(0, 1 - (ball.launchAngle - 35) / 15);
+      trajectoryCarryFactor = 1 + (baseCarryFactor - 1) * taper;
+    }
 
     const effectiveDistance = distance * trajectoryCarryFactor;
     const ratio = effectiveDistance / fenceDist;
 
-    if (ratio >= 1.05) {
-      const best = findBestFielder(fieldingResult);
-      return { result: "homerun", fielderPos: best?.position ?? assignOutfielder(ball.direction) };
-    } else if (ratio >= 0.95) {
-      const powerBonus = (batter.batting.power - 50) * 0.002;
-      const hrChance = (ratio - 0.95) / 0.10 + powerBonus;
-      if (Math.random() < clamp(hrChance, 0.01, 0.90)) {
+    if (ratio >= 1.0) {
+      // フェンス水平距離到達時の打球高さを計算
+      // carryFactorをバックスピン揚力（実効重力の軽減）としてモデル化
+      const v0 = ball.exitVelocity / 3.6;
+      const theta = ball.launchAngle * Math.PI / 180;
+      const vy0 = v0 * Math.sin(theta);
+      const gEff = GRAVITY / trajectoryCarryFactor;
+      const tUp = vy0 / gEff;
+      const maxH = BAT_HEIGHT + (vy0 * vy0) / (2 * gEff);
+      const tDown = Math.sqrt(2 * maxH / gEff);
+      const tRaw = tUp + tDown;
+      const tFence = (fenceDist / effectiveDistance) * tRaw;
+      const heightAtFence = BAT_HEIGHT + vy0 * tFence - 0.5 * gEff * tFence * tFence;
+
+      if (heightAtFence >= FENCE_HEIGHT) {
+        // フェンスの高さを越えた → HR確定
         const best = findBestFielder(fieldingResult);
         return { result: "homerun", fielderPos: best?.position ?? assignOutfielder(ball.direction) };
       }
+      // 距離は足りるが高さ不足 → フェンス直撃（通常のフライとして守備処理）
+    }
+
+    // ポップフライでフェンス越えでなければ常にアウト
+    if (ball.type === "popup") {
+      const best = findBestFielder(fieldingResult);
+      return { result: "popout", fielderPos: best?.position ?? assignPopupFielder(ball.direction) };
     }
   }
 
@@ -605,11 +631,11 @@ function resolveFlyOrLineDrive(
 
     // 到達した野手の捕球成功率: 余裕があれば高い、ギリギリなら低い
     // margin >= 1.0s → ほぼ確実 (97-99%)
-    // margin ~= 0s  → 難しい (85-95%)
+    // margin ~= 0s  → 難しい (90-95%)
     const marginFactor = clamp(margin / 1.0, 0, 1); // 0-1に正規化
-    const baseCatchRate = 0.85 + marginFactor * 0.12; // 0.85-0.97
-    const skillBonus = fieldingRate * 0.03; // 0-0.03
-    const catchRate = clamp(baseCatchRate + skillBonus, 0.85, 0.99);
+    const baseCatchRate = 0.90 + marginFactor * 0.07; // 0.90-0.97
+    const skillBonus = fieldingRate * 0.03; // 0-0.03 (catching依存)
+    const catchRate = clamp(baseCatchRate + skillBonus, 0.90, 0.99);
 
     if (Math.random() < catchRate) {
       // === 捕球成功 → アウト ===
@@ -659,7 +685,7 @@ function resolveHitAdvancement(
   } else {
     // フライ/ライナー: 着地後のバウンドは不規則、深いほど大きい
     const depthFactor = clamp((landing.distance - 50) / 50, 0, 1); // 0 (浅い) → 1 (深い)
-    bouncePenalty = 1.4 + depthFactor * 2.2 + Math.random() * 0.8; // 1.4-4.4s
+    bouncePenalty = 1.2 + depthFactor * 2.0 + Math.random() * 0.8; // 1.2-4.0s
 
     // フェンス際: 壁リバウンドでさらに不規則
     if (landing.distance >= fenceDist * 0.90) {
@@ -707,8 +733,8 @@ function resolveHitAdvancement(
   // 走者がセーフな最大進塁数を計算 (1B はヒット確定なので最低1)
   // 3Bへの進塁はリスクが高いため、走者は十分な余裕がある場合のみ試みる
   let basesReached = 1;
-  if (runnerTo2B < defenseTo2B) basesReached = 2;
-  if (basesReached >= 2 && runnerTo3B < defenseTo3B - 1.5) basesReached = 3;
+  if (runnerTo2B < defenseTo2B + 1.2) basesReached = 2; // 際どい判定は走者有利(中継プレーの誤差を加味)
+  if (basesReached >= 2 && runnerTo3B < defenseTo3B - 0.9) basesReached = 3;
 
   const fielderPos = retriever.position;
   if (basesReached >= 3) return { result: "triple", fielderPos };
@@ -1390,9 +1416,20 @@ function simulateHalfInning(
     }
 
     if (options?.collectAtBatLogs && atBatLogs) {
-      const dist = (detail.exitVelocity != null && detail.launchAngle != null)
+      let dist = (detail.exitVelocity != null && detail.launchAngle != null)
         ? estimateDistance(detail.exitVelocity, detail.launchAngle)
         : null;
+      // フライ系打球にはcarryFactorを適用（表示飛距離とHR判定飛距離を一致させる）
+      // 急角度ではキャリー減衰（HR判定と同一ロジック）
+      if (dist !== null && (detail.battedBallType === "fly_ball" || detail.battedBallType === "popup")) {
+        const traj = batter.batting.trajectory ?? 2;
+        let cf = TRAJECTORY_CARRY_FACTORS[Math.min(3, Math.max(0, traj - 1))];
+        if (detail.launchAngle != null && detail.launchAngle > 35) {
+          const taper = Math.max(0, 1 - (detail.launchAngle - 35) / 15);
+          cf = 1 + (cf - 1) * taper;
+        }
+        dist = dist * cf;
+      }
       const pitchType = selectPitch(pitcher, detail.result);
       const pitchLocation = generatePitchLocation(pitcher, detail.result, pitchType);
       atBatLogs.push({

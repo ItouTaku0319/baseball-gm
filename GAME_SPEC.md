@@ -139,7 +139,7 @@ controlFactor  = pitcher.control / 100
 
 **着地座標計算** (`calcBallLanding`):
 - ゴロ: 摩擦減速モデル (最大55m), `distance = min(55, v0 * 1.2)`
-- フライ/ライナー: 放物運動 + 空気抵抗補正 (dragFactor=0.60)
+- フライ/ライナー: 放物運動 + 空気抵抗補正 (FLIGHT_TIME_FACTOR=0.85, DRAG_FACTOR=0.63)
 
 **守備判断** (`evaluateFielders`): 全9野手の到達時間を計算
 - 反応時間: 0.3-0.6s (ライナーは+0.3-0.5sの追加遅延)
@@ -149,20 +149,41 @@ controlFactor  = pitcher.control / 100
 
 #### 本塁打判定 (飛距離ベース)
 ```
-推定飛距離: 放物運動 × dragFactor(0.70)
-フェンス距離: 100 + 22 × sin(direction × π / 90) (両翼100m, 中堅122m)
+推定飛距離: estimateDistance() — calcBallLandingと同一の物理式
+  tUp = vy0 / g, maxH = h + vy0²/(2g), tDown = √(2*maxH/g)
+  flightTime = (tUp + tDown) × FLIGHT_TIME_FACTOR(0.85)
+  distance = vx × flightTime × DRAG_FACTOR(0.63)
+  ※全定数はphysics-constants.tsで一元管理
 
-弾道キャリーファクター: [0.90, 1.00, 1.05, 1.10] (弾道1-4)
-  弾道1: -10% (ゴロ打ちタイプはキャリーが弱い)
-  弾道2: 基準
-  弾道3: +5%
-  弾道4: +10% (フライ打ちタイプは最大飛距離が出る)
+フェンス距離: FENCE_BASE(95) + FENCE_CENTER_EXTRA(23) × sin(dir × π / 90)  ※甲子園球場準拠
+フェンス高さ: FENCE_HEIGHT(4.0m)
+
+弾道キャリーファクター: [1.07, 1.19, 1.25, 1.30] (弾道1-4)
+  弾道1: +7%
+  弾道2: +19% (基準)
+  弾道3: +25%
+  弾道4: +30% (フライ打ちタイプは最大飛距離が出る)
 
 effectiveDistance = 飛距離 × trajectoryCarryFactor
 ratio = effectiveDistance / フェンス距離
-ratio ≥ 1.05 → HR確定
-0.95 ≤ ratio < 1.05 → フェンス際ランダム (パワー補正付き)
-ratio < 0.95 → HR不可
+
+急角度キャリー減衰: 35°以下=フルキャリー、35-50°=線形減衰、50°以上=キャリー無し
+  taper = max(0, 1 - (angle - 35) / 15)
+  trajectoryCarryFactor = 1 + (baseCarry - 1) × taper
+  ※バックスピン揚力は急角度で水平成分に効きにくい物理現象をモデル化
+
+HR判定 (fly_ball / popup 共通, 2条件):
+  1. ratio ≥ 1.0 (水平距離がフェンスに到達)
+  2. フェンス水平距離到達時の打球高さ ≥ FENCE_HEIGHT
+     gEff = g / carryFactor (バックスピン揚力を実効重力軽減でモデル化)
+     tUp = vy0 / gEff, maxH = BAT_HEIGHT + vy0²/(2gEff), tDown = √(2maxH/gEff)
+     tFence = (fenceDist / effectiveDistance) × (tUp + tDown)
+     heightAtFence = BAT_HEIGHT + vy0 × tFence - 0.5 × gEff × tFence²
+  両条件を満たす → HR確定
+  距離は足りるが高さ不足 → フェンス直撃（通常のフライとして守備処理）
+  ポップフライ(≥38°)でHR条件を満たさない → 常にアウト（popout）
+
+※ AtBatLogのestimatedDistanceはフライ/ポップフライ打球にcarryFactor適用済みの値を記録
 ```
 
 #### インプレー結果判定 (物理ベース)

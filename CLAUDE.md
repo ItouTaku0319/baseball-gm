@@ -45,6 +45,7 @@ src/
 │   ├── lineup-field.tsx       # SVGフィールド図（守備位置ノード）
 │   └── lineup-card.tsx        # 打順カード（選手情報+能力値+成績）
 ├── engine/                 # ゲームエンジン（純粋関数）
+│   ├── physics-constants.ts # 打球物理の共通定数（重力・空気抵抗・フェンス距離等）
 │   ├── simulation.ts      # 試合シミュレーション（打席・走塁）
 │   ├── fielding-ai.ts     # 守備AI（座標系・到達時間計算・判断ロジック）
 │   ├── season.ts          # シーズン生成・スケジュール・順位
@@ -295,6 +296,10 @@ PMは常に人間に状況が伝わる状態を維持すること。
 ## 指標について
 https://1point02.jp/op/gnav/glossary/gls_index.aspx?cp=101
 上のサイトを見たうえで実装可能なものや必要そうなものは実装すること。
+
+- **飛距離計算統一+物理定数一元化(v8)**: `estimateDistance()`(HR判定)と`calcBallLanding()`(守備AI)で飛距離計算式が不一致だったバグを修正。旧`estimateDistance`は`FLIGHT_TIME_FACTOR(×0.85)`を適用しておらず、約15-20%長い飛距離を返していたためフェンス未到達の打球がHRと判定されていた。修正内容: (1) `physics-constants.ts`を新規作成し全物理定数を一元管理、(2) `estimateDistance`を`calcBallLanding`と同一の「tUp+tDown→×0.85→×DRAG_FACTOR」式に統一、(3) 3ファイル(simulation.ts, fielding-ai.ts, batted-ball-trajectory.tsx)のマジックナンバーを定数importに置換。飛距離短縮の補正として`TRAJECTORY_CARRY_FACTORS`を[0.90,1.00,1.05,1.10]→[1.07,1.19,1.25,1.30]に引き上げ。10万試合検証: AVG.262, HR/試合1.94, HR/FB%12.5%, BABIP.307, 得点/試合7.09。
+
+- **estimatedDistanceにcarryFactor適用+フェンス高さHR判定(v9)**: (1) AtBatLog記録時のestimatedDistanceにフライ/ポップフライ打球にTRAJECTORY_CARRY_FACTORSを適用。表示飛距離とHR判定飛距離の乖離を解消（旧: 表示80mでHR→新: 表示104mでHR）。(2) `FENCE_HEIGHT(4.0m)`を`physics-constants.ts`に追加。HR判定に「フェンス水平距離到達時の打球高さ≥FENCE_HEIGHT」の条件を追加。低弾道でギリギリフェンスに届く打球がフェンス直撃で通常フライ扱いになる。(3) batted-ball-trajectory.tsxのサイドビューでフェンス高さ描画にFENCE_HEIGHT定数を使用。(4) ポップフライ(≥38°)もHR判定の対象に。従来はポップフライ=常にアウトだったが、十分な速度・距離があればフェンスを越えてHRになる。(5) 急角度キャリー減衰: 35°以下=フルキャリー、35-50°=線形減衰、50°以上=キャリー無し。バックスピン揚力は急角度で水平成分に効きにくいため。10000試合検証: HR/試合2.37, HR/FB%15.6%, 得点/試合7.77。
 
 ## 既知の問題
 <!-- 今は直さないが把握しておくべき問題を記録する。 -->

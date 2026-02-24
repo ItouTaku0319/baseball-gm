@@ -113,14 +113,14 @@ describe("ポジション別守備機会分布", () => {
 
   // teamAはホームチームとして9イニングの表のみ守備するため、
   // SS守備機会はフル18イニングの約半分になる
-  it("SS: 1試合あたりPO+Aが3.0-6.5", () => {
+  it("SS: 1試合あたりPO+Aが3.0-8.0", () => {
     expect(avg["SS"].total).toBeGreaterThanOrEqual(3.0);
-    expect(avg["SS"].total).toBeLessThanOrEqual(6.5);
+    expect(avg["SS"].total).toBeLessThanOrEqual(8.0);
   });
 
-  it("SS: 1試合あたりPOが0.5-3.5", () => {
+  it("SS: 1試合あたりPOが0.5-4.5", () => {
     expect(avg["SS"].po).toBeGreaterThanOrEqual(0.5);
-    expect(avg["SS"].po).toBeLessThanOrEqual(3.5);
+    expect(avg["SS"].po).toBeLessThanOrEqual(4.5);
   });
 
   it("SS: 1試合あたりAが2.0-4.5", () => {

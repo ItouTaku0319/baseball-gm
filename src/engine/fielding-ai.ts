@@ -1,4 +1,9 @@
 import type { Player } from "../models/player";
+import {
+  GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR,
+  GROUND_BALL_ANGLE_THRESHOLD, GROUND_BALL_MAX_DISTANCE,
+  GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO,
+} from "./physics-constants";
 
 /** フィールド上の2D座標 (メートル) */
 export interface FieldPosition2D {
@@ -44,9 +49,9 @@ export const DEFAULT_FIELDER_POSITIONS: ReadonlyMap<FielderPosition, FieldPositi
   [4, { x: 10,  y: 36   }], // 2B
   [5, { x: -20, y: 28   }], // 3B
   [6, { x: -10, y: 36   }], // SS
-  [7, { x: -26, y: 65   }], // LF
-  [8, { x: 0,   y: 73   }], // CF
-  [9, { x: 26,  y: 65   }], // RF
+  [7, { x: -26, y: 62   }], // LF
+  [8, { x: 0,   y: 70   }], // CF
+  [9, { x: 26,  y: 62   }], // RF
 ]);
 
 /** 投手は pitching 側、野手は batting 側から守備能力を取得 */
@@ -79,14 +84,14 @@ export function calcBallLanding(
   launchAngle: number,
   exitVelocity: number
 ): BallLanding {
-  const isGroundBall = launchAngle < 10;
+  const isGroundBall = launchAngle < GROUND_BALL_ANGLE_THRESHOLD;
   const angleRad = (direction - 45) * Math.PI / 180;
 
   if (isGroundBall) {
-    // ゴロ: 摩擦減速モデル (最大55m)
+    // ゴロ: 摩擦減速モデル
     const v0 = exitVelocity / 3.6; // km/h → m/s
-    const groundDistance = Math.min(55, v0 * 1.2);
-    const groundTime = groundDistance / (v0 * 0.7); // 平均速度 = 初速の70%
+    const groundDistance = Math.min(GROUND_BALL_MAX_DISTANCE, v0 * GROUND_BALL_SPEED_FACTOR);
+    const groundTime = groundDistance / (v0 * GROUND_BALL_AVG_SPEED_RATIO);
 
     const x = groundDistance * Math.sin(angleRad);
     const y = groundDistance * Math.cos(angleRad);
@@ -99,19 +104,17 @@ export function calcBallLanding(
     };
   }
 
-  // フライ/ライナー: 放物運動 + 空気抵抗補正 (dragFactor=0.70)
+  // フライ/ライナー: 放物運動 + 空気抵抗補正
   const v0 = exitVelocity / 3.6;
   const theta = launchAngle * Math.PI / 180;
-  const g = 9.8;
-  const h = 1.2; // 打点高さ(m)
 
   const vy0 = v0 * Math.sin(theta);
   const vx  = v0 * Math.cos(theta);
-  const tUp = vy0 / g;
-  const maxH = h + (vy0 * vy0) / (2 * g);
-  const tDown = Math.sqrt(2 * maxH / g);
-  const flightTime = (tUp + tDown) * 0.85; // 空気抵抗で短縮
-  const distance = vx * flightTime * 0.70; // dragFactor (simulation.tsと同期)
+  const tUp = vy0 / GRAVITY;
+  const maxH = BAT_HEIGHT + (vy0 * vy0) / (2 * GRAVITY);
+  const tDown = Math.sqrt(2 * maxH / GRAVITY);
+  const flightTime = (tUp + tDown) * FLIGHT_TIME_FACTOR;
+  const distance = vx * flightTime * DRAG_FACTOR;
 
   const x = distance * Math.sin(angleRad);
   const y = distance * Math.cos(angleRad);
