@@ -389,14 +389,14 @@ function SeasonDataTab() {
     return playedEntries.some((e) => e.result?.atBatLogs && e.result.atBatLogs.length > 0);
   }, [playedEntries]);
 
-  // 打球タイプ集計
+  // 打席結果分布集計（三振・四死球 + 打球タイプ）
   const battedBallStats = useMemo(() => {
     // pitcherStatsから集計可能なケース
     const canUsePitcherStats = outcomeFilter === "all" &&
       (playerFilter === "all" || (selectedPlayer?.isPitcher ?? false));
 
     if (canUsePitcherStats) {
-      let gb = 0, fb = 0, ld = 0, pu = 0;
+      let gb = 0, fb = 0, ld = 0, pu = 0, k = 0, bb = 0;
       for (const entry of playedEntries) {
         if (!entry.result) continue;
         for (const ps of entry.result.pitcherStats) {
@@ -407,9 +407,12 @@ function SeasonDataTab() {
           fb += ps.flyBalls ?? 0;
           ld += ps.lineDrives ?? 0;
           pu += ps.popups ?? 0;
+          k += ps.strikeouts;
+          bb += ps.walks + (ps.hitBatsmen ?? 0);
         }
       }
-      return { gb, fb, ld, pu, total: gb + fb + ld + pu };
+      const bip = gb + fb + ld + pu;
+      return { gb, fb, ld, pu, k, bb, bip, total: bip + k + bb };
     }
 
     // atBatLogsから集計
@@ -419,8 +422,10 @@ function SeasonDataTab() {
     } else if (outcomeFilter === "out") {
       targetLogs = targetLogs.filter((l) => isOut(l.result));
     }
-    let gb = 0, fb = 0, ld = 0, pu = 0;
+    let gb = 0, fb = 0, ld = 0, pu = 0, k = 0, bb = 0;
     for (const l of targetLogs) {
+      if (l.result === "strikeout") { k++; continue; }
+      if (l.result === "walk" || l.result === "hitByPitch") { bb++; continue; }
       switch (l.battedBallType) {
         case "ground_ball": gb++; break;
         case "fly_ball": fb++; break;
@@ -428,7 +433,8 @@ function SeasonDataTab() {
         case "popup": pu++; break;
       }
     }
-    return { gb, fb, ld, pu, total: gb + fb + ld + pu };
+    const bip = gb + fb + ld + pu;
+    return { gb, fb, ld, pu, k, bb, bip, total: bip + k + bb };
   }, [playedEntries, seasonAtBatLogs, playerTeamMap, filteredTeamIds, playerFilter, selectedPlayer, outcomeFilter]);
 
   // 打撃結果サマリー
@@ -563,7 +569,7 @@ function SeasonDataTab() {
           {/* 打球タイプ分布 */}
           <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-semibold text-gray-200">打球タイプ分布</h3>
+              <h3 className="text-base font-semibold text-gray-200">打席結果分布</h3>
               {hasAtBatLogs && (
                 <div className="flex gap-1">
                   {(["all", "hit", "out"] as const).map((f) => (
@@ -586,13 +592,39 @@ function SeasonDataTab() {
               <p className="text-gray-500 text-sm">データなし</p>
             ) : (
               <div className="space-y-3">
+                {/* 三振・四死球 */}
+                {[
+                  { label: "三振 (K%)", value: battedBallStats.k, color: "bg-red-600" },
+                  { label: "四死球 (BB%)", value: battedBallStats.bb, color: "bg-cyan-600" },
+                ].map(({ label, value, color }) => {
+                  const pctVal = battedBallStats.total > 0 ? (value / battedBallStats.total) * 100 : 0;
+                  return (
+                    <div key={label}>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="text-gray-300">{label}</span>
+                        <span className="text-white" style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {pctVal.toFixed(1)}% ({value.toLocaleString()})
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-700 rounded-full h-3">
+                        <div
+                          className={`${color} h-3 rounded-full transition-all`}
+                          style={{ width: `${pctVal}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+                {/* 区切り */}
+                <div className="border-t border-gray-600 my-1" />
+                {/* 打球タイプ（インプレー内の割合） */}
                 {[
                   { label: "ゴロ (GB%)", value: battedBallStats.gb, color: "bg-green-600" },
                   { label: "フライ (FB%)", value: battedBallStats.fb, color: "bg-blue-600" },
                   { label: "ライナー (LD%)", value: battedBallStats.ld, color: "bg-yellow-500" },
                   { label: "ポップ (PU%)", value: battedBallStats.pu, color: "bg-gray-500" },
                 ].map(({ label, value, color }) => {
-                  const pctVal = battedBallStats.total > 0 ? (value / battedBallStats.total) * 100 : 0;
+                  const pctVal = battedBallStats.bip > 0 ? (value / battedBallStats.bip) * 100 : 0;
                   return (
                     <div key={label}>
                       <div className="flex justify-between text-sm mb-1">
