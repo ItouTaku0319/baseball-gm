@@ -139,7 +139,7 @@ function getBallStateAtTime(
   const theta = launchAngleDeg * Math.PI / 180;
   const g = 9.8;
   const h0 = 1.2;
-  const dragFactor = 0.87;
+  const dragFactor = 0.61;
 
   const vx = v * Math.cos(theta);
   const vy = v * Math.sin(theta);
@@ -449,7 +449,7 @@ function computeTrajectoryPoints(
   const h = 1.2;
   const vx = v * Math.cos(theta);
   const vy = v * Math.sin(theta);
-  const dragFactor = 0.87;
+  const dragFactor = 0.61;
 
   const disc = vy * vy + 2 * g * h;
   if (disc < 0) return [{ x: 0, y: h }];
