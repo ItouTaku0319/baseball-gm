@@ -646,10 +646,19 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
   const { currentTime, playing, play } = usePlayAnimation();
   const canAnimate = hasFieldData && totalTime > 0;
 
+  // 打球速度に応じた再生倍率（速い打球は速く、遅い打球はゆったり）
+  // 140km/h基準で1.0x、170km/h→1.4x、100km/h→0.7x
+  const playbackSpeed = useMemo(() => {
+    if (exitVelocity <= 0) return 1;
+    return 0.7 + (clampNum(exitVelocity, 80, 180) - 80) / 100 * 0.7;
+  }, [exitVelocity]);
+
+  const animDuration = totalTime / playbackSpeed;
+
   // ポップアップ表示時に自動1回再生
   useEffect(() => {
     if (canAnimate) {
-      const timer = setTimeout(() => play(totalTime), 300);
+      const timer = setTimeout(() => play(animDuration), 300);
       return () => clearTimeout(timer);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -698,14 +707,14 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
             <div className="text-gray-400 text-xs mb-1 text-center">フィールドビュー</div>
             <AnimatedFieldView
               log={log}
-              currentTime={currentTime}
+              currentTime={currentTime * playbackSpeed}
               totalTime={totalTime}
               trailPoints={trailPoints}
             />
           </div>
           <div>
             <div className="text-gray-400 text-xs mb-1 text-center">軌道（横から）</div>
-            <SideView log={log} currentTime={currentTime} totalFlightTime={totalFlightTime} />
+            <SideView log={log} currentTime={currentTime * playbackSpeed} totalFlightTime={totalFlightTime} />
           </div>
         </div>
 
@@ -713,7 +722,7 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
         {canAnimate && (
           <div className="mt-3 flex items-center justify-center gap-3">
             <button
-              onClick={() => play(totalTime)}
+              onClick={() => play(animDuration)}
               disabled={playing}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-sm font-medium transition-colors"
             >
