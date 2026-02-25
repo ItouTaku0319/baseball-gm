@@ -1,7 +1,7 @@
 import type { Team } from "@/models/team";
-import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog } from "@/models/league";
+import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog, FieldingTrace, FielderMovement } from "@/models/league";
 import type { Player, Position, PitchRepertoire, PitchType, Injury } from "@/models/player";
-import { calcBallLanding, evaluateFielders, resolveHitTypeFromLanding } from "./fielding-ai";
+import { calcBallLanding, evaluateFielders, resolveHitTypeFromLanding, DEFAULT_FIELDER_POSITIONS } from "./fielding-ai";
 import type { BallLanding, FielderDecision } from "./fielding-ai";
 import {
   GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR,
@@ -10,6 +10,8 @@ import {
   GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO,
   TRAJECTORY_CARRY_FACTORS,
   MENTAL_FATIGUE_RESISTANCE, MENTAL_PINCH_CONTROL_FACTOR,
+  BOUNCE_CLOSE_THRESHOLD, BOUNCE_NEAR_THRESHOLD, BOUNCE_MID_THRESHOLD,
+  FIELDER_CATCH_RADIUS,
 } from "./physics-constants";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
@@ -114,6 +116,7 @@ interface AtBatDetail {
   direction: number | null;
   launchAngle: number | null;
   exitVelocity: number | null;
+  fieldingTrace?: FieldingTrace;
 }
 
 /** 走者の状態 */
@@ -597,7 +600,46 @@ function resolvePlayWithAI(
   batter: Player,
   bases: BaseRunners,
   outs: number
-): { result: AtBatResult; fielderPos: FielderPosition } {
+): { result: AtBatResult; fielderPos: FielderPosition; trace?: FieldingTrace } {
+  // 野手情報の配列と移動計画を構築（trace用）
+  const traceFielders: FieldingTrace["fielders"] = [];
+  const traceMovements: FielderMovement[] = [];
+  for (const [pos, decision] of fieldingResult) {
+    const player = _fielderMap.get(pos);
+    const defPos = DEFAULT_FIELDER_POSITIONS.get(pos);
+    traceFielders.push({
+      position: pos,
+      role: decision.role,
+      defaultPos: defPos ? { x: defPos.x, y: defPos.y } : { x: 0, y: 0 },
+      distanceToBall: decision.distanceToBall,
+      timeToReach: decision.timeToReach,
+      ballArrivalTime: decision.ballArrivalTime,
+      canReach: decision.canReach,
+      skill: { ...decision.skill, speed: player?.batting.speed ?? 50 },
+      distanceAtLanding: decision.distanceAtLanding,
+      posAtLanding: decision.posAtLanding,
+    });
+    if (defPos && decision.action && decision.targetPos) {
+      const spd = decision.speed ?? 6.5;
+      const startPos = { x: defPos.x, y: defPos.y };
+      traceMovements.push({
+        position: pos,
+        startPos,
+        targetPos: decision.targetPos,
+        action: decision.action,
+        startTime: Math.max(0, decision.timeToReach - decision.distanceToBall / spd),
+        speed: spd,
+      });
+    }
+  }
+
+  const traceLanding: FieldingTrace["landing"] = {
+    position: { x: landing.position.x, y: landing.position.y },
+    distance: landing.distance,
+    flightTime: landing.flightTime,
+    isGroundBall: landing.isGroundBall,
+  };
+
   // === フライ系（fly_ball / popup）→ HR判定（フェンス越え）===
   if (ball.type === "fly_ball" || ball.type === "popup") {
     const distance = estimateDistance(ball.exitVelocity, ball.launchAngle);
@@ -618,6 +660,15 @@ function resolvePlayWithAI(
     const effectiveDistance = distance * trajectoryCarryFactor;
     const ratio = effectiveDistance / fenceDist;
 
+    const hrCalcBase: FieldingTrace["hrCalc"] = {
+      rawDistance: distance,
+      fenceDistance: fenceDist,
+      trajectory,
+      carryFactor: trajectoryCarryFactor,
+      effectiveDistance,
+      ratio,
+    };
+
     if (ratio >= 1.0) {
       // フェンス水平距離到達時の打球高さを計算
       // carryFactorをバックスピン揚力（実効重力の軽減）としてモデル化
@@ -632,10 +683,30 @@ function resolvePlayWithAI(
       const tFence = (fenceDist / effectiveDistance) * tRaw;
       const heightAtFence = BAT_HEIGHT + vy0 * tFence - 0.5 * gEff * tFence * tFence;
 
+      const hrCalc: FieldingTrace["hrCalc"] = {
+        ...hrCalcBase,
+        heightAtFence,
+        fenceCleared: heightAtFence >= FENCE_HEIGHT,
+      };
+
       if (heightAtFence >= FENCE_HEIGHT) {
         // フェンスの高さを越えた → HR確定
         const best = findBestFielder(fieldingResult);
-        return { result: "homerun", fielderPos: best?.position ?? assignOutfielder(ball.direction) };
+        const fielderPos = best?.position ?? assignOutfielder(ball.direction);
+        const trace: FieldingTrace = {
+          landing: traceLanding,
+          fielders: traceFielders,
+          movements: traceMovements,
+          hrCalc,
+          resolution: {
+            phase: "homerun",
+            bestFielderPos: fielderPos,
+            fielderArrival: best?.timeToReach ?? 0,
+            ballArrival: best?.ballArrivalTime ?? 0,
+            canReach: best?.canReach ?? false,
+          },
+        };
+        return { result: "homerun", fielderPos, trace };
       }
       // 距離は足りるが高さ不足 → フェンス直撃（捕球不可→ヒット確定）
       {
@@ -645,47 +716,109 @@ function resolvePlayWithAI(
         const runnerSpeed = batter.batting.speed;
         const tripleChance = 0.15 + (runnerSpeed / 100) * 0.15; // 15〜30%
         const hitResult: AtBatResult = Math.random() < tripleChance ? "triple" : "double";
-        return { result: hitResult, fielderPos };
+        const trace: FieldingTrace = {
+          landing: traceLanding,
+          fielders: traceFielders,
+          movements: traceMovements,
+          hrCalc,
+          resolution: {
+            phase: "fence_hit",
+            bestFielderPos: fielderPos,
+            fielderArrival: best?.timeToReach ?? 0,
+            ballArrival: best?.ballArrivalTime ?? 0,
+            canReach: best?.canReach ?? false,
+          },
+        };
+        return { result: hitResult, fielderPos, trace };
       }
     }
 
     // ポップフライでフェンス越えでなければ常にアウト
     if (ball.type === "popup") {
       const best = findBestFielder(fieldingResult);
-      return { result: "popout", fielderPos: best?.position ?? assignPopupFielder(ball.direction) };
+      const fielderPos = best?.position ?? assignPopupFielder(ball.direction);
+      const trace: FieldingTrace = {
+        landing: traceLanding,
+        fielders: traceFielders,
+        movements: traceMovements,
+        hrCalc: hrCalcBase,
+        resolution: {
+          phase: "popup_out",
+          bestFielderPos: fielderPos,
+          fielderArrival: best?.timeToReach ?? 0,
+          ballArrival: best?.ballArrivalTime ?? 0,
+          canReach: best?.canReach ?? false,
+        },
+      };
+      return { result: "popout", fielderPos, trace };
     }
   }
 
   // === 最適野手を取得 ===
   const best = findBestFielder(fieldingResult);
   if (!best) {
-    return { result: "single", fielderPos: 8 };
+    const trace: FieldingTrace = {
+      landing: traceLanding,
+      fielders: traceFielders,
+      movements: traceMovements,
+      resolution: {
+        phase: "no_fielder",
+        bestFielderPos: 8,
+        fielderArrival: 0,
+        ballArrival: 0,
+        canReach: false,
+      },
+    };
+    return { result: "single", fielderPos: 8, trace };
   }
 
   const fielderPos = best.position;
   const skill = best.skill;
   const fieldingRate = (skill.fielding * 0.6 + skill.catching * 0.4) / 100;
 
-  // 野手がボール地点に到達する時間
-  const fielderArrivalTime = best.timeToReach;
-  // ボールが野手の位置に到達する時間（ゴロ=経路通過時間、フライ=滞空時間）
-  const ballArrivalTime = best.ballArrivalTime;
-
   // =====================================
   // ゴロ専用処理
   // =====================================
   if (ball.type === "ground_ball") {
-    return resolveGroundBall(
+    const groundResult = resolveGroundBall(
       ball, landing, best, fieldingResult, batter, bases, outs, fieldingRate
     );
+    const trace: FieldingTrace = {
+      landing: traceLanding,
+      fielders: traceFielders,
+      movements: traceMovements,
+      resolution: {
+        phase: "ground_ball",
+        bestFielderPos: fielderPos,
+        fielderArrival: best.timeToReach,
+        ballArrival: best.ballArrivalTime,
+        canReach: best.canReach,
+        ...groundResult.trace,
+      },
+    };
+    return { result: groundResult.result, fielderPos: groundResult.fielderPos, trace };
   }
 
   // =====================================
   // フライ / ライナー処理
   // =====================================
-  return resolveFlyOrLineDrive(
+  const flyResult = resolveFlyOrLineDrive(
     ball, landing, best, fieldingResult, batter, bases, outs, fieldingRate
   );
+  const trace: FieldingTrace = {
+    landing: traceLanding,
+    fielders: traceFielders,
+    movements: traceMovements,
+    resolution: {
+      phase: "fly_ball",
+      bestFielderPos: fielderPos,
+      fielderArrival: best.timeToReach,
+      ballArrival: best.ballArrivalTime,
+      canReach: best.canReach,
+      ...flyResult.trace,
+    },
+  };
+  return { result: flyResult.result, fielderPos: flyResult.fielderPos, trace };
 }
 
 /**
@@ -704,7 +837,7 @@ function resolveGroundBall(
   bases: BaseRunners,
   outs: number,
   fieldingRate: number
-): { result: AtBatResult; fielderPos: FielderPosition } {
+): { result: AtBatResult; fielderPos: FielderPosition; trace?: Partial<FieldingTrace["resolution"]> } {
   const fielderPos = best.position;
   const skill = best.skill;
 
@@ -746,9 +879,26 @@ function resolveGroundBall(
     // 走者の1B到達時間 = バット→走り出し(0.3s) + 塁間
     const runnerTo1B = 0.3 + timePerBase;
 
+    const groundTrace: Partial<FieldingTrace["resolution"]> = {
+      phase: "ground_ball_fielded",
+      bestFielderPos: fielderPos,
+      fielderArrival: best.timeToReach,
+      ballArrival: best.ballArrivalTime,
+      canReach: best.canReach,
+      secureTime,
+      transferTime,
+      throwDistance: throwDist,
+      throwSpeed,
+      defenseTime,
+      runnerSpeed,
+      runnerTo1B,
+      isInfieldHit: runnerTo1B < defenseTime,
+      fieldingRate,
+    };
+
     if (runnerTo1B < defenseTime) {
       // === 走者がセーフ → 内野安打 ===
-      return { result: "infieldHit", fielderPos };
+      return { result: "infieldHit", fielderPos, trace: groundTrace };
     }
 
     // === 送球が間に合う → アウト ===
@@ -756,30 +906,43 @@ function resolveGroundBall(
     if (bases.first && outs < 2) {
       const dpRate = 0.12 + (1 - batter.batting.speed / 100) * 0.06;
       if (Math.random() < dpRate) {
-        return { result: "doublePlay", fielderPos };
+        return { result: "doublePlay", fielderPos, trace: groundTrace };
       }
     }
     // フィルダースチョイス判定
     if (bases.first || bases.second || bases.third) {
       if (Math.random() < 0.05) {
-        return { result: "fieldersChoice", fielderPos };
+        return { result: "fieldersChoice", fielderPos, trace: groundTrace };
       }
     }
-    return { result: "groundout", fielderPos };
+    return { result: "groundout", fielderPos, trace: groundTrace };
   }
 
   // === 野手が間に合わない → ボールが外野へ抜ける ===
-  // 外野手(backup)がボールを回収
+  // 着地時点でボールに最も近い野手が回収
   let retriever = best;
+  let minDist = retriever.distanceAtLanding ?? retriever.distanceToBall;
   for (const decision of fieldingResult.values()) {
-    if (decision.position >= 7 && decision.timeToReach < retriever.timeToReach * 2.5) {
+    const d = decision.distanceAtLanding ?? decision.distanceToBall;
+    if (d < minDist) {
+      minDist = d;
       retriever = decision;
-      break;
     }
   }
 
   // 回収 → 送球 → 走者の進塁判定
-  return resolveHitAdvancement(ball, landing, retriever, batter);
+  const advResult = resolveHitAdvancement(ball, landing, retriever, batter);
+  const throughTrace: Partial<FieldingTrace["resolution"]> = {
+    phase: "ground_ball_through",
+    bestFielderPos: fielderPos,
+    fielderArrival: best.timeToReach,
+    ballArrival: best.ballArrivalTime,
+    canReach: best.canReach,
+    runnerSpeed: 6.5 + (batter.batting.speed / 100) * 2.5,
+    fieldingRate,
+    ...advResult.trace,
+  };
+  return { result: advResult.result, fielderPos: advResult.fielderPos, trace: throughTrace };
 }
 
 /**
@@ -798,40 +961,71 @@ function resolveFlyOrLineDrive(
   bases: BaseRunners,
   outs: number,
   fieldingRate: number
-): { result: AtBatResult; fielderPos: FielderPosition } {
+): { result: AtBatResult; fielderPos: FielderPosition; trace?: Partial<FieldingTrace["resolution"]> } {
   const fielderPos = best.position;
 
-  if (best.timeToReach <= best.ballArrivalTime) {
-    // === 野手が着地前に到着 → 捕球試行 ===
+  if (best.canReach) {
+    // === 野手が捕球可能距離内に到達 → 捕球試行 ===
 
+    // 余裕度: 距離ベース (FIELDER_CATCH_RADIUS からの余裕)
+    const distAtLand = best.distanceAtLanding ?? best.distanceToBall;
     const margin = best.ballArrivalTime - best.timeToReach;
-
-    // 到達した野手の捕球成功率: 余裕があれば高い、ギリギリなら低い
-    // margin >= 1.0s → ほぼ確実 (97-99%)
-    // margin ~= 0s  → 難しい (90-95%)
-    const marginFactor = clamp(margin / 1.0, 0, 1); // 0-1に正規化
+    // margin が負でも distanceAtLanding が十分小さければ canReach=true になりうる
+    // marginFactor は 0-1 にクランプして捕球成功率に反映
+    const marginFactor = clamp(margin > 0 ? margin / 1.0 : (FIELDER_CATCH_RADIUS - distAtLand) / FIELDER_CATCH_RADIUS, 0, 1);
     const baseCatchRate = 0.90 + marginFactor * 0.07; // 0.90-0.97
     const skillBonus = fieldingRate * 0.03; // 0-0.03 (catching依存)
     const catchRate = clamp(baseCatchRate + skillBonus, 0.90, 0.99);
+    const catchSuccess = Math.random() < catchRate;
 
-    if (Math.random() < catchRate) {
+    const flyTrace: Partial<FieldingTrace["resolution"]> = {
+      phase: catchSuccess ? "fly_catch" : "fly_hit",
+      bestFielderPos: fielderPos,
+      fielderArrival: best.timeToReach,
+      ballArrival: best.ballArrivalTime,
+      canReach: best.canReach,
+      catchMargin: margin,
+      catchRate,
+      catchSuccess,
+    };
+
+    if (catchSuccess) {
       // === 捕球成功 → アウト ===
       if (ball.type === "fly_ball") {
         // 犠飛判定
         if (bases.third && outs < 2 && Math.random() < 0.15) {
-          return { result: "sacrificeFly", fielderPos };
+          return { result: "sacrificeFly", fielderPos, trace: flyTrace };
         }
-        return { result: "flyout", fielderPos };
+        return { result: "flyout", fielderPos, trace: flyTrace };
       }
-      return { result: "lineout", fielderPos };
+      return { result: "lineout", fielderPos, trace: flyTrace };
     } else {
       // === 捕球失敗 → エラー ===
-      return { result: "error", fielderPos };
+      return { result: "error", fielderPos, trace: flyTrace };
     }
   }
 
   // === 野手が間に合わない → ヒット確定 ===
-  return resolveHitAdvancement(ball, landing, best, batter);
+  // 着地時点でボールに最も近い野手が回収
+  let retriever = best;
+  let minDistFly = retriever.distanceAtLanding ?? retriever.distanceToBall;
+  for (const decision of fieldingResult.values()) {
+    const d = decision.distanceAtLanding ?? decision.distanceToBall;
+    if (d < minDistFly) {
+      minDistFly = d;
+      retriever = decision;
+    }
+  }
+  const advResult = resolveHitAdvancement(ball, landing, retriever, batter);
+  const missTrace: Partial<FieldingTrace["resolution"]> = {
+    phase: "fly_hit",
+    bestFielderPos: fielderPos,
+    fielderArrival: best.timeToReach,
+    ballArrival: best.ballArrivalTime,
+    canReach: best.canReach,
+    ...advResult.trace,
+  };
+  return { result: advResult.result, fielderPos: advResult.fielderPos, trace: missTrace };
 }
 
 /**
@@ -843,14 +1037,14 @@ function resolveHitAdvancement(
   landing: BallLanding,
   retriever: FielderDecision,
   batter: Player,
-): { result: AtBatResult; fielderPos: FielderPosition } {
+): { result: AtBatResult; fielderPos: FielderPosition; trace?: Partial<FieldingTrace["resolution"]> } {
   const retrieverSkill = retriever.skill;
   const fenceDist = getFenceDistance(ball.direction);
 
   // === ボール回収時間の計算 ===
-  // 捕球できなかったボールは着地後にバウンド・ロールして不規則に動く
-  // 深い打球ほどバウンドが大きく、追跡に時間がかかる
+  // 着地時点での野手-ボール距離 (distanceAtLanding) に基づいてバウンドペナルティを決定
   const pickupTime = 0.3 + (1 - retrieverSkill.catching / 100) * 0.4;
+  const distAtLanding = retriever.distanceAtLanding ?? retriever.distanceToBall;
 
   let bouncePenalty: number;
   let rollDistance: number;
@@ -860,16 +1054,32 @@ function resolveHitAdvancement(
     bouncePenalty = 0.5 + Math.random() * 0.5; // 0.5-1.0s
     rollDistance = 3;
   } else {
-    // フライ/ライナー: 着地後のバウンドは不規則、深いほど大きい
-    const depthFactor = clamp((landing.distance - 50) / 50, 0, 1); // 0 (浅い) → 1 (深い)
-    bouncePenalty = 1.2 + depthFactor * 2.0 + Math.random() * 0.8; // 1.2-4.0s
+    // フライ/ライナー: 着地時点での野手距離に応じてバウンドペナルティを変化させる
+    // (変更前: 深さのみ依存 1.2 + depthFactor*2.0、変更後: 野手距離依存)
+    // 深さボーナスは共通で加算（深い打球は大きくバウンドする）
+    const depthFactor = clamp((landing.distance - 50) / 50, 0, 1);
+    if (distAtLanding < BOUNCE_CLOSE_THRESHOLD) {
+      // 野手がほぼ着地点にいる → バウンド後にすぐ回収。深さ応じた跳ね上がりあり
+      bouncePenalty = 0.5 + depthFactor * 0.5 + Math.random() * 0.4;
+      rollDistance = 1 + depthFactor * 2;
+    } else if (distAtLanding < BOUNCE_NEAR_THRESHOLD) {
+      // 短距離のスプリントで回収
+      bouncePenalty = 0.8 + depthFactor * 1.0 + Math.random() * 0.6;
+      rollDistance = 2 + depthFactor * 3;
+    } else if (distAtLanding < BOUNCE_MID_THRESHOLD) {
+      // 中距離
+      bouncePenalty = 1.2 + depthFactor * 1.5 + Math.random() * 0.7;
+      rollDistance = clamp((landing.distance - 50) * 0.1, 0, 6);
+    } else {
+      // 遠い (旧挙動に準拠)
+      bouncePenalty = 1.2 + depthFactor * 2.0 + Math.random() * 0.8;
+      rollDistance = clamp((landing.distance - 50) * 0.15, 0, 12);
+    }
 
     // フェンス際: 壁リバウンドでさらに不規則
     if (landing.distance >= fenceDist * 0.90) {
       bouncePenalty += 0.6 + Math.random() * 0.6; // +0.6-1.2s
     }
-
-    rollDistance = clamp((landing.distance - 50) * 0.15, 0, 12);
   }
 
   // ボールの停止位置（ロール方向に延伸、送球距離計算用）
@@ -880,7 +1090,13 @@ function resolveHitAdvancement(
   };
 
   // 野手の総回収時間
-  const totalFielderTime = retriever.timeToReach + bouncePenalty + pickupTime;
+  // ゴロはtimeToReach(経路上での捕球時刻)ベース
+  // フライ/ライナーはballArrivalTime + 着地後追加移動 + バウンドペナルティ
+  const runSpeedFielder = retriever.speed ?? 6.5;
+  const additionalRunTime = distAtLanding / runSpeedFielder;
+  const totalFielderTime = landing.isGroundBall
+    ? retriever.timeToReach + bouncePenalty + pickupTime
+    : retriever.ballArrivalTime + additionalRunTime + bouncePenalty + pickupTime;
 
   // 送球速度: 肩力ベース (25-40 m/s)
   const throwSpeed = 25 + (retrieverSkill.arm / 100) * 15;
@@ -914,9 +1130,33 @@ function resolveHitAdvancement(
   if (basesReached >= 2 && runnerTo3B < defenseTo3B - 0.9) basesReached = 3;
 
   const fielderPos = retriever.position;
-  if (basesReached >= 3) return { result: "triple", fielderPos };
-  if (basesReached >= 2) return { result: "double", fielderPos };
-  return { result: "single", fielderPos };
+
+  const advTrace: Partial<FieldingTrace["resolution"]> = {
+    phase: "hit_advancement",
+    bestFielderPos: fielderPos,
+    fielderArrival: retriever.timeToReach,
+    ballArrival: retriever.ballArrivalTime,
+    canReach: retriever.canReach,
+    bouncePenalty,
+    pickupTime,
+    rollDistance,
+    totalFielderTime,
+    throwTo2B,
+    throwTo3B,
+    throwSpeed,
+    runnerSpeed,
+    runnerTo2B,
+    runnerTo3B,
+    defenseTo2B,
+    defenseTo3B,
+    basesReached,
+    margin2B: defenseTo2B + 1.2 - runnerTo2B,
+    margin3B: runnerTo3B - (defenseTo3B - 0.9),
+  };
+
+  if (basesReached >= 3) return { result: "triple", fielderPos, trace: advTrace };
+  if (basesReached >= 2) return { result: "double", fielderPos, trace: advTrace };
+  return { result: "single", fielderPos, trace: advTrace };
 }
 
 
@@ -1057,6 +1297,7 @@ function simulateAtBat(
             launchAngle: ball.launchAngle,
             exitVelocity: ball.exitVelocity,
             pitchCount,
+            fieldingTrace: aiResult.trace,
           };
         }
       } else {
@@ -2425,6 +2666,7 @@ function simulateHalfInning(
         pitchType,
         pitchLocation,
         pitchCountInAtBat: detail.pitchCount,
+        fieldingTrace: detail.fieldingTrace,
       });
     }
 

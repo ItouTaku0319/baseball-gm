@@ -109,6 +109,93 @@ export interface GameResult {
   injuries?: Array<{ playerId: string; injury: import("./player").Injury }>;
 }
 
+/** 野手の移動アクション */
+export type FielderAction = "charge" | "retreat" | "lateral"
+  | "cover_base" | "backup" | "relay" | "hold" | "field_ball";
+
+/** 1野手の移動計画（可視化用） */
+export interface FielderMovement {
+  position: number;
+  startPos: { x: number; y: number };
+  targetPos: { x: number; y: number };
+  action: FielderAction;
+  startTime: number;
+  speed: number;
+}
+
+/** 守備AI判定の全過程トレース */
+export interface FieldingTrace {
+  /** 着地計算結果 */
+  landing: {
+    position: { x: number; y: number };
+    distance: number;
+    flightTime: number;
+    isGroundBall: boolean;
+  };
+  /** 各野手の評価 */
+  fielders: Array<{
+    position: number;
+    role: string;
+    defaultPos: { x: number; y: number };
+    distanceToBall: number;
+    timeToReach: number;
+    ballArrivalTime: number;
+    canReach: boolean;
+    skill: { fielding: number; catching: number; arm: number; speed: number };
+    distanceAtLanding?: number;
+    posAtLanding?: { x: number; y: number };
+  }>;
+  /** 各野手の移動計画 */
+  movements?: FielderMovement[];
+  /** HR判定詳細 (フライ/ポップアップのみ) */
+  hrCalc?: {
+    rawDistance: number;
+    fenceDistance: number;
+    trajectory: number;
+    carryFactor: number;
+    effectiveDistance: number;
+    ratio: number;
+    heightAtFence?: number;
+    fenceCleared?: boolean;
+  };
+  /** 結果判定の詳細 */
+  resolution: {
+    phase: string;
+    bestFielderPos: number;
+    fielderArrival: number;
+    ballArrival: number;
+    canReach: boolean;
+    /** 捕球判定(フライ/ライナー) */
+    catchMargin?: number;
+    catchRate?: number;
+    catchSuccess?: boolean;
+    /** ゴロ送球判定 */
+    secureTime?: number;
+    transferTime?: number;
+    throwDistance?: number;
+    throwSpeed?: number;
+    defenseTime?: number;
+    runnerSpeed?: number;
+    runnerTo1B?: number;
+    isInfieldHit?: boolean;
+    fieldingRate?: number;
+    /** 長打進塁判定 */
+    bouncePenalty?: number;
+    pickupTime?: number;
+    rollDistance?: number;
+    totalFielderTime?: number;
+    throwTo2B?: number;
+    throwTo3B?: number;
+    defenseTo2B?: number;
+    defenseTo3B?: number;
+    runnerTo2B?: number;
+    runnerTo3B?: number;
+    basesReached?: number;
+    margin2B?: number;
+    margin3B?: number;
+  };
+}
+
 /** 1打席のログ（診断用） */
 export interface AtBatLog {
   inning: number;
@@ -126,7 +213,8 @@ export interface AtBatLog {
   outsBeforePlay: number | null;
   pitchType?: PitchType;
   pitchLocation?: { x: number; y: number };
-  pitchCountInAtBat?: number;  // 打席の投球数
+  pitchCountInAtBat?: number;
+  fieldingTrace?: FieldingTrace;
 }
 
 /** 1イニングのスコア */

@@ -19,6 +19,12 @@ export const GROUND_BALL_AVG_SPEED_RATIO = 0.7; // ゴロ平均速度比
 // FLIGHT_TIME_FACTOR統一による飛距離短縮(×0.85)を補正
 export const TRAJECTORY_CARRY_FACTORS = [1.07, 1.19, 1.25, 1.30] as const;
 
+// 守備チャージ・バウンスペナルティ閾値
+export const FIELDER_CATCH_RADIUS = 0.5;     // 捕球可能距離(m)
+export const BOUNCE_CLOSE_THRESHOLD = 3;     // 近距離(m)
+export const BOUNCE_NEAR_THRESHOLD = 8;      // 中距離(m)
+export const BOUNCE_MID_THRESHOLD = 15;      // 遠距離(m)
+
 // 精神力(mentalToughness)による能力補正の定数
 // 基準値50が補正なし、最大値100で上限効果、最小値0で下限効果
 // 疲労ペナルティ軽減: 精神力100で疲労ペナルティを30%軽減（精神力0で軽減なし）

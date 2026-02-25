@@ -1,8 +1,10 @@
 import type { Player } from "../models/player";
+import type { FielderAction } from "../models/league";
 import {
   GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR,
   GROUND_BALL_ANGLE_THRESHOLD, GROUND_BALL_MAX_DISTANCE,
   GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO,
+  FIELDER_CATCH_RADIUS,
 } from "./physics-constants";
 
 /** フィールド上の2D座標 (メートル) */
@@ -26,6 +28,11 @@ export interface FielderDecision {
   ballArrivalTime: number;    // ボールが野手地点に到達する時間(秒)
   canReach: boolean;          // 野手がボールより先に到達できるか
   skill: { fielding: number; catching: number; arm: number };
+  speed: number;              // 野手の走速 (m/s)
+  distanceAtLanding?: number; // ボール到達時点での野手とボールの距離(m)
+  posAtLanding?: { x: number; y: number }; // ボール到達時点での野手座標
+  action?: FielderAction;     // 移動アクション種別
+  targetPos?: { x: number; y: number }; // 移動目標座標
 }
 
 /** 打球の着地情報 */
@@ -146,13 +153,21 @@ export function evaluateFielders(
   const INFIELD_POSITIONS: FielderPosition[]  = [1, 2, 3, 4, 5, 6];
   const OUTFIELD_POSITIONS: FielderPosition[] = [7, 8, 9];
 
-  // 各野手の到達時間を計算
+  const isLineDrive = battedBallType === "line_drive";
+  const isFlyOrLine = battedBallType === "fly_ball" || battedBallType === "line_drive";
+
+  // 各野手の到達時間・移動計画を計算
   const entries: {
     pos: FielderPosition;
     timeToReach: number;
     ballArrivalTime: number;
     distanceToBall: number;
     canReach: boolean;
+    speed: number;
+    distanceAtLanding: number;
+    posAtLanding: { x: number; y: number };
+    action: FielderAction;
+    targetPos: { x: number; y: number };
   }[] = [];
 
   for (const pos of ALL_POSITIONS) {
@@ -165,7 +180,7 @@ export function evaluateFielders(
     // 反応時間: 守備力が高いほど短い (0.3-0.6秒)
     let reactionTime = 0.3 + (1 - skill.fielding / 100) * 0.3;
     // ライナーは軌道が低く速いため読みづらい → 反応遅延 +0.3-0.5秒
-    if (battedBallType === "line_drive") {
+    if (isLineDrive) {
       reactionTime += 0.3 + (1 - skill.fielding / 100) * 0.2;
     }
     // 走力: batting.speed 依存 (5-8 m/s)
@@ -175,6 +190,10 @@ export function evaluateFielders(
     let timeToReach: number;
     let ballArrival: number;
     let canReach: boolean;
+    let distanceAtLanding: number;
+    let posAtLanding: { x: number; y: number };
+    let action: FielderAction;
+    let targetPos: { x: number; y: number };
 
     if (landing.isGroundBall) {
       // ゴロ: ボール経路（ホーム→着地位置の直線）への垂直距離で判定
@@ -188,6 +207,8 @@ export function evaluateFielders(
         timeToReach = reactionTime + distanceToBall / runSpeed;
         ballArrival = 0.1;
         canReach = true;
+        targetPos = { x: landing.position.x, y: landing.position.y };
+        action = "field_ball";
       } else {
         const pathDirX = landing.position.x / pathLen;
         const pathDirY = landing.position.y / pathLen;
@@ -201,6 +222,12 @@ export function evaluateFielders(
           ballArrival = projDist / avgSpeed;
           timeToReach = reactionTime + lateralDist / runSpeed;
           canReach = timeToReach <= ballArrival;
+          // 経路上の捕球点
+          targetPos = {
+            x: projDist * pathDirX,
+            y: projDist * pathDirY,
+          };
+          action = "charge";
         } else {
           // 野手の射影がボール経路外（外野手等）→ ボール停止位置へ走る
           const dx = landing.position.x - fielderPos.x;
@@ -209,19 +236,144 @@ export function evaluateFielders(
           ballArrival = landing.flightTime; // ボール停止時間
           timeToReach = reactionTime + distanceToBall / runSpeed;
           canReach = timeToReach <= ballArrival + 1.0; // 停止後1秒以内ならOK
+          targetPos = { x: landing.position.x, y: landing.position.y };
+          action = "field_ball";
         }
       }
-    } else {
-      // フライ/ライナー: 着地位置への直線距離で判定
+
+      // ゴロ時の到達時点座標: 移動可能時間だけ動いた位置
+      const movableTime = Math.max(0, ballArrival - reactionTime);
+      const movableDist = movableTime * runSpeed;
+      const dx = targetPos.x - fielderPos.x;
+      const dy = targetPos.y - fielderPos.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const moved = Math.min(movableDist, d);
+      posAtLanding = {
+        x: fielderPos.x + (dx / d) * moved,
+        y: fielderPos.y + (dy / d) * moved,
+      };
+      distanceAtLanding = Math.sqrt(
+        (posAtLanding.x - targetPos.x) ** 2 + (posAtLanding.y - targetPos.y) ** 2
+      );
+    } else if (pos >= 7 && isFlyOrLine) {
+      // 外野手のフライ/ライナー: 着地点への移動
       const dx = landing.position.x - fielderPos.x;
       const dy = landing.position.y - fielderPos.y;
       distanceToBall = Math.sqrt(dx * dx + dy * dy);
       timeToReach = reactionTime + distanceToBall / runSpeed;
       ballArrival = landing.flightTime;
-      canReach = timeToReach <= landing.flightTime;
+
+      // 移動方向に応じてアクション決定
+      if (landing.position.y < fielderPos.y) {
+        action = "charge";
+      } else if (landing.position.y > fielderPos.y + 5) {
+        action = "retreat";
+      } else {
+        action = "lateral";
+      }
+
+      targetPos = { x: landing.position.x, y: landing.position.y };
+
+      // ボール到達時点での野手座標
+      const movableTime = Math.max(0, ballArrival - reactionTime);
+      const movableDist = movableTime * runSpeed;
+      const dist = distanceToBall || 1;
+      const moved = Math.min(movableDist, dist);
+      posAtLanding = {
+        x: fielderPos.x + (dx / dist) * moved,
+        y: fielderPos.y + (dy / dist) * moved,
+      };
+      distanceAtLanding = Math.sqrt(
+        (posAtLanding.x - landing.position.x) ** 2 + (posAtLanding.y - landing.position.y) ** 2
+      );
+      canReach = distanceAtLanding < FIELDER_CATCH_RADIUS;
+    } else if (pos >= 3 && pos <= 6) {
+      // 内野手のフライ/ライナー
+      const dx = landing.position.x - fielderPos.x;
+      const dy = landing.position.y - fielderPos.y;
+      distanceToBall = Math.sqrt(dx * dx + dy * dy);
+      ballArrival = landing.flightTime;
+      timeToReach = reactionTime + distanceToBall / runSpeed;
+
+      if (distanceToBall < 30) {
+        // 内野付近のフライ/ライナー → 捕球試行
+        targetPos = { x: landing.position.x, y: landing.position.y };
+        action = "charge";
+
+        const movableTime = Math.max(0, ballArrival - reactionTime);
+        const movableDist = movableTime * runSpeed;
+        const dist = distanceToBall || 1;
+        const moved = Math.min(movableDist, dist);
+        posAtLanding = {
+          x: fielderPos.x + (dx / dist) * moved,
+          y: fielderPos.y + (dy / dist) * moved,
+        };
+        distanceAtLanding = Math.sqrt(
+          (posAtLanding.x - landing.position.x) ** 2 + (posAtLanding.y - landing.position.y) ** 2
+        );
+        canReach = distanceAtLanding < FIELDER_CATCH_RADIUS;
+      } else {
+        // 打球が遠い → ベースカバー
+        targetPos = { x: fielderPos.x, y: fielderPos.y };
+        action = "cover_base";
+        posAtLanding = { x: fielderPos.x, y: fielderPos.y };
+        distanceAtLanding = distanceToBall;
+        canReach = false;
+      }
+    } else {
+      // P(1), C(2): 特殊処理
+      const dx = landing.position.x - fielderPos.x;
+      const dy = landing.position.y - fielderPos.y;
+      distanceToBall = Math.sqrt(dx * dx + dy * dy);
+      ballArrival = landing.flightTime;
+
+      if (pos === 2) {
+        // キャッチャー: 常にホーム待機
+        timeToReach = reactionTime + distanceToBall / runSpeed;
+        canReach = false;
+        targetPos = { x: fielderPos.x, y: fielderPos.y };
+        action = "hold";
+        posAtLanding = { x: fielderPos.x, y: fielderPos.y };
+        distanceAtLanding = distanceToBall;
+      } else {
+        // 投手: ゴロのライト方向(direction > 45)なら1Bカバー
+        const isRightSide = landing.position.x > 0 && landing.isGroundBall;
+        if (isRightSide) {
+          // 1Bカバー
+          const firstBase = { x: 19.4, y: 19.4 };
+          timeToReach = reactionTime + Math.sqrt(
+            (firstBase.x - fielderPos.x) ** 2 + (firstBase.y - fielderPos.y) ** 2
+          ) / runSpeed;
+          canReach = false;
+          targetPos = firstBase;
+          action = "cover_base";
+          posAtLanding = firstBase;
+          distanceAtLanding = Math.sqrt(
+            (firstBase.x - landing.position.x) ** 2 + (firstBase.y - landing.position.y) ** 2
+          );
+        } else {
+          timeToReach = reactionTime + distanceToBall / runSpeed;
+          canReach = timeToReach <= ballArrival;
+          targetPos = { x: landing.position.x, y: landing.position.y };
+          action = "hold";
+          posAtLanding = { x: fielderPos.x, y: fielderPos.y };
+          distanceAtLanding = distanceToBall;
+        }
+      }
     }
 
-    entries.push({ pos, timeToReach, ballArrivalTime: ballArrival, distanceToBall, canReach });
+    entries.push({
+      pos,
+      timeToReach,
+      ballArrivalTime: ballArrival,
+      distanceToBall,
+      canReach,
+      speed: runSpeed,
+      distanceAtLanding,
+      posAtLanding,
+      action,
+      targetPos,
+    });
   }
 
   // 打球タイプに応じた優先グループを決定
@@ -235,13 +387,18 @@ export function evaluateFielders(
     priorityGroup = ALL_POSITIONS;
   }
 
-  // 優先グループ内で canReach=true の野手を到達時間昇順で並べる
+  // フライ/ライナー: distanceAtLanding で canReach 再判定済み
+  // ゴロ: 既存ロジック (timeToReach <= ballArrivalTime) で canReach 計算済み
+
+  // 優先グループ内で canReach=true の野手を distanceAtLanding 昇順で並べる
   const reachable = entries
     .filter(e => priorityGroup.includes(e.pos) && e.canReach)
-    .sort((a, b) => a.timeToReach - b.timeToReach);
+    .sort((a, b) => (a.distanceAtLanding ?? a.distanceToBall) - (b.distanceAtLanding ?? b.distanceToBall));
 
-  // 全体でも到達時間昇順
-  const allSorted = [...entries].sort((a, b) => a.timeToReach - b.timeToReach);
+  // 全体でも distanceAtLanding 昇順
+  const allSorted = [...entries].sort(
+    (a, b) => (a.distanceAtLanding ?? a.distanceToBall) - (b.distanceAtLanding ?? b.distanceToBall)
+  );
 
   // primary: 優先グループで最速到達（canReach優先、いなければ全員から最速）
   const primaryPos: FielderPosition | null =
@@ -256,8 +413,7 @@ export function evaluateFielders(
 
   // 外野ヒット時の中継位置: SS(6)または2B(4)を外野ヒット時のリレーに割当
   const relayPos: FielderPosition | null =
-    (battedBallType === "fly_ball" || battedBallType === "line_drive") &&
-    landing.distance >= 60
+    isFlyOrLine && landing.distance >= 60
       ? ([6, 4] as FielderPosition[]).find(p => p !== primaryPos && fielderMap.has(p)) ?? null
       : null;
 
@@ -287,6 +443,11 @@ export function evaluateFielders(
       ballArrivalTime: e.ballArrivalTime,
       canReach: e.canReach,
       skill,
+      speed: e.speed,
+      distanceAtLanding: e.distanceAtLanding,
+      posAtLanding: e.posAtLanding,
+      action: e.action,
+      targetPos: e.targetPos,
     });
   }
 
