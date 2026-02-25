@@ -47,3 +47,5 @@ next-env.d.ts
 /tmp/
 tmp-*
 *.stackdump
+reports/*.csv
+reports/*.xlsx
