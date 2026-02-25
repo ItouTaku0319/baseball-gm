@@ -11,6 +11,7 @@ NPB（日本プロ野球）をモデルにした野球GMシミュレーション
 - **UI**: React 19 + Tailwind CSS 4
 - **状態管理**: Zustand 5
 - **データ永続化**: IndexedDB (Dexie.js) — `src/db/`
+- **テスト**: Vitest 4
 - **パスエイリアス**: `@/*` → `src/*`
 
 ## 開発コマンド
