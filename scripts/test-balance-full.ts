@@ -356,8 +356,11 @@ function main() {
   // 打球タイプ別ヒット率
   printBattedBallBreakdown(allLogs);
 
+  // 守備分布チェック
+  const fieldingPassed = printFieldingDistribution(allLogs, stats.totalGames);
+
   // 品質ゲート: exit codeで合否を返す
-  if (!passed) {
+  if (!passed || !fieldingPassed) {
     process.exit(1);
   }
 }
@@ -399,6 +402,103 @@ function printBattedBallBreakdown(logs: AtBatLog[]) {
   }).join(", ");
   console.log(`  分布: ${bipPct}`);
   console.log("");
+}
+
+/** 回収野手分布 + ポジション別TC/Gの表示とチェック */
+function printFieldingDistribution(logs: AtBatLog[], totalGames: number): boolean {
+  // 回収野手分布: ヒット(bouncePenalty付き)の回収者ポジションを集計
+  const HIT_RESULTS = new Set(["single", "double", "triple", "infieldHit"]);
+  const retrieverDist: Record<number, number> = {};
+  let retrieverTotal = 0;
+
+  for (const log of logs) {
+    if (!HIT_RESULTS.has(log.result)) continue;
+    const trace = log.fieldingTrace;
+    if (!trace?.resolution?.bouncePenalty) continue;
+    const pos = trace.resolution.bestFielderPos;
+    retrieverDist[pos] = (retrieverDist[pos] ?? 0) + 1;
+    retrieverTotal++;
+  }
+
+  console.log("🧤 回収野手分布");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+  const posNames: Record<number, string> = {
+    1: "P", 2: "C", 3: "1B", 4: "2B", 5: "3B", 6: "SS", 7: "LF", 8: "CF", 9: "RF",
+  };
+
+  for (let p = 1; p <= 9; p++) {
+    const count = retrieverDist[p] ?? 0;
+    const pct = retrieverTotal > 0 ? (count / retrieverTotal * 100).toFixed(1) : "0.0";
+    console.log(`  ${posNames[p].padEnd(3)} ${String(count).padStart(5)}件  (${pct.padStart(5)}%)`);
+  }
+  console.log(`  合計: ${retrieverTotal}件`);
+
+  // 回収野手分布チェック (品質ゲート)
+  const ofCount = (retrieverDist[7] ?? 0) + (retrieverDist[8] ?? 0) + (retrieverDist[9] ?? 0);
+  const ofPct = retrieverTotal > 0 ? ofCount / retrieverTotal * 100 : 0;
+  const cPct = retrieverTotal > 0 ? (retrieverDist[2] ?? 0) / retrieverTotal * 100 : 0;
+  const pPct = retrieverTotal > 0 ? (retrieverDist[1] ?? 0) / retrieverTotal * 100 : 0;
+
+  const ofOk = ofPct > 75;
+  const cOk = cPct < 5;
+  const pOk = pPct < 3;
+  const allOk = ofOk && cOk && pOk;
+
+  console.log("");
+  console.log("  品質ゲート:");
+  console.log(`  ${mark(ofOk)} OF回収率 (7+8+9): ${ofPct.toFixed(1)}%  (> 75%)`);
+  console.log(`  ${mark(cOk)} C回収率 (2):      ${cPct.toFixed(1)}%  (< 5%)`);
+  console.log(`  ${mark(pOk)} P回収率 (1):      ${pPct.toFixed(1)}%  (< 3%)`);
+  console.log("");
+
+  // ポジション別TC/G (参考指標 — 警告のみ)
+  const tcByPos: Record<number, number> = {};
+  for (const log of logs) {
+    const trace = log.fieldingTrace;
+    if (!trace?.resolution) continue;
+    const pos = trace.resolution.bestFielderPos;
+    if (pos >= 1 && pos <= 9) {
+      tcByPos[pos] = (tcByPos[pos] ?? 0) + 1;
+    }
+  }
+
+  const tcgBenchmarks: Record<number, { name: string; min: number; max: number; npb: number }> = {
+    1: { name: "P",  min: 0.05, max: 3.5,  npb: 1.87 },
+    2: { name: "C",  min: 5.0,  max: 10.5, npb: 8.15 },
+    3: { name: "1B", min: 6.0,  max: 12.0, npb: 9.28 },
+    4: { name: "2B", min: 2.5,  max: 7.5,  npb: 5.17 },
+    5: { name: "3B", min: 1.0,  max: 4.5,  npb: 2.38 },
+    6: { name: "SS", min: 2.5,  max: 7.0,  npb: 4.45 },
+    7: { name: "LF", min: 0.8,  max: 4.0,  npb: 1.84 },
+    8: { name: "CF", min: 1.0,  max: 4.5,  npb: 2.41 },
+    9: { name: "RF", min: 0.8,  max: 4.0,  npb: 1.95 },
+  };
+
+  console.log("📊 ポジション別TC/G (参考)");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  for (let p = 1; p <= 9; p++) {
+    const tc = tcByPos[p] ?? 0;
+    const tcg = totalGames > 0 ? tc / totalGames : 0;
+    const bench = tcgBenchmarks[p];
+    const inRange = tcg >= bench.min && tcg <= bench.max;
+    const indicator = inRange ? "  " : "⚠️";
+    console.log(`  ${indicator} ${bench.name.padEnd(3)} ${tcg.toFixed(2).padStart(5)} TC/G  (NPB: ${bench.npb}, 許容: ${bench.min}-${bench.max})`);
+  }
+  console.log("");
+
+  if (!allOk) {
+    const failedChecks: string[] = [];
+    if (!ofOk) failedChecks.push(`OF回収率=${ofPct.toFixed(1)}%`);
+    if (!cOk) failedChecks.push(`C回収率=${cPct.toFixed(1)}%`);
+    if (!pOk) failedChecks.push(`P回収率=${pPct.toFixed(1)}%`);
+    console.log(`判定: ❌ 守備分布に問題: ${failedChecks.join(", ")}`);
+  } else {
+    console.log("判定: ✅ 守備分布正常");
+  }
+  console.log("");
+
+  return allOk;
 }
 
 main();

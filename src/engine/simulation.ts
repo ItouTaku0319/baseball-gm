@@ -1,5 +1,5 @@
 import type { Team } from "@/models/team";
-import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog, FieldingTrace, FielderMovement } from "@/models/league";
+import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog, FieldingTrace, FielderMovement, FielderAction } from "@/models/league";
 import type { Player, Position, PitchRepertoire, PitchType, Injury } from "@/models/player";
 import { calcBallLanding, evaluateFielders, resolveHitTypeFromLanding, DEFAULT_FIELDER_POSITIONS } from "./fielding-ai";
 import type { BallLanding, FielderDecision } from "./fielding-ai";
@@ -919,16 +919,28 @@ function resolveGroundBall(
   }
 
   // === 野手が間に合わない → ボールが外野へ抜ける ===
-  // 着地時点でボールに最も近い野手が回収
-  let retriever = best;
-  let minDist = retriever.distanceAtLanding ?? retriever.distanceToBall;
+  // ゴロが抜けた場合、外野手(7-9)が回収するのが定石
+  // 距離はposAtLandingからボール着地点への実距離で比較
+  const distToLanding = (d: FielderDecision) => {
+    if (!d.posAtLanding) return d.distanceAtLanding ?? d.distanceToBall;
+    return Math.sqrt(
+      (d.posAtLanding.x - landing.position.x) ** 2 +
+      (d.posAtLanding.y - landing.position.y) ** 2
+    );
+  };
+  // まず外野手(pos 7-9)から最短距離の回収者を探す
+  let retriever: FielderDecision | null = null;
+  let minDist = Infinity;
   for (const decision of fieldingResult.values()) {
-    const d = decision.distanceAtLanding ?? decision.distanceToBall;
+    if (decision.position < 7) continue; // 内野手・P・Cは候補外
+    const d = distToLanding(decision);
     if (d < minDist) {
       minDist = d;
       retriever = decision;
     }
   }
+  // 外野手が見つからない場合のフォールバック（通常起こらない）
+  if (!retriever) retriever = best;
 
   // 回収 → 送球 → 走者の進塁判定
   const advResult = resolveHitAdvancement(ball, landing, retriever, batter);
@@ -1006,16 +1018,31 @@ function resolveFlyOrLineDrive(
   }
 
   // === 野手が間に合わない → ヒット確定 ===
-  // 着地時点でボールに最も近い野手が回収
-  let retriever = best;
-  let minDistFly = retriever.distanceAtLanding ?? retriever.distanceToBall;
+  // 距離はposAtLandingからボール着地点への実距離で比較
+  const distToLandingFly = (d: FielderDecision) => {
+    if (!d.posAtLanding) return d.distanceAtLanding ?? d.distanceToBall;
+    return Math.sqrt(
+      (d.posAtLanding.x - landing.position.x) ** 2 +
+      (d.posAtLanding.y - landing.position.y) ** 2
+    );
+  };
+  // primaryの守備位置を5m以上超えた打球はOFが回収
+  // 浅い打球はP,C以外の最短距離野手が回収
+  const primaryDefPosFly = DEFAULT_FIELDER_POSITIONS.get(best.position);
+  const ballDeepEnough = best.position >= 7
+    || (primaryDefPosFly != null && landing.position.y > primaryDefPosFly.y + 5);
+  let retriever: FielderDecision | null = null;
+  let minDistFly = Infinity;
   for (const decision of fieldingResult.values()) {
-    const d = decision.distanceAtLanding ?? decision.distanceToBall;
+    if (decision.position <= 2) continue; // P, Cは候補外
+    if (ballDeepEnough && decision.position < 7) continue; // 深い打球はOFのみ
+    const d = distToLandingFly(decision);
     if (d < minDistFly) {
       minDistFly = d;
       retriever = decision;
     }
   }
+  if (!retriever) retriever = best;
   const advResult = resolveHitAdvancement(ball, landing, retriever, batter);
   const missTrace: Partial<FieldingTrace["resolution"]> = {
     phase: "fly_hit",
@@ -1287,7 +1314,12 @@ function simulateAtBat(
           // インプレー
           const ball = generateBattedBall(batter, pitcher);
           const landing = calcBallLanding(ball.direction, ball.launchAngle, ball.exitVelocity);
-          const fieldingResult = evaluateFielders(landing, ball.type, fielderMap);
+          const runnersInfo = {
+            first: !!bases.first,
+            second: !!bases.second,
+            third: !!bases.third,
+          };
+          const fieldingResult = evaluateFielders(landing, ball.type, fielderMap, runnersInfo, outs);
           const aiResult = resolvePlayWithAI(ball, landing, fieldingResult, fielderMap, batter, bases, outs);
           return {
             result: aiResult.result,

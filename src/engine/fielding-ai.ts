@@ -6,6 +6,7 @@ import {
   GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO,
   FIELDER_CATCH_RADIUS,
 } from "./physics-constants";
+import { assignFielderDuties, getBallZone } from "./fielding-assignments";
 
 /** フィールド上の2D座標 (メートル) */
 export interface FieldPosition2D {
@@ -139,12 +140,16 @@ export function calcBallLanding(
  * @param landing 打球着地情報
  * @param battedBallType 打球タイプ
  * @param fielderMap ポジション → 選手マッピング
+ * @param runners 走者状況 (省略可)
+ * @param outs アウトカウント (省略可)
  * @param alignment 守備配置 (省略でデフォルト)
  */
 export function evaluateFielders(
   landing: BallLanding,
   battedBallType: string,
   fielderMap: Map<FielderPosition, Player>,
+  runners?: { first: boolean; second: boolean; third: boolean },
+  outs?: number,
   alignment?: DefensiveAlignment
 ): Map<FielderPosition, FielderDecision> {
   const positions = alignment?.positions ?? DEFAULT_FIELDER_POSITIONS;
@@ -417,6 +422,16 @@ export function evaluateFielders(
       ? ([6, 4] as FielderPosition[]).find(p => p !== primaryPos && fielderMap.has(p)) ?? null
       : null;
 
+  // 守備責任テーブルによるassignment取得
+  const runnersInfo = runners ?? { first: false, second: false, third: false };
+  const outsInfo = outs ?? 0;
+  const ballZone = getBallZone(
+    Math.atan2(landing.position.x, landing.position.y) * 180 / Math.PI + 45
+  );
+  const dutyAssignments = primaryPos
+    ? assignFielderDuties(primaryPos, ballZone, landing.isGroundBall, runnersInfo, outsInfo, landing.position)
+    : null;
+
   // 結果Mapを構築
   const result = new Map<FielderPosition, FielderDecision>();
 
@@ -435,19 +450,60 @@ export function evaluateFielders(
       role = "relay";
     }
 
+    let finalAction = e.action;
+    let finalTargetPos = e.targetPos;
+    let finalDistanceAtLanding = e.distanceAtLanding;
+    let finalPosAtLanding = e.posAtLanding;
+
+    // primary以外: assignmentでアクションを上書き
+    if (e.pos !== primaryPos && dutyAssignments) {
+      const assignment = dutyAssignments.get(e.pos);
+      if (assignment) {
+        finalAction = assignment.action;
+        finalTargetPos = assignment.targetPos;
+        role = assignment.action === "cover_base" ? "cover_base"
+          : assignment.action === "relay" ? "relay"
+          : assignment.action === "backup" ? "backup"
+          : "none";
+
+        // 外野手(7-9)は回収候補なので、distanceAtLanding/posAtLanding は
+        // 物理ベース(ボール方向)の値を維持。これにより回収時の距離計算が正確になる。
+        // 内野手・P・Cはassignment先に向かった位置で再計算。
+        if (e.pos < 7) {
+          const reactionTime = 0.3 + (1 - skill.fielding / 100) * 0.3;
+          const movableTime = Math.max(0, e.ballArrivalTime - reactionTime);
+          const movableDist = movableTime * e.speed;
+          const startPos = positions.get(e.pos)!;
+          const dx = finalTargetPos.x - startPos.x;
+          const dy = finalTargetPos.y - startPos.y;
+          const d = Math.sqrt(dx * dx + dy * dy) || 1;
+          const moved = Math.min(movableDist, d);
+          finalPosAtLanding = {
+            x: startPos.x + (dx / d) * moved,
+            y: startPos.y + (dy / d) * moved,
+          };
+          finalDistanceAtLanding = Math.sqrt(
+            (finalPosAtLanding.x - landing.position.x) ** 2 +
+            (finalPosAtLanding.y - landing.position.y) ** 2
+          );
+        }
+        // else: OF keeps original e.distanceAtLanding / e.posAtLanding
+      }
+    }
+
     result.set(e.pos, {
       position: e.pos,
       role,
       distanceToBall: e.distanceToBall,
       timeToReach: e.timeToReach,
       ballArrivalTime: e.ballArrivalTime,
-      canReach: e.canReach,
+      canReach: e.pos === primaryPos ? e.canReach : false,
       skill,
       speed: e.speed,
-      distanceAtLanding: e.distanceAtLanding,
-      posAtLanding: e.posAtLanding,
-      action: e.action,
-      targetPos: e.targetPos,
+      distanceAtLanding: finalDistanceAtLanding,
+      posAtLanding: finalPosAtLanding,
+      action: finalAction,
+      targetPos: finalTargetPos,
     });
   }
 
