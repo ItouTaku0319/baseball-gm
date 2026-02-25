@@ -230,7 +230,7 @@ function printResults(
   stats: AggregatedStats,
   anomalies: Anomaly[],
   elapsedMs: number
-): void {
+): boolean {
   const elapsed = (elapsedMs / 1000).toFixed(1);
 
   const avg = stats.totalAB > 0 ? stats.totalHits / stats.totalAB : 0;
@@ -305,6 +305,7 @@ function printResults(
 
   if (allOk && totalAnomalies === 0) {
     console.log("判定: ✅ 全指標正常");
+    return true;
   } else {
     const failedMetrics: string[] = [];
     if (!avgOk) failedMetrics.push(`チーム打率=${fmt3(avg)}`);
@@ -315,8 +316,8 @@ function printResults(
     if (!goaoOk) failedMetrics.push(`GO/AO=${fmt2(goao)}`);
     if (totalAnomalies > 0) failedMetrics.push(`異常パターン${totalAnomalies}件`);
     console.log(`判定: ❌ 問題あり: ${failedMetrics.join(", ")}`);
+    return false;
   }
-  console.log("");
 }
 
 // メイン
@@ -350,10 +351,15 @@ function main() {
   const allLogs = results.flatMap((r) => r.atBatLogs ?? []);
   const anomalies = detectAnomalies(allLogs);
 
-  printResults(stats, anomalies, elapsed);
+  const passed = printResults(stats, anomalies, elapsed);
 
   // 打球タイプ別ヒット率
   printBattedBallBreakdown(allLogs);
+
+  // 品質ゲート: exit codeで合否を返す
+  if (!passed) {
+    process.exit(1);
+  }
 }
 
 function printBattedBallBreakdown(logs: AtBatLog[]) {
