@@ -42,6 +42,8 @@ interface TeamGameState {
   pitcherLogs: PitcherGameLog[];
   catcher: Player;
   fullRoster: Player[];
+  /** 途中交代で退場した選手ID（再出場不可） */
+  usedBatterIds?: Set<string>;
 }
 
 /** 1球ごとのスタミナ消費量 */
@@ -1593,6 +1595,73 @@ function getCatcher(team: Team): Player {
   return active.find((p) => p.position === "C") || active[0];
 }
 
+/** ベンチの野手（出場中でも交代済みでもない）を取得 */
+function getAvailableBenchBatters(
+  team: Team,
+  lineupBatterIds: string[],
+  usedBatterIds: Set<string>
+): Player[] {
+  const active = getActivePlayers(team);
+  const lineupSet = new Set(lineupBatterIds);
+  return active.filter(
+    (p) => !p.isPitcher && !lineupSet.has(p.id) && !usedBatterIds.has(p.id)
+  );
+}
+
+/** 代打選手を選択する（8回以降・ビハインド時に現打者より能力が高い選手を起用） */
+function selectPinchHitter(
+  currentBatter: Player,
+  team: Team,
+  lineupBatterIds: string[],
+  usedBatterIds: Set<string>,
+  inning: number,
+  teamScore: number,
+  opponentScore: number
+): Player | null {
+  // 8回以降かつビハインドの場合のみ
+  if (inning < 8) return null;
+  if (teamScore >= opponentScore) return null;
+
+  const bench = getAvailableBenchBatters(team, lineupBatterIds, usedBatterIds);
+  if (bench.length === 0) return null;
+
+  const currentPower = currentBatter.batting.contact + currentBatter.batting.power;
+  const best = bench.reduce((acc, p) => {
+    const val = p.batting.contact + p.batting.power;
+    return val > acc.batting.contact + acc.batting.power ? p : acc;
+  }, bench[0]);
+
+  // ベンチ最強打者が現打者より能力が高い場合のみ交代
+  if (best.batting.contact + best.batting.power <= currentPower) return null;
+  return best;
+}
+
+/** 代走選手を選択する（7回以降・僅差時に走者より走力が大幅に高い選手を起用） */
+function selectPinchRunner(
+  runner: Player,
+  team: Team,
+  lineupBatterIds: string[],
+  usedBatterIds: Set<string>,
+  inning: number,
+  teamScore: number,
+  opponentScore: number
+): Player | null {
+  // 7回以降かつ点差3以内の場合のみ
+  if (inning < 7) return null;
+  if (Math.abs(teamScore - opponentScore) > 3) return null;
+
+  const bench = getAvailableBenchBatters(team, lineupBatterIds, usedBatterIds);
+  if (bench.length === 0) return null;
+
+  const fastest = bench.reduce((acc, p) => {
+    return p.batting.speed > acc.batting.speed ? p : acc;
+  }, bench[0]);
+
+  // 走力差20以上ある場合のみ交代
+  if (fastest.batting.speed < runner.batting.speed + 20) return null;
+  return fastest;
+}
+
 /** 1軍選手のみ取得 */
 function getActivePlayers(team: Team): Player[] {
   if (!team.rosterLevels) return team.roster;
@@ -1614,6 +1683,62 @@ function getStartingPitcher(team: Team): Player {
   }
 
   return pitchers[Math.floor(Math.random() * Math.min(5, pitchers.length))];
+}
+
+/** 守備固め: 8回以降・リード時にfielding差15以上のベンチ選手と交代（最大2人） */
+function applyDefensiveReplacements(
+  state: TeamGameState,
+  team: Team,
+  teamScore: number,
+  opponentScore: number,
+  inning: number
+): void {
+  // 8回以降かつリード中の場合のみ
+  if (inning < 8) return;
+  if (teamScore <= opponentScore) return;
+
+  const usedBatterIds = state.usedBatterIds ?? new Set<string>();
+  const lineupIds = state.batters.map((p) => p.id);
+  const bench = getAvailableBenchBatters(team, lineupIds, usedBatterIds);
+  if (bench.length === 0) return;
+
+  let replacements = 0;
+  const maxReplacements = 2;
+
+  for (let lineupIdx = 0; lineupIdx < state.batters.length && replacements < maxReplacements; lineupIdx++) {
+    const current = state.batters[lineupIdx];
+    // 投手は対象外
+    if (current.isPitcher) continue;
+
+    // 同じポジションかつfielding差15以上のベンチ選手を探す
+    let bestCandidate: Player | null = null;
+    let bestDiff = 15; // 最低差分の閾値
+
+    for (const candidate of bench) {
+      if (candidate.position !== current.position) continue;
+      if (usedBatterIds.has(candidate.id)) continue;
+      const diff = candidate.batting.fielding - current.batting.fielding;
+      if (diff >= bestDiff) {
+        bestDiff = diff;
+        bestCandidate = candidate;
+      }
+    }
+
+    if (bestCandidate) {
+      // 元の選手をusedBatterIdsに追加
+      usedBatterIds.add(current.id);
+      // 打順を守備固め選手に置き換え
+      state.batters[lineupIdx] = bestCandidate;
+      // 使用済みからも除去（ベンチから出た選手は追跡不要）
+      bench.splice(bench.indexOf(bestCandidate), 1);
+      replacements++;
+    }
+  }
+
+  // usedBatterIdsをstateに反映
+  if (!state.usedBatterIds) {
+    state.usedBatterIds = usedBatterIds;
+  }
 }
 
 /** 打順を取得 (lineupConfig参照、未設定ならフォールバック) */
@@ -1652,6 +1777,8 @@ function simulateHalfInning(
   defensiveTeam?: Team,
   teamScore?: number,
   opponentScore?: number,
+  attackingTeam?: Team,
+  attackingState?: TeamGameState,
 ): { runs: number; hits: number; nextBatterIndex: number } {
   let outs = 0;
   let runs = 0;
@@ -1659,6 +1786,9 @@ function simulateHalfInning(
   let bases: BaseRunners = { first: null, second: null, third: null };
   let idx = batterIndex;
   let inningRuns = 0;
+
+  // 攻撃側のusedBatterIdsを参照（代打・代走の管理）
+  const usedBatterIds = attackingState?.usedBatterIds ?? new Set<string>();
 
   // イニング内の投手交代追跡: 最後に交代したタイミングのアウト数
   let outsAtLastPitcherChange = 0;
@@ -1674,7 +1804,26 @@ function simulateHalfInning(
       if (outs >= 3) break;
     }
 
-    const batter = battingTeam[idx % battingTeam.length];
+    let batter = battingTeam[idx % battingTeam.length];
+
+    // === 代打判定 ===
+    if (attackingTeam && attackingState && inning != null && teamScore != null && opponentScore != null) {
+      const currentLineupIds = battingTeam.map((p) => p.id);
+      const pinchHitter = selectPinchHitter(
+        batter, attackingTeam, currentLineupIds, usedBatterIds,
+        inning, teamScore + runs, opponentScore
+      );
+      if (pinchHitter) {
+        // 元の打者をusedBatterIdsに追加（再出場不可）
+        usedBatterIds.add(batter.id);
+        // 打順の該当箇所を代打選手に置き換え
+        const lineupIdx = idx % battingTeam.length;
+        battingTeam[lineupIdx] = pinchHitter;
+        batter = pinchHitter;
+        // 代打選手の出場記録を初期化
+        getOrCreateBatterStats(batterStatsMap, pinchHitter.id);
+      }
+    }
     const outsBeforeAtBat = outs;
     const basesBeforeAtBat: [boolean, boolean, boolean] = [
       bases.first !== null,
@@ -1968,6 +2117,34 @@ function simulateHalfInning(
       }
     }
 
+    // === 代走判定: 出塁した打者またはすでにいる走者に代走を送る ===
+    if (attackingTeam && attackingState && inning != null && teamScore != null && opponentScore != null) {
+      const currentLineupIds = battingTeam.map((p) => p.id);
+      const tryPinchRun = (runner: Player | null, baseKey: keyof BaseRunners): void => {
+        if (!runner) return;
+        const pr = selectPinchRunner(
+          runner, attackingTeam, currentLineupIds, usedBatterIds,
+          inning, teamScore + runs, opponentScore
+        );
+        if (pr) {
+          // 元の走者をusedBatterIdsに追加
+          usedBatterIds.add(runner.id);
+          // 塁上の走者を代走選手に置き換え
+          (bases as unknown as Record<string, Player | null>)[baseKey] = pr;
+          // 打順も置き換え（代走選手が元の走者の打順に入る）
+          const runnerLineupIdx = battingTeam.findIndex((p) => p.id === runner.id);
+          if (runnerLineupIdx >= 0) {
+            battingTeam[runnerLineupIdx] = pr;
+          }
+          // 代走選手の出場記録を初期化
+          getOrCreateBatterStats(batterStatsMap, pr.id);
+        }
+      };
+      // 1塁・2塁の走者を対象（3塁は次打者の打席で生還可能性高いため省略）
+      tryPinchRun(bases.first, "first");
+      tryPinchRun(bases.second, "second");
+    }
+
     // サヨナラ判定: 9回以降の裏、攻撃チーム(home)がリードを取ったら即終了
     if (halfInning === "bottom" && (inning ?? 0) >= 9 && teamScore != null && opponentScore != null) {
       if (opponentScore + runs > teamScore) {
@@ -2119,6 +2296,7 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
     pitcherLogs: [],
     catcher: getCatcher(homeTeam),
     fullRoster: getActivePlayers(homeTeam),
+    usedBatterIds: new Set<string>(),
   };
 
   const awayState: TeamGameState = {
@@ -2146,6 +2324,7 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
     pitcherLogs: [],
     catcher: getCatcher(awayTeam),
     fullRoster: getActivePlayers(awayTeam),
+    usedBatterIds: new Set<string>(),
   };
 
   const innings: InningScore[] = [];
@@ -2166,7 +2345,8 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
       awayState.batters, homeState, homeState.batters,
       awayState.batterIndex, batterStatsMap,
       options, atBatLogs, i + 1, "top",
-      homeTeam, homeScore, awayScore
+      homeTeam, homeScore, awayScore,
+      awayTeam, awayState
     );
     awayScore += topResult.runs;
     awayState.batterIndex = topResult.nextBatterIndex;
@@ -2179,7 +2359,8 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
         homeState.batters, awayState, awayState.batters,
         homeState.batterIndex, batterStatsMap,
         options, atBatLogs, i + 1, "bottom",
-        awayTeam, awayScore, homeScore
+        awayTeam, awayScore, homeScore,
+        homeTeam, homeState
       );
       bottomRuns = bottomResult.runs;
       homeScore += bottomRuns;
@@ -2199,6 +2380,10 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
       const next = selectNextPitcher(awayState, awayScore, homeScore, i + 2, awayTeam);
       if (next) changePitcher(awayState, next);
     }
+
+    // イニング間の守備固め判定（次のイニングに備える）
+    applyDefensiveReplacements(homeState, homeTeam, homeScore, awayScore, i + 2);
+    applyDefensiveReplacements(awayState, awayTeam, awayScore, homeScore, i + 2);
   }
 
   // 延長 (最大12回まで)
@@ -2210,7 +2395,8 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
       awayState.batters, homeState, homeState.batters,
       awayState.batterIndex, batterStatsMap,
       options, atBatLogs, extInning, "top",
-      homeTeam, homeScore, awayScore
+      homeTeam, homeScore, awayScore,
+      awayTeam, awayState
     );
     awayScore += topResult.runs;
     awayState.batterIndex = topResult.nextBatterIndex;
@@ -2220,7 +2406,8 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
       homeState.batters, awayState, awayState.batters,
       homeState.batterIndex, batterStatsMap,
       options, atBatLogs, extInning, "bottom",
-      awayTeam, awayScore, homeScore
+      awayTeam, awayScore, homeScore,
+      homeTeam, homeState
     );
     homeScore += bottomResult.runs;
     homeState.batterIndex = bottomResult.nextBatterIndex;
