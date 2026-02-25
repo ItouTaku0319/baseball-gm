@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useGameStore } from "@/store/game-store";
 import { simulateGame } from "@/engine/simulation";
 import type { AtBatLog, GameResult } from "@/models/league";
+import type { GameState } from "@/models/game-state";
 import type { Player } from "@/models/player";
 import { POSITION_NAMES } from "@/models/player";
 import { PlayerAbilityCard } from "@/components/player-ability-card";
@@ -1335,6 +1336,164 @@ function DiagnosticTab() {
   );
 }
 
+// ---- 得点期待値セクション ----
+
+function RunExpectancySection({ game }: { game: GameState }) {
+  const { atBatLogs, inningScores } = useMemo(() => {
+    const logs: AtBatLog[] = [];
+    const scores: { inning: number; halfInning: "top" | "bottom"; runs: number }[] = [];
+
+    for (const entry of game.currentSeason.schedule) {
+      const result = entry.result;
+      if (!result) continue;
+      if (!result.atBatLogs || result.atBatLogs.length === 0) continue;
+
+      for (let i = 0; i < result.innings.length; i++) {
+        const inningNum = i + 1;
+        scores.push({ inning: inningNum, halfInning: "top", runs: result.innings[i].top });
+        scores.push({ inning: inningNum, halfInning: "bottom", runs: result.innings[i].bottom });
+      }
+
+      for (const log of result.atBatLogs) {
+        logs.push(log);
+      }
+    }
+
+    return { atBatLogs: logs, inningScores: scores };
+  }, [game]);
+
+  return (
+    <div className="space-y-6">
+      <RunExpectancyTable atBatLogs={atBatLogs} inningScores={inningScores} />
+    </div>
+  );
+}
+
+// ---- 得点期待値テーブル ----
+
+const BASES_LABELS: string[] = ["___", "1__", "_2_", "__3", "12_", "1_3", "_23", "123"];
+const BASES_LABELS_JA: string[] = ["走者なし", "一塁", "二塁", "三塁", "一二塁", "一三塁", "二三塁", "満塁"];
+
+function basesToIndex(bases: [boolean, boolean, boolean]): number {
+  return (bases[0] ? 1 : 0) | (bases[1] ? 2 : 0) | (bases[2] ? 4 : 0);
+}
+
+function heatmapBg(value: number): string {
+  if (value >= 2.0) return "bg-red-800";
+  if (value >= 1.5) return "bg-orange-800";
+  if (value >= 1.0) return "bg-yellow-800";
+  if (value >= 0.6) return "bg-green-800";
+  if (value >= 0.3) return "bg-blue-700";
+  return "bg-blue-900";
+}
+
+function RunExpectancyTable({ atBatLogs, inningScores }: {
+  atBatLogs: AtBatLog[];
+  inningScores: { inning: number; halfInning: "top" | "bottom"; runs: number }[];
+}) {
+  const data = useMemo(() => {
+    const inningScoreMap = new Map<string, number>();
+    for (const s of inningScores) {
+      inningScoreMap.set(`${s.inning}_${s.halfInning}`, s.runs);
+    }
+
+    const groups = new Map<string, AtBatLog[]>();
+    for (const log of atBatLogs) {
+      const key = `${log.inning}_${log.halfInning}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(log);
+    }
+
+    const sumRuns: number[][] = Array.from({ length: 8 }, () => [0, 0, 0]);
+    const counts: number[][] = Array.from({ length: 8 }, () => [0, 0, 0]);
+
+    for (const [key, logs] of groups) {
+      const totalRuns = inningScoreMap.get(key) ?? 0;
+      let runsBeforeAtBat = 0;
+      for (const log of logs) {
+        if (log.basesBeforePlay === null || log.outsBeforePlay === null) continue;
+        const outsIdx = log.outsBeforePlay;
+        if (outsIdx < 0 || outsIdx > 2) continue;
+        const basesIdx = basesToIndex(log.basesBeforePlay);
+        const remainingRuns = Math.max(0, totalRuns - runsBeforeAtBat);
+        sumRuns[basesIdx][outsIdx] += remainingRuns;
+        counts[basesIdx][outsIdx]++;
+        if (
+          log.result === "single" || log.result === "double" ||
+          log.result === "triple" || log.result === "homerun" ||
+          log.result === "infieldHit" || log.result === "error" ||
+          log.result === "walk" || log.result === "hitByPitch" ||
+          log.result === "fieldersChoice" || log.result === "sacrificeFly"
+        ) {
+          runsBeforeAtBat = Math.min(runsBeforeAtBat, totalRuns);
+        }
+      }
+    }
+
+    return { sumRuns, counts };
+  }, [atBatLogs, inningScores]);
+
+  const totalSamples = data.counts.reduce((s, row) => s + row.reduce((a, b) => a + b, 0), 0);
+
+  return (
+    <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-base font-semibold text-gray-200">得点期待値</h3>
+        <span className="text-xs text-gray-500" style={{ fontVariantNumeric: "tabular-nums" }}>
+          総サンプル: {totalSamples.toLocaleString()}打席
+        </span>
+      </div>
+      {totalSamples === 0 ? (
+        <p className="text-gray-500 text-sm">データなし（自チームの試合データが必要です）</p>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm" style={{ fontVariantNumeric: "tabular-nums" }}>
+              <thead>
+                <tr className="text-xs text-gray-400 border-b border-gray-700">
+                  <th className="text-left py-2 px-3">走者状況</th>
+                  <th className="text-center py-2 px-3">0アウト</th>
+                  <th className="text-center py-2 px-3">1アウト</th>
+                  <th className="text-center py-2 px-3">2アウト</th>
+                </tr>
+              </thead>
+              <tbody>
+                {BASES_LABELS.map((label, basesIdx) => (
+                  <tr key={label} className="border-b border-gray-700/30">
+                    <td className="py-2 px-3 text-gray-300 font-mono text-xs">{BASES_LABELS_JA[basesIdx]}</td>
+                    {[0, 1, 2].map((outsIdx) => {
+                      const n = data.counts[basesIdx][outsIdx];
+                      const avg = n > 0 ? data.sumRuns[basesIdx][outsIdx] / n : null;
+                      return (
+                        <td
+                          key={outsIdx}
+                          className={`py-2 px-3 text-center text-white ${avg !== null ? heatmapBg(avg) : "bg-gray-800"}`}
+                        >
+                          {avg !== null ? (
+                            <div>
+                              <div className="font-bold">{avg.toFixed(2)}</div>
+                              <div className="text-xs text-gray-300">(N={n.toLocaleString()})</div>
+                            </div>
+                          ) : (
+                            <span className="text-gray-600">-</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-gray-500 mt-3">
+            ※ データが十分でない場合、期待値の信頼度は低くなります。自チームの試合のみ記録されます。
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---- メインページ ----
 
 export default function AnalyticsPage() {
@@ -1342,7 +1501,7 @@ export default function AnalyticsPage() {
   const params = useParams();
   const id = params.id as string;
 
-  const [tab, setTab] = useState<"season" | "diagnostic">("season");
+  const [tab, setTab] = useState<"season" | "diagnostic" | "runexp">("season");
 
   useEffect(() => {
     if (!game && params.id) loadGame(params.id as string);
@@ -1392,11 +1551,22 @@ export default function AnalyticsPage() {
           >
             診断シミュレーション
           </button>
+          <button
+            onClick={() => setTab("runexp")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+              tab === "runexp"
+                ? "bg-blue-600 text-white"
+                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+            }`}
+          >
+            得点期待値
+          </button>
         </div>
 
         {/* タブ内容 */}
         {tab === "season" && <SeasonDataTab />}
         {tab === "diagnostic" && <DiagnosticTab />}
+        {tab === "runexp" && <RunExpectancySection game={game} />}
       </div>
     </div>
   );
