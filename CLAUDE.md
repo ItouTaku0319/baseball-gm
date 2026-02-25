@@ -305,6 +305,8 @@ https://1point02.jp/op/gnav/glossary/gls_index.aspx?cp=101
 
 - **投手スタミナ消費・能力低下・投手交代AI**: `simulateAtBat()`を1球ずつのカウント進行にリファクタ。`PitcherGameState`(player, log, pitchCount, currentStamina)と`TeamGameState`(batters, currentPitcher, bullpen, usedPitcherIds, pitcherLogs等)を導入。スタミナ消費: `STAMINA_PER_PITCH=0.7`/球、stamina=70の投手は約100球で枯渇。疲労ペナルティ: スタミナ50%以下から線形低下(MAX velocity-12.5%, control-25%, pitchLevel-12.5%)。イニング間交代: `shouldChangePitcher()`でstarterUsagePolicy(performance/win_eligible/stamina_limit)に応じた判定、8-9回リード時は守護神/SUへの継投。イニング途中交代: 3失点以上+2アウト未満、満塁+0アウト+スタミナ30%以下、スタミナ10%以下。役割別リリーフ選択: `selectNextPitcher()`で9回守護神→8回SU→中継ぎ→ビハインド下位→大量リード下位の優先順。勝敗投手判定: イニングごとの累積スコア推移からリード逆転時の投手を特定、先発5回以上は降板時リード条件付き。セーブ/ホールド: NPB準拠の簡易判定。サヨナラ処理: 9回以降裏でホームがリードした時点でハーフイニング即終了。
 
+- **投手起用方針の個別設定+投手枠拡張**: 旧来の全先発共通`starterUsagePolicy`(3種)+`closerId`+`setupIds`構造を、投手個別の`pitcherUsages: Record<string, PitcherUsageConfig>`+`relieverIds`(MAX8)に移行。先発6種(complete_game/win_eligible/performance/stamina_save/opener/short_starter)、リリーフ5種(closer/lead_only/close_game/behind_ok/mop_up)。リリーフのmaxInnings制限(デフォルト: closer=1,close_game/lead_only=2,behind_ok/mop_up=3)で283イニング問題を根本解決。PitcherGameStateにbattersFacedを追加(ショートスターター判定用)。旧セーブからの自動マイグレーション実装(loadGame内)。complete_gameポリシーのみ8-9回の守護神/SU継投判定をスキップ。
+
 ## 既知の問題
 <!-- 今は直さないが把握しておくべき問題を記録する。 -->
 
