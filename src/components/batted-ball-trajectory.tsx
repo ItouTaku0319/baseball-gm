@@ -177,7 +177,8 @@ function getFieldBounceStateAtTime(
   direction: number,
   landingDist: number,
   tAfterLanding: number,
-): { groundPos: { x: number; y: number }; bounceHeight: number; firstBounceMaxH: number; totalBounceTime: number; isOnGround: boolean } | null {
+  fenceDist?: number,
+): { groundPos: { x: number; y: number }; bounceHeight: number; firstBounceMaxH: number; totalBounceTime: number; isOnGround: boolean; hitFence?: boolean; fenceHitTime?: number } | null {
   const restitution = 0.3;
   const friction = 0.8;
 
@@ -204,9 +205,31 @@ function getFieldBounceStateAtTime(
   type BounceInterval = { tStart: number; tEnd: number; vy0: number; vx0: number; horizStart: number };
   const intervals: BounceInterval[] = [];
 
+  // フェンスまでの残り距離
+  const maxDistToFence = fenceDist != null ? fenceDist - landingDist : Infinity;
+
   for (let b = 0; b < maxBounces; b++) {
     const tBounce = 2 * currentVy / GRAVITY;
     if (tBounce < 0.02 || currentVy < 0.3) break;
+    const bounceHorizDist = currentVx * tBounce;
+    // このバウンドでフェンスに到達するかチェック
+    if (cumHorizontalDist + bounceHorizDist > maxDistToFence) {
+      // フェンス到達時刻を計算
+      const distRemaining = maxDistToFence - cumHorizontalDist;
+      const tToFence = currentVx > 0 ? distRemaining / currentVx : 0;
+      // フェンス衝突時のバウンド高さ
+      const hAtFence = currentVy * tToFence - 0.5 * GRAVITY * tToFence * tToFence;
+      intervals.push({
+        tStart: cumTime,
+        tEnd: cumTime + tToFence,
+        vy0: currentVy,
+        vx0: currentVx,
+        horizStart: cumHorizontalDist,
+      });
+      cumTime += tToFence;
+      cumHorizontalDist = maxDistToFence;
+      break;
+    }
     intervals.push({
       tStart: cumTime,
       tEnd: cumTime + tBounce,
@@ -215,25 +238,95 @@ function getFieldBounceStateAtTime(
       horizStart: cumHorizontalDist,
     });
     cumTime += tBounce;
-    cumHorizontalDist += currentVx * tBounce;
+    cumHorizontalDist += bounceHorizDist;
     currentVy *= restitution;
     currentVx *= friction;
   }
 
+  const hitFence = fenceDist != null && cumHorizontalDist >= maxDistToFence - 0.01;
+
+  // フェンス跳ね返りフェーズ
+  if (hitFence) {
+    const fenceHitTime = cumTime;
+    // フェンス跳ね返り: 壁反発で逆方向に低速バウンド
+    const wallRestitution = 0.25;
+    const reboundVx = currentVx * wallRestitution;
+    const reboundVy = 2.0; // 壁当たりで少し跳ねる
+    const t1 = 2 * reboundVy / GRAVITY;
+    const dist1 = reboundVx * t1;
+    const secondVy = reboundVy * 0.3;
+    const secondVx = reboundVx * 0.4;
+    const t2 = 2 * secondVy / GRAVITY;
+    const dist2 = secondVx * t2;
+    const wallRollTime = 0.3;
+    const wallRollDist = 0.5;
+    const reboundTotalTime = t1 + t2 + wallRollTime;
+    const totalBounceTime = fenceHitTime + reboundTotalTime;
+
+    if (tAfterLanding < fenceHitTime) {
+      // フェンスに到達する前のバウンドフェーズ
+      for (const interval of intervals) {
+        if (tAfterLanding >= interval.tStart && tAfterLanding < interval.tEnd) {
+          const tLocal = tAfterLanding - interval.tStart;
+          const bounceHeight = interval.vy0 * tLocal - 0.5 * GRAVITY * tLocal * tLocal;
+          const horizDist = interval.horizStart + interval.vx0 * tLocal;
+          const totalDist = landingDist + Math.min(horizDist, maxDistToFence);
+          const isOnGround = tLocal < 0.03 || (interval.tEnd - interval.tStart - tLocal) < 0.03;
+          return {
+            groundPos: toFieldSvg(totalDist, direction),
+            bounceHeight: Math.max(0, bounceHeight),
+            firstBounceMaxH,
+            totalBounceTime,
+            isOnGround,
+            hitFence: true,
+            fenceHitTime,
+          };
+        }
+      }
+    }
+
+    // フェンス跳ね返り後
+    const tAfterFence = tAfterLanding - fenceHitTime;
+    let reboundDist: number;
+    let reboundHeight: number;
+    if (tAfterFence <= t1) {
+      reboundDist = reboundVx * tAfterFence;
+      reboundHeight = Math.max(0, reboundVy * tAfterFence - 0.5 * GRAVITY * tAfterFence * tAfterFence);
+    } else if (tAfterFence <= t1 + t2) {
+      const t = tAfterFence - t1;
+      reboundDist = dist1 + secondVx * t;
+      reboundHeight = Math.max(0, secondVy * t - 0.5 * GRAVITY * t * t);
+    } else {
+      const rollProgress = Math.min((tAfterFence - t1 - t2) / wallRollTime, 1);
+      reboundDist = dist1 + dist2 + wallRollDist * rollProgress;
+      reboundHeight = 0;
+    }
+
+    const finalDist = Math.max(0, fenceDist! - reboundDist);
+    return {
+      groundPos: toFieldSvg(finalDist, direction),
+      bounceHeight: reboundHeight,
+      firstBounceMaxH,
+      totalBounceTime,
+      isOnGround: reboundHeight < 0.05,
+      hitFence: true,
+      fenceHitTime,
+    };
+  }
+
+  // フェンスに到達しない通常バウンド
   // 短い転がりフェーズ（バウンド後の残勢で少しだけ転がる）
-  const rollDist = cumHorizontalDist * 0.15; // バウンド距離の15%分だけ転がる
+  const rollDist = cumHorizontalDist * 0.15;
   const rollSpeed = Math.max(currentVx, 1);
-  const rollTime = rollDist > 0 ? Math.min(rollDist / rollSpeed, 0.5) : 0; // 最大0.5秒
+  const rollTime = rollDist > 0 ? Math.min(rollDist / rollSpeed, 0.5) : 0;
   const totalBounceTime = cumTime + rollTime;
 
-  // tAfterLanding がどの区間にいるか判定
   for (const interval of intervals) {
     if (tAfterLanding >= interval.tStart && tAfterLanding < interval.tEnd) {
       const tLocal = tAfterLanding - interval.tStart;
       const bounceHeight = interval.vy0 * tLocal - 0.5 * GRAVITY * tLocal * tLocal;
       const horizDist = interval.horizStart + interval.vx0 * tLocal;
       const totalDist = landingDist + horizDist;
-      // 地面に近いか判定（バウンドの開始/終了付近）
       const isOnGround = tLocal < 0.03 || (interval.tEnd - interval.tStart - tLocal) < 0.03;
       return {
         groundPos: toFieldSvg(totalDist, direction),
@@ -245,7 +338,6 @@ function getFieldBounceStateAtTime(
     }
   }
 
-  // 転がりフェーズ
   if (tAfterLanding >= cumTime && tAfterLanding <= totalBounceTime) {
     const rollProgress = rollTime > 0 ? Math.min((tAfterLanding - cumTime) / rollTime, 1) : 1;
     const totalDist = landingDist + cumHorizontalDist + rollDist * rollProgress;
@@ -258,7 +350,6 @@ function getFieldBounceStateAtTime(
     };
   }
 
-  // 終了後: 最終位置に固定
   const totalDist = landingDist + cumHorizontalDist + rollDist;
   return {
     groundPos: toFieldSvg(totalDist, direction),
@@ -565,7 +656,7 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
       const state = getGroundBallStateAtTime(exitVelocity, launchAngle, direction, estimatedDist, 999);
       return state?.groundPos ?? toFieldSvg(estimatedDist, direction);
     }
-    const bounceInfo = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, displayDist, 999);
+    const bounceInfo = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, displayDist, 999, fenceDistForDir);
     return bounceInfo?.groundPos ?? toFieldSvg(displayDist, direction);
   }, [hasFieldData, isGrounder, isHomerun, isCaughtFly, isFenceHit, estimatedDist, displayDist, direction, exitVelocity, launchAngle, fenceDistForDir]);
   const dot = finalPos;
@@ -577,6 +668,7 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
   let isBouncePhase = false;
   let bounceFirstMaxH = 0;
   let bounceOnGround = false;
+  let bounceFenceHitTime = -1; // バウンド中にフェンスに到達した時刻（-1=到達しない）
 
   const flightTime = isGrounder ? totalTime : getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
 
@@ -626,13 +718,17 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
       // バウンドフェーズ: 着地後の経過時間でバウンド位置を計算
       isBouncePhase = true;
       const tAfterLanding = currentTime - flightTime;
-      const bounceState = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, displayDist, tAfterLanding);
+      const bounceState = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, displayDist, tAfterLanding, fenceDistForDir);
       if (bounceState) {
         ballGroundPos = bounceState.groundPos;
         ballHeight = bounceState.bounceHeight;
         bounceFirstMaxH = bounceState.firstBounceMaxH;
         bounceOnGround = bounceState.isOnGround;
         shadowGroundPos = bounceState.groundPos;
+        // バウンドがフェンスに到達した場合、フェンス直撃エフェクトを表示するためフラグ設定
+        if (bounceState.hitFence) {
+          bounceFenceHitTime = flightTime + (bounceState.fenceHitTime ?? 0);
+        }
       }
     }
   }
@@ -697,11 +793,11 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
   // アニメーション完了後の落下地点マーカー
   const showLandingDot = dot && isAnimating && currentTime >= totalTime;
 
-  // フェンス直撃エフェクト表示判定
+  // フェンス直撃エフェクト表示判定（直撃 or バウンド経由）
   const fenceHitEffectTime = isFenceHit ? (() => {
     const fa = getFenceArrivalTime(exitVelocity, Math.max(launchAngle, 5), direction, distScale);
     return Math.min(fa, flightTime);
-  })() : -1;
+  })() : bounceFenceHitTime;
 
   return (
     <svg viewBox="0 0 300 300" className="w-full bg-gray-900 rounded border border-gray-700">
@@ -853,8 +949,8 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
         </>
       )}
 
-      {/* フェンス直撃エフェクト */}
-      {isFenceHit && isAnimating && (() => {
+      {/* フェンス直撃エフェクト（直撃 or バウンド経由） */}
+      {fenceHitEffectTime >= 0 && isAnimating && (() => {
         if (currentTime >= fenceHitEffectTime && currentTime <= fenceHitEffectTime + 0.3) {
           const fencePos = toFieldSvg(fenceDistForDir, direction);
           return (
@@ -1343,8 +1439,8 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
       const fenceBounce = getFenceBounceBackStateAtTime(fenceDistForDir, direction, exitVelocity, launchAngle, 999);
       return Math.min(fenceArrival, flightTime) + (fenceBounce?.totalBounceTime ?? 1.0);
     }
-    // フライ系はバウンド＋転がり時間を加算
-    const bounceInfo = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, estimatedDist, 999);
+    // フライ系はバウンド＋転がり時間を加算（フェンス衝突込み）
+    const bounceInfo = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, estimatedDist, 999, fenceDistForDir);
     const bounceAndRollTime = bounceInfo?.totalBounceTime ?? 0;
     return flightTime + bounceAndRollTime;
   }, [hasFieldData, isGrounder, isHomerun, isCaughtFly, isFenceHit, exitVelocity, estimatedDist, launchAngle, direction, distScale, fenceDistForDir]);
@@ -1402,7 +1498,7 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
           const bounceSteps = steps - flightSteps;
           for (let i = 1; i <= bounceSteps; i++) {
             const tAfterLanding = (i / bounceSteps) * bounceTime;
-            const bounceState = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, estimatedDist, tAfterLanding);
+            const bounceState = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, estimatedDist, tAfterLanding, fenceDistForDir);
             if (bounceState) points.push(bounceState.groundPos);
           }
         }
