@@ -28,7 +28,7 @@ PMは以下の条件を**すべて**満たすタスクを自律的に実行し�
 ### GAME-005: けが・故障システム
 - 優先度: MEDIUM
 - 自律: YES
-- 依存: GAME-001（途中交代の仕組みが前提）
+- 依存: GAME-001 ✅完了済み
 - 対象ファイル: `models/player.ts`, `engine/simulation.ts`, `engine/season-advancement.ts`, `store/game-store.ts`, `app/game/[id]/page.tsx`
 - 現状: Player型にinjury関連フィールドなし。season-advancement.tsの`simulateDay()`末尾が日次回復処理の挿入ポイント
 - 実装ポイント:
@@ -162,6 +162,7 @@ PMは以下の条件を**すべて**満たすタスクを自律的に実行し�
 - [x] GAME-001: 野手途中交代（代打8回~/代走7回~/守備固め8回~ / eaa89e0）
 - [x] GAME-004: 得点期待値テーブル（24パターン・ヒートマップ表示 / 2e0e648）
 - [x] GAME-002: バント処理（犠牲バント・セーフティバント・投手守備機会増加 / 5304790）
+- [x] GAME-006: サブポジション対応（隣接ポジション付与・守備力80%補正・UI表示 / 0d6e182）
 
 </details>
 
