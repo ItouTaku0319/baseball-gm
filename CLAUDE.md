@@ -19,7 +19,8 @@ NPB（日本プロ野球）をモデルにした野球GMシミュレーション
 npm run dev      # 開発サーバー起動
 npm run build    # プロダクションビルド
 npm run lint     # ESLint実行
-npx tsx scripts/test-balance-full.ts --games=1000  # バランステスト
+npm run test     # Vitestテスト実行
+npx tsx scripts/test-balance-full.ts --games=1000  # バランステスト（品質ゲート）
 ```
 
 ## ディレクトリ構成
@@ -40,8 +41,8 @@ src/
 │           ├── stats/page.tsx     # 成績（打撃/投手・セイバー指標）
 │           ├── analytics/page.tsx # 打球分析（シーズンデータ・診断シミュ）
 │           ├── pitching/page.tsx  # 投球分析（ストライクゾーン・球種分析）
-│           ├── draft/page.tsx     # ドラフト
-│           └── trade/page.tsx     # トレード
+│           ├── draft/page.tsx     # ドラフト（ウェーバー方式・CPU自動選択）
+│           └── trade/page.tsx     # トレード（選手価値算出・CPU交渉）
 ├── components/             # 共通UIコンポーネント
 │   ├── player-ability-card.tsx    # 選手能力カード・グレード色・弾道アイコン
 │   ├── lineup-field.tsx           # SVGフィールド図（守備位置ノード）
@@ -49,6 +50,7 @@ src/
 │   ├── batted-ball-trajectory.tsx # 打球軌道可視化（フィールド/サイドビュー）
 │   └── player-tooltip.tsx         # 選手ツールチップ
 ├── engine/                 # ゲームエンジン（純粋関数）
+│   ├── index.ts           # バレルエクスポート
 │   ├── simulation.ts      # 試合シミュレーション（打席・走塁・投手交代）
 │   ├── fielding-ai.ts     # 守備AI（座標系・到達時間計算・判断ロジック）
 │   ├── physics-constants.ts # 打球物理の共通定数
@@ -62,8 +64,10 @@ src/
 │   ├── playoffs.ts        # プレーオフ・CS
 │   ├── preseason.ts       # シーズン前処理
 │   ├── offseason.ts       # オフシーズン処理
-│   └── roster-management.ts # ロスター管理
+│   ├── roster-management.ts # ロスター管理
+│   └── __tests__/         # Vitestテスト（打球物理・守備分布等）
 ├── models/                 # 型定義
+│   ├── index.ts           # バレルエクスポート
 │   ├── player.ts          # Player, BatterSeasonStats, PitcherSeasonStats
 │   ├── team.ts            # Team, TeamRecord, TeamLineupConfig
 │   ├── league.ts          # Season, ScheduleEntry, League, GameResult, AtBatLog
@@ -77,7 +81,8 @@ src/
 └── data/
     └── teams.ts           # 12チームテンプレート（セ6+パ6）
 
-scripts/
+
+scripts/                   # プロジェクトルート直下
 ├── test-balance-full.ts   # バランステスト（1000試合、品質ゲート）
 └── test-balance.ts        # 簡易バランステスト
 ```
@@ -129,6 +134,7 @@ scripts/
 | `docs/patterns.md` | 実装パターン・アンチパターン | 実装開始前 |
 | `docs/design-decisions.md` | 過去の設計判断・バランス調整履歴 | 関連機能の修正時 |
 | `docs/autonomous-workflow.md` | 自律開発の詳細手順・ReActループ | 自律モード実行時 |
+| `docs/fielding-distribution-analysis.md` | 守備機会分布のNPB実データ分析 | 守備ロジック修正時 |
 
 `GAME_SPEC.md` はゲームバランスに関わる実装を行う際に必ず参照する。
 確率・計算式・パラメータを変更した場合は、コードと仕様書を同時に更新する。
