@@ -1,5 +1,5 @@
 import type { Player } from "@/models/player";
-import type { Team, TeamLineupConfig, RosterLevel } from "@/models/team";
+import type { Team, TeamLineupConfig, RosterLevel, PitcherUsageConfig } from "@/models/team";
 import { calcBreakingPower } from "./simulation";
 
 /**
@@ -62,27 +62,51 @@ export function autoConfigureLineup(team: Team): TeamLineupConfig {
   const rotationSize = Math.min(6, Math.max(1, starterCandidates.length));
   const rotation = starterCandidates.slice(0, rotationSize).map((p) => p.id);
 
-  // リリーフ候補: ローテに入らない投手
+  // リリーフ候補: ローテに入らない投手をリリーフスコア順
   const rotationSet = new Set(rotation);
   const relievers = pitchers
     .filter((p) => !rotationSet.has(p.id))
     .sort((a, b) => relieverScore(b) - relieverScore(a));
 
-  // クローザー: リリーフの中で最も優秀
-  const closerId = relievers.length > 0 ? relievers[0].id : null;
+  // リリーフリスト (MAX 8)
+  const relieverIds = relievers.slice(0, 8).map((p) => p.id);
 
-  // セットアッパー: クローザーの次に優秀な1-2人
-  const setupIds = relievers.slice(1, 3).map((p) => p.id);
+  // 投手個別起用設定
+  const pitcherUsages: Record<string, PitcherUsageConfig> = {};
 
-  // 打順: 能力値ベースで典型的な打順を組む
+  // 先発は全員 performance デフォルト
+  for (const id of rotation) {
+    pitcherUsages[id] = { starterPolicy: "performance" };
+  }
+
+  // リリーフはランク順にポリシー割当
+  relieverIds.forEach((id, i) => {
+    if (i === 0) {
+      pitcherUsages[id] = { relieverPolicy: "closer", maxInnings: 1 };
+    } else if (i <= 2) {
+      pitcherUsages[id] = { relieverPolicy: "close_game", maxInnings: 2 };
+    } else if (i <= 5) {
+      pitcherUsages[id] = { relieverPolicy: "behind_ok", maxInnings: 3 };
+    } else {
+      pitcherUsages[id] = { relieverPolicy: "mop_up", maxInnings: 3 };
+    }
+  });
+
+  // 打順
   const battingOrder = buildBattingOrder(batters);
+
+  // 旧フィールドも互換のため設定
+  const closerId = relieverIds.length > 0 ? relieverIds[0] : null;
+  const setupIds = relieverIds.slice(1, 3);
 
   return {
     battingOrder,
     startingRotation: rotation,
+    relieverIds,
     closerId,
     setupIds,
     rotationIndex: 0,
+    pitcherUsages,
   };
 }
 

@@ -7,13 +7,30 @@ import { useGameStore } from "@/store/game-store";
 import { POSITION_NAMES } from "@/models/player";
 import type { Player } from "@/models/player";
 import { VelocityCell, AbilityCell, PitchList, calcPitcherOverall, OverallBadge } from "@/components/player-ability-card";
-import type { TeamLineupConfig } from "@/models/team";
+import type { TeamLineupConfig, StarterUsagePolicy, RelieverUsagePolicy, PitcherUsageConfig } from "@/models/team";
 import { autoConfigureLineup, getIchiGunPlayers } from "@/engine/lineup";
 import { LineupField } from "@/components/lineup-field";
 import type { FieldPlayer } from "@/components/lineup-field";
 import { LineupCard } from "@/components/lineup-card";
 
 type Tab = "batting" | "rotation" | "bullpen";
+
+const STARTER_POLICIES: { value: StarterUsagePolicy; label: string; desc: string }[] = [
+  { value: "performance", label: "調子次第", desc: "スタミナ30%以下 or 自責4以上で交代" },
+  { value: "win_eligible", label: "勝利投手", desc: "5回+リード+スタミナ40%以下で交代" },
+  { value: "complete_game", label: "完投", desc: "スタミナ10%以下 or 自責8以上まで続投" },
+  { value: "stamina_save", label: "スタミナ温存", desc: "スタミナ50%以下 or 6回以降で交代" },
+  { value: "opener", label: "オープナー", desc: "1回だけ投げて交代" },
+  { value: "short_starter", label: "ショートスターター", desc: "打者一巡 or 4回以降で交代" },
+];
+
+const RELIEVER_POLICIES: { value: RelieverUsagePolicy; label: string; desc: string; color: string }[] = [
+  { value: "closer", label: "守護神", desc: "最終回リード1-3点で登板", color: "bg-red-900/60 text-red-300" },
+  { value: "lead_only", label: "リード時", desc: "リード時のみ登板", color: "bg-blue-900/60 text-blue-300" },
+  { value: "close_game", label: "接戦時", desc: "1-2点差リード時に登板", color: "bg-orange-900/60 text-orange-300" },
+  { value: "behind_ok", label: "ビハインドOK", desc: "接戦+1-2点ビハインドでも登板", color: "bg-gray-700 text-gray-300" },
+  { value: "mop_up", label: "敗戦処理", desc: "大量ビハインド時に登板", color: "bg-gray-800 text-gray-500" },
+];
 
 export default function LineupPage() {
   const params = useParams();
@@ -343,6 +360,10 @@ function PitcherCard({
 
   const roleColors: Record<string, string> = {
     "守護神": "bg-red-900/60 text-red-300",
+    "リード時": "bg-blue-900/60 text-blue-300",
+    "接戦時": "bg-orange-900/60 text-orange-300",
+    "ビハインドOK": "bg-gray-700 text-gray-300",
+    "敗戦処理": "bg-gray-800 text-gray-500",
     "セットアッパー": "bg-orange-900/60 text-orange-300",
     "中継ぎ": "bg-gray-700 text-gray-400",
   };
@@ -412,27 +433,37 @@ function RotationEditor({
   playerMap: Map<string, Player>;
   onChange: (c: TeamLineupConfig) => void;
 }) {
-  const bullpenIds = new Set([
-    config.closerId,
-    ...config.setupIds,
-  ].filter(Boolean));
+  const bullpenIds = new Set(config.relieverIds ?? []);
 
   const handleAdd = (playerId: string) => {
     if (config.startingRotation.length >= 6) return;
+    const usages = { ...(config.pitcherUsages ?? {}) };
+    usages[playerId] = { ...usages[playerId], starterPolicy: "performance" };
     onChange({
       ...config,
       startingRotation: [...config.startingRotation, playerId],
+      pitcherUsages: usages,
     });
   };
 
   const handleRemove = (index: number) => {
     if (config.startingRotation.length <= 1) return;
+    const removedId = config.startingRotation[index];
     const newRotation = config.startingRotation.filter((_, i) => i !== index);
+    const usages = { ...(config.pitcherUsages ?? {}) };
+    delete usages[removedId];
     onChange({
       ...config,
       startingRotation: newRotation,
       rotationIndex: config.rotationIndex % Math.max(1, newRotation.length),
+      pitcherUsages: usages,
     });
+  };
+
+  const handleStarterPolicyChange = (playerId: string, policy: StarterUsagePolicy) => {
+    const usages = { ...(config.pitcherUsages ?? {}) };
+    usages[playerId] = { ...usages[playerId], starterPolicy: policy };
+    onChange({ ...config, pitcherUsages: usages });
   };
 
   const rotationSet = new Set(config.startingRotation);
@@ -445,40 +476,6 @@ function RotationEditor({
       <h2 className="text-lg font-semibold mb-3 text-blue-400">
         先発ローテーション ({config.startingRotation.length}人)
       </h2>
-
-      {/* 先発起用方針 */}
-      <div className="mb-6 bg-gray-800 rounded-lg p-4 border border-gray-700">
-        <h3 className="text-sm font-semibold mb-3 text-gray-300">先発投手の起用方針</h3>
-        <div className="space-y-2">
-          {([
-            { value: "performance", label: "調子次第", desc: "スタミナ30%以下 or 自責点4以上で交代（デフォルト）" },
-            { value: "win_eligible", label: "勝利投手優先", desc: "5回以上＋リード時にスタミナ40%以下で交代" },
-            { value: "stamina_limit", label: "スタミナ限界", desc: "スタミナ15%以下まで続投（完投重視）" },
-          ] as const).map((opt) => (
-            <label
-              key={opt.value}
-              className={`flex items-start gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
-                (config.starterUsagePolicy ?? "performance") === opt.value
-                  ? "bg-blue-900/40 border border-blue-500/50"
-                  : "bg-gray-900/50 border border-gray-700/50 hover:bg-gray-800"
-              }`}
-            >
-              <input
-                type="radio"
-                name="starterUsagePolicy"
-                value={opt.value}
-                checked={(config.starterUsagePolicy ?? "performance") === opt.value}
-                onChange={() => onChange({ ...config, starterUsagePolicy: opt.value })}
-                className="mt-1"
-              />
-              <div>
-                <div className="text-white text-sm font-medium">{opt.label}</div>
-                <div className="text-gray-400 text-xs">{opt.desc}</div>
-              </div>
-            </label>
-          ))}
-        </div>
-      </div>
 
       <div className="space-y-2 mb-4">
         {config.startingRotation.map((playerId, i) => {
@@ -496,6 +493,21 @@ function RotationEditor({
                   isNext={isNext}
                   onRemove={config.startingRotation.length > 1 ? () => handleRemove(i) : undefined}
                 />
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-gray-400 text-xs">起用法:</span>
+                  <select
+                    value={config.pitcherUsages?.[playerId]?.starterPolicy ?? "performance"}
+                    onChange={(e) => handleStarterPolicyChange(playerId, e.target.value as StarterUsagePolicy)}
+                    className="bg-gray-700 text-white text-xs rounded px-2 py-1 border border-gray-600"
+                  >
+                    {STARTER_POLICIES.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                  <span className="text-gray-500 text-xs">
+                    {STARTER_POLICIES.find(p => p.value === (config.pitcherUsages?.[playerId]?.starterPolicy ?? "performance"))?.desc}
+                  </span>
+                </div>
               </div>
             </div>
           );
@@ -538,116 +550,138 @@ function BullpenEditor({
   onChange: (c: TeamLineupConfig) => void;
 }) {
   const rotationSet = new Set(config.startingRotation);
-  const availablePitchers = pitchers.filter((p) => !rotationSet.has(p.id));
-  const usedIds = new Set([config.closerId, ...config.setupIds].filter(Boolean));
+  const relieverIds = config.relieverIds ?? [];
+  const relieverSet = new Set(relieverIds);
 
-  const handleCloserClick = (playerId: string) => {
-    onChange({
-      ...config,
-      closerId: playerId || null,
-      setupIds: config.setupIds.filter((id) => id !== playerId),
-    });
-  };
-
-  const handleCloserRemove = () => {
-    onChange({ ...config, closerId: null });
-  };
-
-  const handleSetupAdd = (playerId: string) => {
-    if (config.setupIds.length >= 3) return;
-    onChange({
-      ...config,
-      setupIds: [...config.setupIds, playerId],
-    });
-  };
-
-  const handleSetupRemove = (index: number) => {
-    onChange({
-      ...config,
-      setupIds: config.setupIds.filter((_, i) => i !== index),
-    });
-  };
-
-  const closerPlayer = config.closerId
-    ? playerMap.get(config.closerId)
-    : null;
-  const availableForAny = availablePitchers.filter(
-    (p) => !usedIds.has(p.id)
+  const availablePitchers = pitchers.filter(
+    (p) => !rotationSet.has(p.id) && !relieverSet.has(p.id)
   );
 
+  const handleAdd = (playerId: string) => {
+    if (relieverIds.length >= 8) return;
+    const newRelievers = [...relieverIds, playerId];
+    const usages = { ...(config.pitcherUsages ?? {}) };
+    usages[playerId] = { relieverPolicy: "behind_ok", maxInnings: 3 };
+    onChange({ ...config, relieverIds: newRelievers, pitcherUsages: usages });
+  };
+
+  const handleRemove = (playerId: string) => {
+    const newRelievers = relieverIds.filter((id) => id !== playerId);
+    const usages = { ...(config.pitcherUsages ?? {}) };
+    delete usages[playerId];
+    onChange({ ...config, relieverIds: newRelievers, pitcherUsages: usages });
+  };
+
+  const handlePolicyChange = (playerId: string, policy: RelieverUsagePolicy) => {
+    if (policy === "closer") {
+      const currentCloser = relieverIds.find(
+        (id) => config.pitcherUsages?.[id]?.relieverPolicy === "closer" && id !== playerId
+      );
+      if (currentCloser) {
+        const usages = { ...(config.pitcherUsages ?? {}) };
+        usages[currentCloser] = { ...usages[currentCloser], relieverPolicy: "close_game" };
+        usages[playerId] = { ...usages[playerId], relieverPolicy: policy, maxInnings: 1 };
+        onChange({ ...config, pitcherUsages: usages });
+        return;
+      }
+    }
+    const usages = { ...(config.pitcherUsages ?? {}) };
+    const defaultMax = policy === "closer" ? 1 : policy === "close_game" || policy === "lead_only" ? 2 : 3;
+    usages[playerId] = { ...usages[playerId], relieverPolicy: policy, maxInnings: usages[playerId]?.maxInnings ?? defaultMax };
+    onChange({ ...config, pitcherUsages: usages });
+  };
+
+  const handleMaxInningsChange = (playerId: string, maxInnings: number) => {
+    const usages = { ...(config.pitcherUsages ?? {}) };
+    usages[playerId] = { ...usages[playerId], maxInnings };
+    onChange({ ...config, pitcherUsages: usages });
+  };
+
+  const getPolicy = (playerId: string): RelieverUsagePolicy =>
+    config.pitcherUsages?.[playerId]?.relieverPolicy ?? "behind_ok";
+
+  const getMaxInnings = (playerId: string): number =>
+    config.pitcherUsages?.[playerId]?.maxInnings ?? 3;
+
+  const getPolicyInfo = (policy: RelieverUsagePolicy) =>
+    RELIEVER_POLICIES.find((p) => p.value === policy) ?? RELIEVER_POLICIES[3];
+
   return (
-    <div className="space-y-6">
-      {/* クローザー */}
-      <div>
-        <h2 className="text-lg font-semibold mb-3 text-red-400">守護神</h2>
-        {closerPlayer ? (
-          <PitcherCard
-            player={closerPlayer}
-            role="守護神"
-            onRemove={handleCloserRemove}
-            removeLabel="解除"
-          />
-        ) : (
-          <p className="text-gray-500 text-sm mb-2">未設定</p>
-        )}
-      </div>
+    <div>
+      <h2 className="text-lg font-semibold mb-3 text-blue-400">
+        リリーフ ({relieverIds.length}/8人)
+      </h2>
 
-      {/* セットアッパー */}
-      <div>
-        <h2 className="text-lg font-semibold mb-3 text-orange-400">
-          セットアッパー ({config.setupIds.length}/3)
-        </h2>
-        <div className="space-y-2 mb-3">
-          {config.setupIds.map((playerId, i) => {
-            const player = playerMap.get(playerId);
-            if (!player) return null;
-            return (
+      <div className="space-y-2 mb-4">
+        {relieverIds.map((playerId) => {
+          const player = playerMap.get(playerId);
+          if (!player) return null;
+          const policy = getPolicy(playerId);
+          const policyInfo = getPolicyInfo(policy);
+          const maxInn = getMaxInnings(playerId);
+
+          return (
+            <div key={playerId}>
               <PitcherCard
-                key={playerId}
                 player={player}
-                role="セットアッパー"
-                onRemove={() => handleSetupRemove(i)}
-                removeLabel="解除"
+                role={policyInfo.label}
+                onRemove={() => handleRemove(playerId)}
+                removeLabel="除外"
               />
-            );
-          })}
-        </div>
-      </div>
-
-      {/* その他のリリーフ（中継ぎ） */}
-      <div>
-        <h2 className="text-lg font-semibold mb-3 text-gray-400">
-          中継ぎ ({availableForAny.length}人)
-        </h2>
-        <p className="text-gray-500 text-xs mb-2">
-          クリックで守護神/セットアッパーに指名
-        </p>
-        <div className="space-y-2">
-          {availableForAny.map((p) => (
-            <div key={p.id} className="relative group">
-              <PitcherCard player={p} role="中継ぎ" />
-              <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                {!config.closerId && (
-                  <button
-                    onClick={() => handleCloserClick(p.id)}
-                    className="px-2 py-1 bg-red-900/80 hover:bg-red-800 rounded text-xs text-red-200"
+              <div className="flex items-center gap-3 mt-1 ml-2 flex-wrap">
+                <div className="flex items-center gap-1">
+                  <span className="text-gray-400 text-xs">起用法:</span>
+                  <select
+                    value={policy}
+                    onChange={(e) => handlePolicyChange(playerId, e.target.value as RelieverUsagePolicy)}
+                    className="bg-gray-700 text-white text-xs rounded px-2 py-1 border border-gray-600"
                   >
-                    守護神に
-                  </button>
-                )}
-                {config.setupIds.length < 3 && (
-                  <button
-                    onClick={() => handleSetupAdd(p.id)}
-                    className="px-2 py-1 bg-orange-900/80 hover:bg-orange-800 rounded text-xs text-orange-200"
+                    {RELIEVER_POLICIES.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-gray-400 text-xs">最大:</span>
+                  <select
+                    value={maxInn}
+                    onChange={(e) => handleMaxInningsChange(playerId, Number(e.target.value))}
+                    className="bg-gray-700 text-white text-xs rounded px-2 py-1 border border-gray-600"
                   >
-                    SU に
-                  </button>
-                )}
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <option key={n} value={n}>{n}イニング</option>
+                    ))}
+                  </select>
+                </div>
+                <span className="text-gray-500 text-xs">{policyInfo.desc}</span>
               </div>
             </div>
-          ))}
-        </div>
+          );
+        })}
       </div>
+
+      {/* 追加可能な投手 */}
+      {relieverIds.length < 8 && availablePitchers.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold mb-2 text-gray-400">
+            追加可能な投手 ({availablePitchers.length})
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            {availablePitchers.map((p) => (
+              <div
+                key={p.id}
+                onClick={() => handleAdd(p.id)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-gray-800/50 border border-gray-700/50 hover:bg-gray-700 cursor-pointer transition-colors"
+              >
+                <span className="text-white">{p.name}</span>
+                <span className="text-gray-500 text-xs ml-auto">
+                  {p.pitching?.velocity}km 制球{p.pitching?.control}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

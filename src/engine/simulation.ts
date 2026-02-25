@@ -28,6 +28,7 @@ interface PitcherGameState {
   log: PitcherGameLog;
   pitchCount: number;
   currentStamina: number;
+  battersFaced: number;
 }
 
 /** チームの試合中状態 */
@@ -1154,10 +1155,19 @@ function attemptStolenBases(
   return { bases: newBases, additionalOuts };
 }
 
-/** リリーフ投手を取得: 1軍投手のうち先発ローテ以外 */
+/** リリーフ投手を取得 */
 function getReliefPitchers(team: Team): Player[] {
   const active = getActivePlayers(team);
   const pitchers = active.filter(p => p.isPitcher);
+
+  // relieverIds があればその順番で返す
+  const relieverIds = team.lineupConfig?.relieverIds;
+  if (relieverIds && relieverIds.length > 0) {
+    const idToPlayer = new Map(pitchers.map(p => [p.id, p]));
+    return relieverIds.map(id => idToPlayer.get(id)).filter((p): p is Player => p != null);
+  }
+
+  // フォールバック: 旧ロジック
   const rotationIds = new Set(team.lineupConfig?.startingRotation ?? []);
   const relievers = pitchers.filter(p => !rotationIds.has(p.id));
   return relievers.sort((a, b) => {
@@ -1178,48 +1188,83 @@ function shouldChangePitcher(
   const stamina = pitcherState.player.pitching!.stamina;
   const ratio = pitcherState.currentStamina / stamina;
   const isStarter = pitcherState.log.isStarter === true;
-  const policy = team.lineupConfig?.starterUsagePolicy ?? "performance";
+  const config = team.lineupConfig;
+  const usages = config?.pitcherUsages;
+  const usage = usages?.[pitcherState.player.id];
   const leadAmount = teamScore - opponentScore;
 
-  // リリーフ投手はスタミナ20%以下で交代
+  // === リリーフ投手 ===
   if (!isStarter) {
+    const maxInn = usage?.maxInnings ?? 3;
+    const inningsPitched = pitcherState.log.inningsPitched / 3;
+    if (inningsPitched >= maxInn) return true;
     if (ratio <= 0.20) return true;
     return false;
   }
 
-  // 先発投手の起用方針
+  // === 先発投手 ===
+  const policy = usage?.starterPolicy ?? config?.starterUsagePolicy ?? "performance";
+
   switch (policy) {
-    case "stamina_limit":
-      // スタミナ限界: スタミナ15%以下で交代（最も遅い交代）
-      if (ratio <= 0.15) return true;
-      if (pitcherState.log.earnedRuns >= 7) return true;
-      break;
+    case "complete_game":
+      // 完投: スタミナ10%以下 or 自責8以上で交代。8-9回の継投なし
+      if (ratio <= 0.10) return true;
+      if (pitcherState.log.earnedRuns >= 8) return true;
+      return false;
 
     case "win_eligible":
-      // 勝利投手優先: 5回以上＋リード時にスタミナ40%以下で交代
+      // 勝利投手: 5回+リード+スタミナ40%以下、スタミナ20%以下、自責5以上
       if (inning >= 5 && leadAmount > 0 && ratio <= 0.40) return true;
       if (ratio <= 0.20) return true;
       if (pitcherState.log.earnedRuns >= 5) return true;
       break;
 
+    case "stamina_save":
+      // スタミナ温存: スタミナ50%以下、自責3以上、6回以降
+      if (ratio <= 0.50) return true;
+      if (pitcherState.log.earnedRuns >= 3) return true;
+      if (inning >= 6) return true;
+      break;
+
+    case "opener":
+      // オープナー: 1回だけ投げて交代
+      if (inning >= 1) return true;
+      break;
+
+    case "short_starter":
+      // ショートスターター: 打者9人(一巡)で交代、または4回以降
+      if (pitcherState.battersFaced >= 9) return true;
+      if (inning >= 4) return true;
+      break;
+
     case "performance":
     default:
-      // 調子次第(デフォルト): スタミナ30%以下 or 自責点4以上で交代
+      // 調子次第(デフォルト): スタミナ30%以下、自責4以上、7回+スタミナ40%以下
       if (ratio <= 0.30) return true;
       if (pitcherState.log.earnedRuns >= 4) return true;
       if (inning >= 7 && ratio <= 0.40) return true;
       break;
   }
 
-  // 8回以降: リード時に守護神/SUへの継投を検討（全方針共通）
+  // 8回以降: リード時に守護神/SUへの継投（complete_game以外）
   if (inning >= 8 && leadAmount >= 1 && leadAmount <= 4) {
-    const config = team.lineupConfig;
-    const closerId = config?.closerId;
-    const setupIds = config?.setupIds ?? [];
-    const currentId = pitcherState.player.id;
-
-    if (inning >= 9 && closerId && currentId !== closerId) return true;
-    if (inning === 8 && setupIds.length > 0 && !setupIds.includes(currentId)) return true;
+    if (usages) {
+      // 新方式: pitcherUsagesからcloser/close_gameを探す
+      const currentId = pitcherState.player.id;
+      const hasCloser = Object.entries(usages).some(([id, u]) => u.relieverPolicy === "closer" && id !== currentId);
+      const hasSetup = Object.entries(usages).some(([id, u]) =>
+        (u.relieverPolicy === "close_game" || u.relieverPolicy === "lead_only") && id !== currentId
+      );
+      if (inning >= 9 && hasCloser) return true;
+      if (inning === 8 && hasSetup) return true;
+    } else {
+      // 旧方式フォールバック
+      const closerId = config?.closerId;
+      const setupIds = config?.setupIds ?? [];
+      const currentId = pitcherState.player.id;
+      if (inning >= 9 && closerId && currentId !== closerId) return true;
+      if (inning === 8 && setupIds.length > 0 && !setupIds.includes(currentId)) return true;
+    }
   }
 
   return false;
@@ -1234,47 +1279,92 @@ function selectNextPitcher(
   team: Team
 ): Player | null {
   const config = team.lineupConfig;
-  const closerId = config?.closerId;
-  const setupIds = new Set(config?.setupIds ?? []);
+  const usages = config?.pitcherUsages;
 
   const available = gameState.bullpen.filter(p => !gameState.usedPitcherIds.has(p.id));
   if (available.length === 0) return null;
 
   const leadAmount = teamScore - opponentScore;
 
-  // 9回 + リード1-3点 → 守護神
+  // ヘルパー: ポリシーに一致する利用可能な投手を探す
+  const findByPolicy = (...policies: string[]): Player | undefined => {
+    if (!usages) return undefined;
+    for (const policy of policies) {
+      const found = available.find(p => usages[p.id]?.relieverPolicy === policy);
+      if (found) return found;
+    }
+    return undefined;
+  };
+
+  if (usages) {
+    // 新方式: pitcherUsages ベース
+
+    // 9回 + リード1-3点 → closer
+    if (inning >= 9 && leadAmount >= 1 && leadAmount <= 3) {
+      const closer = findByPolicy("closer");
+      if (closer) return closer;
+    }
+
+    // 8回 + リード1-4点 → lead_only or close_game
+    if (inning >= 8 && leadAmount >= 1 && leadAmount <= 4) {
+      const setup = findByPolicy("lead_only", "close_game");
+      if (setup) return setup;
+    }
+
+    // 5-7回 + リード → close_game or behind_ok
+    if (inning >= 5 && inning <= 7 && leadAmount >= 1) {
+      const mid = findByPolicy("close_game", "behind_ok");
+      if (mid) return mid;
+    }
+
+    // ビハインド1-2点 → behind_ok
+    if (leadAmount >= -2 && leadAmount < 0) {
+      const behind = findByPolicy("behind_ok", "mop_up");
+      if (behind) return behind;
+    }
+
+    // 大量ビハインド or 大量リード → mop_up
+    if (leadAmount < -2 || leadAmount >= 5) {
+      const mop = findByPolicy("mop_up", "behind_ok");
+      if (mop) return mop;
+    }
+
+    // フォールバック: closer以外の先頭
+    const nonCloser = available.find(p => usages[p.id]?.relieverPolicy !== "closer");
+    return nonCloser ?? available[0];
+  }
+
+  // === 旧方式フォールバック ===
+  const closerId = config?.closerId;
+  const setupIds = new Set(config?.setupIds ?? []);
+
   if (inning >= 9 && leadAmount >= 1 && leadAmount <= 3 && closerId) {
     const closer = available.find(p => p.id === closerId);
     if (closer) return closer;
   }
 
-  // 8回 + リード1-4点 → セットアッパー
   if (inning >= 8 && leadAmount >= 1 && leadAmount <= 4) {
     const setup = available.find(p => setupIds.has(p.id));
     if (setup) return setup;
   }
 
-  // 5-7回 + リード1-3点 → ブルペン上位（守護神・SU以外）
   if (inning >= 5 && inning <= 7 && leadAmount >= 1 && leadAmount <= 3) {
     const midReliever = available.find(p => p.id !== closerId && !setupIds.has(p.id));
     if (midReliever) return midReliever;
   }
 
-  // ビハインド → ブルペン下位から消費（守護神・SUを温存）
   if (leadAmount < 0) {
     const lowPriority = available.filter(p => p.id !== closerId && !setupIds.has(p.id));
     if (lowPriority.length > 0) return lowPriority[lowPriority.length - 1];
     return available[available.length - 1];
   }
 
-  // 大量リード（5点以上）→ 下位投手から消費
   if (leadAmount >= 5) {
     const lowPriority = available.filter(p => p.id !== closerId && !setupIds.has(p.id));
     if (lowPriority.length > 0) return lowPriority[lowPriority.length - 1];
     return available[available.length - 1];
   }
 
-  // その他 → bullpen順の先頭
   return available[0];
 }
 
@@ -1299,6 +1389,7 @@ function changePitcher(gameState: TeamGameState, newPitcher: Player): void {
     },
     pitchCount: 0,
     currentStamina: newPitcher.pitching!.stamina,
+    battersFaced: 0,
   };
 }
 
@@ -1891,6 +1982,7 @@ function simulateHalfInning(
     }
 
     idx++;
+    defensiveState.currentPitcher.battersFaced++;
 
     // === イニング途中の投手交代判定 ===
     if (defensiveTeam && teamScore != null && opponentScore != null && outs < 3) {
@@ -1898,6 +1990,14 @@ function simulateHalfInning(
       const staminaRatio = currentPitcher.currentStamina / currentPitcher.player.pitching!.stamina;
 
       let shouldChangeMidInning = false;
+
+      // リリーフのmaxInnings到達チェック
+      if (!currentPitcher.log.isStarter) {
+        const usage = defensiveTeam.lineupConfig?.pitcherUsages?.[currentPitcher.player.id];
+        const maxInn = usage?.maxInnings ?? 3;
+        const inningsPitched = currentPitcher.log.inningsPitched / 3;
+        if (inningsPitched >= maxInn) shouldChangeMidInning = true;
+      }
 
       // そのイニング3失点以上 + 1アウト以下
       if (inningRuns >= 3 && outs < 2) shouldChangeMidInning = true;
@@ -1961,6 +2061,7 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
       },
       pitchCount: 0,
       currentStamina: homePitcher.pitching!.stamina,
+      battersFaced: 0,
     },
     bullpen: getReliefPitchers(homeTeam),
     usedPitcherIds: new Set([homePitcher.id]),
@@ -1987,6 +2088,7 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
       },
       pitchCount: 0,
       currentStamina: awayPitcher.pitching!.stamina,
+      battersFaced: 0,
     },
     bullpen: getReliefPitchers(awayTeam),
     usedPitcherIds: new Set([awayPitcher.id]),

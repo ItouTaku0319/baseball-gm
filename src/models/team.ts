@@ -3,8 +3,22 @@ import type { Player } from "./player";
 /** 投手の役割 */
 export type PitcherRole = "starter" | "setup" | "closer" | "middle_reliever";
 
-/** 先発投手の起用方針 */
-export type StarterUsagePolicy = "stamina_limit" | "win_eligible" | "performance";
+/** 先発投手の起用方針 (6種) */
+export type StarterUsagePolicy =
+  | "complete_game" | "win_eligible" | "performance"
+  | "stamina_save" | "opener" | "short_starter";
+
+/** リリーフ投手の起用方針 (5種) */
+export type RelieverUsagePolicy =
+  | "closer" | "lead_only" | "close_game" | "behind_ok" | "mop_up";
+
+/** 投手個別の起用設定 */
+export interface PitcherUsageConfig {
+  starterPolicy?: StarterUsagePolicy;
+  relieverPolicy?: RelieverUsagePolicy;
+  /** リリーフ用の最大イニング制限 (デフォルト3) */
+  maxInnings?: number;
+}
 
 /** 1軍/2軍の所属レベル */
 export type RosterLevel = "ichi_gun" | "ni_gun";
@@ -20,15 +34,21 @@ export const ROSTER_DEFAULT = 65;
 export interface TeamLineupConfig {
   /** 打順 (9人のplayerID) */
   battingOrder: string[];
-  /** 先発ローテーション (5-6人のplayerID) */
+  /** 先発ローテーション (MAX 6人のplayerID) */
   startingRotation: string[];
-  /** 守護神のplayerID */
-  closerId: string | null;
-  /** セットアッパーのplayerID配列 */
-  setupIds: string[];
+  /** 明示的リリーフリスト (MAX 8人のplayerID) */
+  relieverIds?: string[];
   /** 次に投げる先発のインデックス */
   rotationIndex: number;
-  /** 先発の起用方針 (optional, デフォルト="performance") */
+  /** 投手個別の起用設定 (keyはplayerID) */
+  pitcherUsages?: Record<string, PitcherUsageConfig>;
+
+  // 旧フィールド（後方互換、optional化）
+  /** @deprecated pitcherUsagesに移行 */
+  closerId?: string | null;
+  /** @deprecated pitcherUsagesに移行 */
+  setupIds?: string[];
+  /** @deprecated pitcherUsagesに移行 */
   starterUsagePolicy?: StarterUsagePolicy;
 }
 

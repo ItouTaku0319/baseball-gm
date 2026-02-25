@@ -15,6 +15,7 @@ import {
   simulateToNextMyGame as simulateToNextMyGameEngine,
 } from "@/engine/season-advancement";
 import { autoConfigureLineup, autoAssignRosterLevels } from "@/engine/lineup";
+import type { PitcherUsageConfig, StarterUsagePolicy, RelieverUsagePolicy } from "@/models/team";
 import {
   simulatePlayoffGame,
   simulateAllPlayoffGames,
@@ -92,6 +93,59 @@ export const useGameStore = create<GameStore>((set, get) => ({
             levels[p.id] = "ichi_gun";
           }
           updated = { ...updated, rosterLevels: levels };
+        }
+        // lineupConfigはあるがpitcherUsagesが未設定 → 旧形式からマイグレーション
+        if (updated.lineupConfig && !updated.lineupConfig.pitcherUsages) {
+          const cfg = updated.lineupConfig;
+          const usages: Record<string, PitcherUsageConfig> = {};
+
+          // 先発の起用法: 旧starterUsagePolicyを各先発に展開
+          const oldPolicy = cfg.starterUsagePolicy ?? "performance";
+          // "stamina_limit" → "complete_game" に読み替え
+          const newStarterPolicy: StarterUsagePolicy =
+            (oldPolicy as string) === "stamina_limit" ? "complete_game" : oldPolicy as StarterUsagePolicy;
+          for (const id of cfg.startingRotation) {
+            usages[id] = { starterPolicy: newStarterPolicy };
+          }
+
+          // リリーフの起用法
+          const relieverIdList: string[] = [];
+
+          // closerId → closer
+          if (cfg.closerId) {
+            usages[cfg.closerId] = { relieverPolicy: "closer" as RelieverUsagePolicy, maxInnings: 1 };
+            relieverIdList.push(cfg.closerId);
+          }
+
+          // setupIds → close_game
+          for (const id of (cfg.setupIds ?? [])) {
+            usages[id] = { relieverPolicy: "close_game" as RelieverUsagePolicy, maxInnings: 2 };
+            relieverIdList.push(id);
+          }
+
+          // 残りのリリーフ（ローテにもcloser/setupにもいない1軍投手）→ behind_ok
+          const assignedIds = new Set([...cfg.startingRotation, ...relieverIdList]);
+          const remainingRelievers = updated.roster.filter(
+            (p) =>
+              p.isPitcher &&
+              !assignedIds.has(p.id) &&
+              (!updated.rosterLevels || updated.rosterLevels[p.id] === "ichi_gun")
+          );
+
+          for (const p of remainingRelievers) {
+            if (relieverIdList.length >= 8) break;
+            usages[p.id] = { relieverPolicy: "behind_ok" as RelieverUsagePolicy, maxInnings: 3 };
+            relieverIdList.push(p.id);
+          }
+
+          updated = {
+            ...updated,
+            lineupConfig: {
+              ...cfg,
+              pitcherUsages: usages,
+              relieverIds: relieverIdList,
+            },
+          };
         }
         if (updated !== team) newTeams[teamId] = updated;
       }
