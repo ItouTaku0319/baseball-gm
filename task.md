@@ -29,17 +29,24 @@ PMは以下の条件を**すべて**満たすタスクを自律的に実行し�
 - 優先度: HIGH
 - 自律: YES
 - 依存: なし
-- 対象ファイル: `engine/simulation.ts`, `models/player.ts`, `models/team.ts`, `store/game-store.ts`
+- 対象ファイル: `engine/simulation.ts`, `models/team.ts`
+- 実装ポイント:
+  - `simulateHalfInning()` 内の打順ループに代打判定を挿入
+  - `simulateGame()` 内のイニング間ループに守備固め判定を挿入
+  - 走者の代走は打席結果確定後、次の打席開始前に判定
+  - `TeamGameState` に `usedBatterIds: Set<string>` を追加（再出場防止）
+  - ベンチ選手は `team.roster` から `lineupBatterIds` と `usedBatterIds` を除外して取得
+  - 新規関数: `selectPinchHitter()`, `selectPinchRunner()`, `selectDefensiveReplacement()`
 - 完了条件:
-  - [ ] 代打: イニング間にベンチ野手と打順を入れ替えるAIロジック
-    - 条件: 8-9回、ビハインド時、打力の低い投手打席などで発動
-    - 代打後の選手は守備位置を引き継ぐか、さらに守備固めが入る
-  - [ ] 代走: 得点圏に走力の低い走者がいる場合、走力の高いベンチ選手と交代
-    - 条件: 7回以降、僅差、走力差20以上
-  - [ ] 守備固め: リード時の終盤に守備力の高い控え選手と交代
-    - 条件: 8-9回、リード時、守備力差15以上
+  - [ ] 代打: 打席開始前にベンチ野手との交代AIロジック
+    - 条件: 8-9回、ビハインド時、現打者のcontact+power合計が低い場合
+    - 代打後の選手はその守備位置を引き継ぐ
+  - [ ] 代走: 出塁後に走力の高いベンチ選手と交代
+    - 条件: 7回以降、僅差（±3点以内）、走力差20以上
+  - [ ] 守備固め: イニング間にリード時の終盤で守備力の高い控え選手と交代
+    - 条件: 8-9回、リード時、fielding差15以上
   - [ ] 交代後の選手はその試合に再出場不可
-  - [ ] playerStatsに途中交代の選手も正しく記録される
+  - [ ] playerStatsに途中交代の選手も正しく記録される（出場試合数、打席数等）
   - [ ] `npm run build` 成功
   - [ ] 1000試合バランステスト全指標正常
 
@@ -48,73 +55,153 @@ PMは以下の条件を**すべて**満たすタスクを自律的に実行し�
 - 自律: YES
 - 依存: なし
 - 対象ファイル: `engine/simulation.ts`, `engine/fielding-ai.ts`
+- 現状: バント関連の型定義・コード一切なし。AtBatResult型に"sacrifice_bunt"等の追加が必要
+- 実装ポイント:
+  - `simulateAtBat()` 内の確率チェーン（死球→四球→三振→インプレー）の前にバント判定を挿入
+  - バント打球はfielding-ai.tsで処理: 方向10-70°、速度30-60km/h、角度-5~5°のゴロとして生成
+  - AtBatResult型に `"sacrifice_bunt"` | `"bunt_hit"` | `"bunt_out"` を追加
+  - PO/A/E記録: バント処理は主に投手(P)・捕手(C)・一塁手(1B)・三塁手(3B)が関与
+  - BatterSeasonStats / PitcherSeasonStats に sacrificeBunts を追加
 - 完了条件:
-  - [ ] 犠牲バント: 走者1塁or2塁 + 0-1アウト + 投手or下位打線で発動
-    - 成功率: ミート依存で60-80%
-    - 失敗時: 三振/ファウル/フィルダースチョイス
-  - [ ] セーフティバント: 走力80以上 + 内野守備位置が深い場合に低確率で発動
-    - 成功率: 走力とミート依存で20-40%
-  - [ ] 投手の守備機会（バント処理）が増加すること
-  - [ ] PO/A/E が正しく記録される
+  - [ ] 犠牲バント判定: 走者1塁or2塁 + 0-1アウト + 打者がバント適性（投手 or contact<50の下位打線）
+    - 成功率: `0.60 + contact * 0.002`（contact50で70%、100で80%）
+    - 失敗時: ファウル(30%)→アウトカウントなし追加判定 / 三振(20%) / フィルダースチョイス(10%)
+  - [ ] セーフティバント: speed≥80の打者が低確率(3-5%)で試行
+    - 成功率: `0.20 + speed * 0.002 + contact * 0.001`
+  - [ ] 投手の守備機会（PO/A）がバント処理で増加すること
+  - [ ] 1000試合で犠打数がチームあたり30-60/シーズン（NPB準拠）
   - [ ] `npm run build` 成功
   - [ ] 1000試合バランステスト全指標正常
-  - [ ] バント関連の統計がGAME_SPEC.mdに追記される
+  - [ ] GAME_SPEC.mdにバント判定フローを追記
 
 ### GAME-003: GAME_SPEC.md の陳腐化修正
 - 優先度: HIGH
 - 自律: YES
 - 依存: なし
 - 対象ファイル: `GAME_SPEC.md`
+- 現状の問題（コード調査済み）:
+  - 「守備力: 現在シミュレーション未使用」→ fielding-ai.tsで到達速度・捕球率に使用中
+  - 「スタミナ: 現在シミュレーション未使用（完投固定）」→ STAMINA_PER_PITCH=0.7で消費、50%以下で疲労ペナルティ
+  - 「精神力: 現在シミュレーション未使用」→ **実際に未使用のまま**（simulation.ts行63,82,840で取得するが計算に不使用）
+  - 「先発が完投（リリーフ未実装）」→ 完全実装済み
+  - 「打順設定: 手動設定不可」→ 打順UIで手動設定可能
+  - 「盗塁: statsに項目あるがシミュレーション未使用」→ 実装済み
+  - 「セーブ: savePitcherId常にnull」→ セーブ/ホールド判定実装済み
 - 完了条件:
-  - [ ] 「守備力: 現在シミュレーション未使用」→ 守備AIでの使用を反映
-  - [ ] 「スタミナ: 現在シミュレーション未使用」→ 投手スタミナ消費を反映
-  - [ ] 「精神力: 現在シミュレーション未使用」→ 現在の使用状況を確認して更新
-  - [ ] 「先発が完投（リリーフ未実装）」→ 投手交代AIの実装を反映
-  - [ ] 「打順設定: 手動設定不可」→ 打順UI実装を反映
-  - [ ] 「未実装機能」セクションの内容を現状に合わせて更新
-  - [ ] 投手起用方針セクションを追加
-  - [ ] 弾道・Overall等の新機能を反映
+  - [ ] 上記すべての陳腐化記述を実コードに合わせて更新
+  - [ ] 精神力は「未使用」のまま正直に記載（GAME-007で活用予定と注記）
+  - [ ] 投手起用方針セクション追加（先発6種・リリーフ5種・maxInnings）
+  - [ ] 弾道(trajectory)セクション追加
+  - [ ] 選手総合値(Overall)の計算式セクション追加
+  - [ ] 守備AIセクションの記述をfielding-ai.tsの実装に合わせて更新
+  - [ ] 「未実装機能」セクションを現状に合わせて整理
 
 ### GAME-004: 得点期待値テーブルの実装
 - 優先度: MEDIUM
 - 自律: YES
 - 依存: なし
-- 対象ファイル: `engine/simulation.ts`（集計）, `app/game/[id]/analytics/page.tsx`（表示）
+- 対象ファイル: `app/game/[id]/analytics/page.tsx`（表示のみ、エンジン変更なし）
+- 実装ポイント:
+  - AtBatLogの `basesBeforePlay`(boolean[3]) + `outsBeforePlay`(0-2) で24状況を分類
+  - そのイニングの残り得点を「その打席以降のそのイニングの得点」として集計
+  - 集計はクライアントサイドでatBatLogsをループして計算（新規エンジン関数不要）
+  - analytics/page.tsx の新タブ or 既存タブ内のセクションとして表示
 - 完了条件:
   - [ ] 塁状況(8パターン) × アウト数(3パターン) = 24パターンの期待得点を集計
-  - [ ] シーズンのatBatLogsから算出（basesBeforePlay + outsBeforePlay を使用）
-  - [ ] analytics/page.tsx にヒートマップ形式で表示
-  - [ ] NPBの一般的な期待値（無走者0アウト≈0.45, 満塁0アウト≈2.2 etc.）と大きく乖離しない
+  - [ ] analytics/page.tsx にヒートマップ or テーブル形式で表示
+  - [ ] 各セルにサンプル数(N)を表示（信頼度の目安）
+  - [ ] NPBの一般的な期待値と概ね一致（無走者0アウト≈0.4-0.5、満塁0アウト≈2.0-2.5）
   - [ ] `npm run build` 成功
 
 ### GAME-005: けが・故障システム
 - 優先度: MEDIUM
 - 自律: YES
 - 依存: GAME-001（途中交代の仕組みが前提）
-- 対象ファイル: `engine/simulation.ts`, `models/player.ts`, `store/game-store.ts`
+- 対象ファイル: `models/player.ts`, `engine/simulation.ts`, `engine/season-advancement.ts`, `store/game-store.ts`, `app/game/[id]/page.tsx`
+- 現状: Player型にinjury関連フィールドなし。season-advancement.tsの`simulateDay()`末尾が日次回復処理の挿入ポイント
+- 実装ポイント:
+  - Player型に `injury?: { type: 'minor'|'moderate'|'severe'; daysRemaining: number; description: string }` を追加
+  - 試合中の故障: `simulateAtBat()`内でインプレー時に低確率で発生判定
+  - 日次回復: `season-advancement.ts`の`simulateDay()`戻り値直前に`recoverInjuredPlayers()`を挿入
+  - 故障選手の自動2軍降格: `rosterLevels[playerId] = 'ni_gun'` に自動変更
+  - ダッシュボード: 故障者リスト（選手名・故障内容・残り日数）をカード表示
 - 完了条件:
-  - [ ] 試合中に低確率（1試合あたり0.5-1%）で故障発生
-  - [ ] 故障レベル: 軽傷（1-2週間）/ 中傷（1-2ヶ月）/ 重傷（シーズン全休）
-  - [ ] 故障中の選手は出場不可、自動で2軍に降格
-  - [ ] 故障からの復帰（離脱日数経過で自動復帰 or 手動昇格）
-  - [ ] Player型に injuryStatus / injuryDaysRemaining を追加
+  - [ ] 試合中に低確率（全打席の0.1-0.2%）で故障発生
+  - [ ] 故障レベル: 軽傷（7-14日）/ 中傷（30-60日）/ 重傷（残りシーズン全休）
+    - 発生比率: 軽傷70% / 中傷25% / 重傷5%
+  - [ ] 故障中の選手は試合出場不可（打順・ローテから自動除外）
+  - [ ] 日次進行で`daysRemaining`を減算、0になったら故障解除
   - [ ] ダッシュボードに故障者リスト表示
-  - [ ] 既存セーブデータとの互換性（マイグレーション）
+  - [ ] 既存セーブデータとの互換性（`injury`フィールドはoptionalなので `?? undefined` で互換）
   - [ ] `npm run build` 成功
+  - [ ] 143試合シーズンでチームあたり5-15件程度の故障が発生すること
 
 ### GAME-006: サブポジション対応
 - 優先度: MEDIUM
 - 自律: YES
 - 依存: なし
-- 対象ファイル: `models/player.ts`, `engine/player-generator.ts`, `app/game/[id]/roster/page.tsx`
+- 対象ファイル: `models/player.ts`, `engine/player-generator.ts`, `app/game/[id]/roster/page.tsx`, `engine/simulation.ts`
+- 現状: Player型にpositionフィールド（プライマリのみ）。subPositions関連なし。simulation.tsのbuildFielderMap()は打順から1対1でポジション割り当て
+- 実装ポイント:
+  - Player型に `subPositions?: Position[]` を追加（最大2つ）
+  - 選手生成時に近接ポジションを付与（ポジション隣接マップを定義）
+  - `buildFielderMap()`で打順のpositionとsubPositionsの両方を考慮
+  - 守備力補正: サブポジション時は `fielding * 0.80` を適用
+- ポジション隣接マップ:
+  ```
+  C → 1B
+  1B → 3B, C
+  2B → SS, 3B
+  3B → 1B, 2B, SS
+  SS → 2B, 3B
+  LF → CF, RF
+  CF → LF, RF
+  RF → LF, CF
+  P → なし
+  ```
 - 完了条件:
-  - [ ] Player型にsubPositions: Position[]を追加（最大2つ）
-  - [ ] 選手生成時にメインポジションの近接ポジションを20-40%の確率で付与
-    - 例: SS → 2B/3B、CF → LF/RF、C → 1B
-  - [ ] サブポジション時の守備力はメインの70-90%
-  - [ ] ロスターページにサブポジション表示
+  - [ ] Player型にsubPositions?: Position[]を追加（最大2つ）
+  - [ ] 選手生成時にメインポジションの隣接ポジションを30%の確率で1つ、10%で2つ付与
+  - [ ] サブポジション時の守備力はメインの80%
+  - [ ] ロスターページにサブポジション表示（メインの横に小さく表記）
   - [ ] 打順設定でサブポジションへの配置を許可
   - [ ] 既存セーブデータとの互換性（`?? []` でデフォルト）
+  - [ ] `npm run build` 成功
+
+### GAME-007: 精神力(mentalToughness)のシミュレーション活用
+- 優先度: LOW
+- 自律: YES
+- 依存: なし
+- 対象ファイル: `engine/simulation.ts`
+- 現状: `getEffectivePitcherAbilities()`で取得されるが、一切計算に使われていない（行63,82,840）
+- 実装ポイント:
+  - `getEffectivePitcherAbilities()`の戻り値は既にmentalToughnessを含む
+  - 活用案（どれか1-2個に絞る）:
+    - **ピンチ時の制球安定**: 得点圏走者あり時に `control += mentalToughness * 0.1`
+    - **リード/ビハインド時の安定**: 点差が大きいとパフォーマンス変動（精神力高→安定、低→不安定）
+    - **疲労耐性**: スタミナ50%以下時の疲労ペナルティを精神力で軽減
+- 完了条件:
+  - [ ] mentalToughnessがシミュレーション結果に影響する計算式を最低1つ実装
+  - [ ] 影響は微調整レベル（±5%以内）に抑える（ゲームバランス破壊防止）
+  - [ ] GAME_SPEC.mdに精神力の効果を記載
+  - [ ] `npm run build` 成功
+  - [ ] 1000試合バランステスト全指標正常（精神力の影響で大きくブレないこと）
+
+### GAME-008: リリーフ投手の連投制限
+- 優先度: HIGH
+- 自律: YES
+- 依存: なし
+- 対象ファイル: `engine/simulation.ts`, `models/team.ts`, `engine/season-advancement.ts`
+- 現状: **未コミットの実装が既に存在**（simulation.ts, team.ts, lineup.tsに差分あり）
+  - `TeamLineupConfig`に`pitcherAppearances?: Record<string, number>`追加済み
+  - `selectNextPitcher()`に連投制限フィルター`isAvailableByFatigue()`追加済み
+  - 3連投以上→登板不可、2連投→behind_ok/mop_upは登板不可
+  - lineup.tsのmaxInnings調整(close_game:2→1, behind_ok/mop_up:3→2)
+- 完了条件:
+  - [ ] 未コミット変更の動作確認とコミット
+  - [ ] season-advancement.tsで`pitcherAppearances`の日次更新（登板日+1、非登板日リセット）が正しく動作
+  - [ ] 1000試合バランステストで完投以外の試合でリリーフが適切にローテーションすること
+  - [ ] GAME_SPEC.mdに連投制限ルールを追記
   - [ ] `npm run build` 成功
 
 ---
@@ -234,3 +321,9 @@ PMは以下の条件を**すべて**満たすタスクを自律的に実行し�
 - 守備力・肩力・捕球の能力値をツールチップ表示
 - 送球アニメーション
 - 前提データ: AtBatLogのfielderPositionで取得可能
+
+### 選手詳細ページの新規作成
+- 現状: 選手の能力・成績は各ページに分散（ロスター、成績、打球分析、投球分析）
+- 提案: 選手個別の詳細ページを作成し、能力値・シーズン成績・キャリア推移・打球分析・投球分析を1画面に集約
+- 球種ビジュアル表示（保留中）もここで解決できる可能性あり
+- ルート: `/game/[id]/player/[playerId]`
