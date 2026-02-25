@@ -1,5 +1,5 @@
 import type { Team } from "@/models/team";
-import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog, FieldingTrace, FielderMovement, FielderAction } from "@/models/league";
+import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog, FieldingTrace, FielderMovement } from "@/models/league";
 import type { Player, Position, PitchRepertoire, PitchType, Injury } from "@/models/player";
 import { calcBallLanding, evaluateFielders, resolveHitTypeFromLanding, DEFAULT_FIELDER_POSITIONS } from "./fielding-ai";
 import type { BallLanding, FielderDecision } from "./fielding-ai";
@@ -536,18 +536,24 @@ function assignPopupFielder(direction: number): FielderPosition {
 }
 
 
-/** fieldingResultから最も到達が早い野手を探す */
+/** fieldingResultからcanReach=trueの野手のうち最も近い野手を探す */
 function findBestFielder(
   fieldingResult: Map<FielderPosition, FielderDecision>
 ): FielderDecision | null {
   let best: FielderDecision | null = null;
-  for (const decision of fieldingResult.values()) {
-    if (decision.role === "primary") return decision;
-  }
-  for (const decision of fieldingResult.values()) {
-    if (!best || decision.timeToReach < best.timeToReach) {
-      best = decision;
+  // canReach=true の全野手から最短距離を選ぶ
+  for (const d of fieldingResult.values()) {
+    if (!d.canReach) continue;
+    if (!best
+      || (d.distanceAtLanding ?? d.distanceToBall)
+       < (best.distanceAtLanding ?? best.distanceToBall)) {
+      best = d;
     }
+  }
+  if (best) return best;
+  // 誰も到達不能 → 最短距離の野手
+  for (const d of fieldingResult.values()) {
+    if (!best || d.distanceToBall < best.distanceToBall) best = d;
   }
   return best;
 }
@@ -845,7 +851,7 @@ function resolveGroundBall(
   const runnerSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
   const timePerBase = BASE_LENGTH / runnerSpeed;
 
-  if (best.timeToReach <= best.ballArrivalTime) {
+  if (best.canReach) {
     // === 野手がボール到達前に到着 → 捕球試行 ===
 
     // ゴロ捕球成功率: 非常に高い (97-99.5%)
@@ -928,18 +934,17 @@ function resolveGroundBall(
       (d.posAtLanding.y - landing.position.y) ** 2
     );
   };
-  // まず外野手(pos 7-9)から最短距離の回収者を探す
+  // retrievalCandidate=true の野手から最短距離の回収者を探す
   let retriever: FielderDecision | null = null;
   let minDist = Infinity;
   for (const decision of fieldingResult.values()) {
-    if (decision.position < 7) continue; // 内野手・P・Cは候補外
+    if (!(decision.retrievalCandidate ?? false)) continue;
     const d = distToLanding(decision);
     if (d < minDist) {
       minDist = d;
       retriever = decision;
     }
   }
-  // 外野手が見つからない場合のフォールバック（通常起こらない）
   if (!retriever) retriever = best;
 
   // 回収 → 送球 → 走者の進塁判定
@@ -1026,16 +1031,11 @@ function resolveFlyOrLineDrive(
       (d.posAtLanding.y - landing.position.y) ** 2
     );
   };
-  // primaryの守備位置を5m以上超えた打球はOFが回収
-  // 浅い打球はP,C以外の最短距離野手が回収
-  const primaryDefPosFly = DEFAULT_FIELDER_POSITIONS.get(best.position);
-  const ballDeepEnough = best.position >= 7
-    || (primaryDefPosFly != null && landing.position.y > primaryDefPosFly.y + 5);
+  // retrievalCandidate=true の野手から最短距離の回収者を探す
   let retriever: FielderDecision | null = null;
   let minDistFly = Infinity;
   for (const decision of fieldingResult.values()) {
-    if (decision.position <= 2) continue; // P, Cは候補外
-    if (ballDeepEnough && decision.position < 7) continue; // 深い打球はOFのみ
+    if (!(decision.retrievalCandidate ?? false)) continue;
     const d = distToLandingFly(decision);
     if (d < minDistFly) {
       minDistFly = d;

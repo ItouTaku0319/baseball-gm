@@ -736,7 +736,11 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
   // アニメーション中の軌跡ライン（currentTime/totalTime の割合で trailPoints を切り出す）
   // フライフェーズとバウンドフェーズの境界インデックスを計算
   // ゴロは全てバウンドフェーズ扱い（点線）
-  const flightTrailRatio = isGrounder ? 0 : (totalTime > 0 ? flightTime / totalTime : 1);
+  // フェンス直撃時はフェンス到達時間を使用（自然落下時間と異なる）
+  const effectiveFlightTime = isFenceHit
+    ? Math.min(getFenceArrivalTime(exitVelocity, Math.max(launchAngle, 5), direction, distScale), flightTime)
+    : flightTime;
+  const flightTrailRatio = isGrounder ? 0 : (totalTime > 0 ? effectiveFlightTime / totalTime : 1);
   const flightTrailEndIdx = Math.floor(flightTrailRatio * trailPoints.length);
 
   const trailEnd = isAnimating && totalTime > 0
@@ -1521,7 +1525,9 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
         // フライフェーズ: フェンスまで
         const fenceArrival = getFenceArrivalTime(exitVelocity, Math.max(launchAngle, 5), direction, distScale);
         const flightToFence = Math.min(fenceArrival, flightTime);
-        const flightSteps = Math.ceil(steps * 0.6);
+        const fenceBounceForRatio = getFenceBounceBackStateAtTime(fenceDistForDir, direction, exitVelocity, launchAngle, 999);
+        const fenceTotalTime = flightToFence + (fenceBounceForRatio?.totalBounceTime ?? 1.0);
+        const flightSteps = Math.max(1, Math.ceil(steps * (flightToFence / fenceTotalTime)));
         for (let i = 0; i <= flightSteps; i++) {
           const t = (i / flightSteps) * flightToFence;
           const state = getBallStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, t, distScale);

@@ -14,6 +14,7 @@ export const GROUND_BALL_ANGLE_THRESHOLD = 10; // ゴロ判定角度上限 (度)
 export const GROUND_BALL_MAX_DISTANCE = 55;    // ゴロ最大到達距離 (m)
 export const GROUND_BALL_SPEED_FACTOR = 1.2;   // ゴロ距離変換係数
 export const GROUND_BALL_AVG_SPEED_RATIO = 0.7; // ゴロ平均速度比
+export const GROUND_BALL_BOUNCE_ANGLE_SCALE = 30; // 叩きつけ減衰スケール (度, この角度で全エネルギー損失)
 
 // 弾道キャリーファクター (弾道1-4)
 // FLIGHT_TIME_FACTOR統一による飛距離短縮(×0.85)を補正

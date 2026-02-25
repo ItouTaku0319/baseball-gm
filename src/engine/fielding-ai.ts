@@ -3,7 +3,7 @@ import type { FielderAction } from "../models/league";
 import {
   GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR,
   GROUND_BALL_ANGLE_THRESHOLD, GROUND_BALL_MAX_DISTANCE,
-  GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO,
+  GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO, GROUND_BALL_BOUNCE_ANGLE_SCALE,
   FIELDER_CATCH_RADIUS,
 } from "./physics-constants";
 import { assignFielderDuties, getBallZone } from "./fielding-assignments";
@@ -34,6 +34,7 @@ export interface FielderDecision {
   posAtLanding?: { x: number; y: number }; // ボール到達時点での野手座標
   action?: FielderAction;     // 移動アクション種別
   targetPos?: { x: number; y: number }; // 移動目標座標
+  retrievalCandidate?: boolean; // 回収候補かどうか
 }
 
 /** 打球の着地情報 */
@@ -57,9 +58,9 @@ export const DEFAULT_FIELDER_POSITIONS: ReadonlyMap<FielderPosition, FieldPositi
   [4, { x: 10,  y: 36   }], // 2B
   [5, { x: -20, y: 28   }], // 3B
   [6, { x: -10, y: 36   }], // SS
-  [7, { x: -26, y: 62   }], // LF
-  [8, { x: 0,   y: 70   }], // CF
-  [9, { x: 26,  y: 62   }], // RF
+  [7, { x: -28, y: 72   }], // LF (フェンス95m × 76%)
+  [8, { x: 0,   y: 78   }], // CF (フェンス118m × 66%)
+  [9, { x: 28,  y: 72   }], // RF (フェンス95m × 76%)
 ]);
 
 /** 投手は pitching 側、野手は batting 側から守備能力を取得 */
@@ -98,7 +99,11 @@ export function calcBallLanding(
   if (isGroundBall) {
     // ゴロ: 摩擦減速モデル
     const v0 = exitVelocity / 3.6; // km/h → m/s
-    const groundDistance = Math.min(GROUND_BALL_MAX_DISTANCE, v0 * GROUND_BALL_SPEED_FACTOR);
+    // 叩きつけ角度による減衰: 負の角度が大きいほどバウンドでエネルギー損失
+    const bounceFactor = launchAngle < 0
+      ? Math.max(0.3, 1 + launchAngle / GROUND_BALL_BOUNCE_ANGLE_SCALE)
+      : 1.0;
+    const groundDistance = Math.min(GROUND_BALL_MAX_DISTANCE, v0 * GROUND_BALL_SPEED_FACTOR) * bounceFactor;
     const groundTime = groundDistance / (v0 * GROUND_BALL_AVG_SPEED_RATIO);
 
     const x = groundDistance * Math.sin(angleRad);
@@ -233,6 +238,28 @@ export function evaluateFielders(
             y: projDist * pathDirY,
           };
           action = "charge";
+
+          // チェイスフォールバック:
+          // 経路上の捕球が間に合わない → ボール停止位置まで走って拾う
+          if (!canReach) {
+            const chaseDx = landing.position.x - fielderPos.x;
+            const chaseDy = landing.position.y - fielderPos.y;
+            const chaseDist = Math.sqrt(
+              chaseDx * chaseDx + chaseDy * chaseDy,
+            );
+            const chaseTime = reactionTime + chaseDist / runSpeed;
+            if (chaseTime <= landing.flightTime + 1.0) {
+              canReach = true;
+              distanceToBall = chaseDist;
+              timeToReach = chaseTime;
+              ballArrival = landing.flightTime;
+              targetPos = {
+                x: landing.position.x,
+                y: landing.position.y,
+              };
+              action = "field_ball";
+            }
+          }
         } else {
           // 野手の射影がボール経路外（外野手等）→ ボール停止位置へ走る
           const dx = landing.position.x - fielderPos.x;
@@ -260,8 +287,8 @@ export function evaluateFielders(
       distanceAtLanding = Math.sqrt(
         (posAtLanding.x - targetPos.x) ** 2 + (posAtLanding.y - targetPos.y) ** 2
       );
-    } else if (pos >= 7 && isFlyOrLine) {
-      // 外野手のフライ/ライナー: 着地点への移動
+    } else if (pos >= 7) {
+      // 外野手のフライ/ライナー/ポップフライ: 着地点への移動
       const dx = landing.position.x - fielderPos.x;
       const dy = landing.position.y - fielderPos.y;
       distanceToBall = Math.sqrt(dx * dx + dy * dy);
@@ -326,14 +353,15 @@ export function evaluateFielders(
         canReach = false;
       }
     } else {
-      // P(1), C(2): 特殊処理
+      // P(1), C(2): 非ゴロ時の特殊処理
+      // ゴロ時は上の分岐(204行目)で通常の経路射影ロジックが適用される
       const dx = landing.position.x - fielderPos.x;
       const dy = landing.position.y - fielderPos.y;
       distanceToBall = Math.sqrt(dx * dx + dy * dy);
       ballArrival = landing.flightTime;
 
       if (pos === 2) {
-        // キャッチャー: 常にホーム待機
+        // キャッチャー: フライ/ライナー時はホーム待機
         timeToReach = reactionTime + distanceToBall / runSpeed;
         canReach = false;
         targetPos = { x: fielderPos.x, y: fielderPos.y };
@@ -454,6 +482,7 @@ export function evaluateFielders(
     let finalTargetPos = e.targetPos;
     let finalDistanceAtLanding = e.distanceAtLanding;
     let finalPosAtLanding = e.posAtLanding;
+    let finalRetrievalCandidate = e.pos === primaryPos; // primaryは常に回収候補
 
     // primary以外: assignmentでアクションを上書き
     if (e.pos !== primaryPos && dutyAssignments) {
@@ -461,6 +490,7 @@ export function evaluateFielders(
       if (assignment) {
         finalAction = assignment.action;
         finalTargetPos = assignment.targetPos;
+        finalRetrievalCandidate = assignment.retrievalCandidate;
         role = assignment.action === "cover_base" ? "cover_base"
           : assignment.action === "relay" ? "relay"
           : assignment.action === "backup" ? "backup"
@@ -497,13 +527,14 @@ export function evaluateFielders(
       distanceToBall: e.distanceToBall,
       timeToReach: e.timeToReach,
       ballArrivalTime: e.ballArrivalTime,
-      canReach: e.pos === primaryPos ? e.canReach : false,
+      canReach: e.canReach,
       skill,
       speed: e.speed,
       distanceAtLanding: finalDistanceAtLanding,
       posAtLanding: finalPosAtLanding,
       action: finalAction,
       targetPos: finalTargetPos,
+      retrievalCandidate: finalRetrievalCandidate,
     });
   }
 

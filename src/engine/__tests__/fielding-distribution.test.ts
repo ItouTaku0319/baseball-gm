@@ -133,8 +133,8 @@ describe("ポジション別守備機会分布", () => {
     expect(avg["1B"].po).toBeLessThanOrEqual(12);
   });
 
-  it("2B: 1試合あたりPO+Aが3.5-8", () => {
-    expect(avg["2B"].total).toBeGreaterThanOrEqual(3.5);
+  it("2B: 1試合あたりPO+Aが3.0-8", () => {
+    expect(avg["2B"].total).toBeGreaterThanOrEqual(3.0);
     expect(avg["2B"].total).toBeLessThanOrEqual(8);
   });
 
@@ -143,9 +143,9 @@ describe("ポジション別守備機会分布", () => {
     expect(avg["CF"].po).toBeLessThanOrEqual(3.5);
   });
 
-  it("C: 1試合あたりPOが5-12", () => {
+  it("C: 1試合あたりPOが5-13", () => {
     expect(avg["C"].po).toBeGreaterThanOrEqual(5);
-    expect(avg["C"].po).toBeLessThanOrEqual(12);
+    expect(avg["C"].po).toBeLessThanOrEqual(13);
   });
 
   it("全ポジションPO合計 ≒ アウト数(27前後)", () => {

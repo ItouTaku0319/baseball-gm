@@ -102,11 +102,11 @@ function assignGroundBallDuties(
     if (pos === primaryPos) continue;
 
     switch (pos) {
-      case 2: // C: 常にホーム
+      case 2: // C: ホーム待機（ゴロ時は回収候補）
         assignments.set(pos, {
           action: "hold",
           targetPos: BASES.home,
-          retrievalCandidate: false,
+          retrievalCandidate: true,
         });
         break;
 
@@ -115,13 +115,13 @@ function assignGroundBallDuties(
           assignments.set(pos, {
             action: "cover_base",
             targetPos: BASES.first,
-            retrievalCandidate: false,
+            retrievalCandidate: false, // 1Bカバー中は回収に行けない
           });
         } else {
           assignments.set(pos, {
             action: "hold",
             targetPos: { x: 0, y: 18.4 },
-            retrievalCandidate: false,
+            retrievalCandidate: true, // マウンド付近のゴロは回収可能
           });
         }
         break;
@@ -253,13 +253,13 @@ function assignFlyBallDuties(
           assignments.set(pos, {
             action: "relay",
             targetPos: calcCutoffPos(landingPos),
-            retrievalCandidate: false,
+            retrievalCandidate: false, // カットオフ位置に留まる
           });
         } else {
           assignments.set(pos, {
             action: "cover_base",
             targetPos: BASES.third,
-            retrievalCandidate: false,
+            retrievalCandidate: true, // 浅いフライの回収可能
           });
         }
         break;
@@ -269,13 +269,13 @@ function assignFlyBallDuties(
           assignments.set(pos, {
             action: "relay",
             targetPos: calcCutoffPos(landingPos),
-            retrievalCandidate: false,
+            retrievalCandidate: false, // カットオフ位置に留まる
           });
         } else {
           assignments.set(pos, {
             action: "cover_base",
             targetPos: BASES.second,
-            retrievalCandidate: false,
+            retrievalCandidate: true, // 浅いフライの回収可能
           });
         }
         break;
@@ -284,7 +284,7 @@ function assignFlyBallDuties(
         assignments.set(pos, {
           action: "cover_base",
           targetPos: BASES.first,
-          retrievalCandidate: false,
+          retrievalCandidate: true, // 浅いフライの回収可能
         });
         break;
 
@@ -292,7 +292,7 @@ function assignFlyBallDuties(
         assignments.set(pos, {
           action: "cover_base",
           targetPos: BASES.third,
-          retrievalCandidate: false,
+          retrievalCandidate: true, // 浅いフライの回収可能
         });
         break;
     }
@@ -308,9 +308,9 @@ function getDefaultPos(pos: FielderPosition): { x: number; y: number } {
     4: { x: 10,  y: 36   },
     5: { x: -20, y: 28   },
     6: { x: -10, y: 36   },
-    7: { x: -26, y: 62   },
-    8: { x: 0,   y: 70   },
-    9: { x: 26,  y: 62   },
+    7: { x: -28, y: 72   },
+    8: { x: 0,   y: 78   },
+    9: { x: 28,  y: 72   },
   };
   return defaults[pos];
 }
