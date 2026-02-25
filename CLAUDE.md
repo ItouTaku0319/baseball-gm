@@ -174,30 +174,39 @@ PMは常に人間に状況が伝わる状態を維持すること。
 
 ### メンバー
 
-| 役割 | エージェント名 | モデル | 権限 |
+| 役割 | エージェント名 | モデル | 担当領域 |
 |---|---|---|---|
-| PM（あなた自身） | メインセッション | opus | 全権限 |
-| 実装くん | `implementer` | sonnet | Read/Write/Edit/Bash |
-| テストくん | `tester` | haiku | Read/Bash（読み取り専用） |
-| レビューくん | `reviewer` | sonnet | Read/Grep（編集不可） |
+| PM（あなた自身） | メインセッション | opus | 全体統括・タスク分解・Git操作 |
+| エンジン実装くん | `impl-engine` | sonnet | simulation/fielding-ai/physics/season |
+| UI実装くん | `impl-ui` | sonnet | app/pages/components |
+| データ実装くん | `impl-data` | sonnet | models/store/GAME_SPEC/docs |
+| テストくん | `tester` | haiku | 動作検証（読み取り専用） |
+| レビューくん | `reviewer` | sonnet | コードレビュー（編集不可） |
+| ガーディアン | `guardian` | sonnet | 品質監査（編集不可） |
 
 ### ワークフロー
 
 ```
 1. PM: task.md を読み、タスクを分解
-2. PM → 実装くん: 実装を委譲（Taskツールで呼び出し）
+2. PM → 適切な実装くん: 実装を委譲（Taskツールで呼び出し）
+   - エンジン層の変更 → impl-engine
+   - UI/ページの変更 → impl-ui
+   - 型定義/ストア/ドキュメント → impl-data
+   - 複数領域にまたがる場合 → 依存順に順次委譲
 3. 実装くん: コード実装 → npm run build → 結果を返す
 4. [自動] hook: build + lint チェック → 失敗時はPMに通知
-5. PM → レビューくん: コードレビューを委譲（大きい変更の場合）
-6. PM: 問題があれば実装くんに差し戻し
+5. PM → ガーディアン: 品質監査を委譲（大きい変更の場合）
+6. PM: 問題があれば適切な実装くんに差し戻し
 7. PM: git add → commit（日本語で変更内容を要約） → push origin
 8. PM: task.md を更新
 ```
 
 ### 運用ルール
-- テストくん・レビューくんはコードを編集しない（指摘のみ）
-- 複数の独立したタスクは並列で実装くんに委譲してよい
-- `models/player.ts` や `store/game-store.ts` を触るタスクは並列にしない
+- テストくん・レビューくん・ガーディアンはコードを編集しない（指摘のみ）
+- 異なる領域の実装くんは並列委譲OK（例: impl-engine + impl-ui）
+- 同じ領域、または `models/player.ts` `store/game-store.ts` を触るタスクは並列にしない
+- ガーディアンはシミュレーション変更・型変更・大きな機能追加時に呼ぶ
+- レビューくんは大きな機能実装の後に呼ぶ。小さな修正では省略可
 
 ### 自動化（Hooks）
 以下はhooksで自動実行されるため、PMが手動で呼ぶ必要はない:
@@ -205,7 +214,6 @@ PMは常に人間に状況が伝わる状態を維持すること。
 - **実装くん完了後**: 自動で build + lint チェック → 通過後はPMにcommit&push指示が出る
 
 テストくんを明示的に呼ぶのは、hookでカバーできない深いコード検証が必要な場合のみ。
-レビューくんは大きな機能実装の後に呼ぶ。小さな修正では省略可。
 
 ### Git運用
 - QAチェック通過後、PMが `git add` → `git commit` → `git push origin` を実行する

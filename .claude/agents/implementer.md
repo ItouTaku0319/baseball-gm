@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: コード実装担当。機能実装・リファクタリングを行う。実装完了後は必ず npm run build で確認する。
+description: 汎用実装担当（フォールバック）。領域横断や小規模修正に使用。通常はimpl-engine/impl-ui/impl-dataを優先する。
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---
