@@ -84,11 +84,11 @@ export function autoConfigureLineup(team: Team): TeamLineupConfig {
     if (i === 0) {
       pitcherUsages[id] = { relieverPolicy: "closer", maxInnings: 1 };
     } else if (i <= 2) {
-      pitcherUsages[id] = { relieverPolicy: "close_game", maxInnings: 2 };
+      pitcherUsages[id] = { relieverPolicy: "close_game", maxInnings: 1 };
     } else if (i <= 5) {
-      pitcherUsages[id] = { relieverPolicy: "behind_ok", maxInnings: 3 };
+      pitcherUsages[id] = { relieverPolicy: "behind_ok", maxInnings: 1 };
     } else {
-      pitcherUsages[id] = { relieverPolicy: "mop_up", maxInnings: 3 };
+      pitcherUsages[id] = { relieverPolicy: "mop_up", maxInnings: 1 };
     }
   });
 

@@ -307,6 +307,8 @@ https://1point02.jp/op/gnav/glossary/gls_index.aspx?cp=101
 
 - **投手起用方針の個別設定+投手枠拡張**: 旧来の全先発共通`starterUsagePolicy`(3種)+`closerId`+`setupIds`構造を、投手個別の`pitcherUsages: Record<string, PitcherUsageConfig>`+`relieverIds`(MAX8)に移行。先発6種(complete_game/win_eligible/performance/stamina_save/opener/short_starter)、リリーフ5種(closer/lead_only/close_game/behind_ok/mop_up)。リリーフのmaxInnings制限(デフォルト: closer=1,close_game/lead_only=2,behind_ok/mop_up=3)で283イニング問題を根本解決。PitcherGameStateにbattersFacedを追加(ショートスターター判定用)。旧セーブからの自動マイグレーション実装(loadGame内)。complete_gameポリシーのみ8-9回の守護神/SU継投判定をスキップ。
 
+- **継投バランス修正+包括的テスト**: リリーフ酷使問題を解決。(1) maxInningsデフォルトを全リリーフ1に引き下げ（旧: close_game=2, behind_ok/mop_up=3）。(2) `TeamLineupConfig.pitcherAppearances`で連続登板日数を追跡、4連投以上は登板不可。`selectNextPitcher()`で同じ役割の投手が複数いる場合、連投日数が少ない投手を優先選択（負荷分散）。(3) `season-advancement.ts`に`updatePitcherAppearances()`追加、試合後に全リリーフの連投状態を更新。(4) `comprehensive-balance.test.ts`新規作成: 12チーム×100試合のミニシーズンで打撃・投手・継投の全指標をNPBベンチマークと照合。修正結果: 最多リリーフIP 208.9→94(55%減)、規定超えリリーフ14→0人、投手交代/試合2.2→4.2(NPB範囲内)、リリーフ平均IP/登板1.69→0.85(NPB範囲内)。
+
 ## 既知の問題
 <!-- 今は直さないが把握しておくべき問題を記録する。 -->
 

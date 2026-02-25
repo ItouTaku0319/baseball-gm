@@ -16,7 +16,7 @@ export type RelieverUsagePolicy =
 export interface PitcherUsageConfig {
   starterPolicy?: StarterUsagePolicy;
   relieverPolicy?: RelieverUsagePolicy;
-  /** リリーフ用の最大イニング制限 (デフォルト3) */
+  /** リリーフ用の最大イニング制限 (デフォルト1) */
   maxInnings?: number;
 }
 
@@ -42,6 +42,8 @@ export interface TeamLineupConfig {
   rotationIndex: number;
   /** 投手個別の起用設定 (keyはplayerID) */
   pitcherUsages?: Record<string, PitcherUsageConfig>;
+  /** リリーフ投手の連続登板日数 (playerId → 連続登板日数) */
+  pitcherAppearances?: Record<string, number>;
 
   // 旧フィールド（後方互換、optional化）
   /** @deprecated pitcherUsagesに移行 */

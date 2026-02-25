@@ -1204,7 +1204,7 @@ function shouldChangePitcher(
 
   // === リリーフ投手 ===
   if (!isStarter) {
-    const maxInn = usage?.maxInnings ?? 3;
+    const maxInn = usage?.maxInnings ?? 1;
     const inningsPitched = pitcherState.log.inningsPitched / 3;
     if (inningsPitched >= maxInn) return true;
     if (ratio <= 0.20) return true;
@@ -1294,13 +1294,42 @@ function selectNextPitcher(
   if (available.length === 0) return null;
 
   const leadAmount = teamScore - opponentScore;
+  const appearances = config?.pitcherAppearances;
 
-  // ヘルパー: ポリシーに一致する利用可能な投手を探す
+  // 連投制限フィルター: 4連投以上は登板不可
+  const isAvailableByFatigue = (p: Player): boolean => {
+    if (!appearances) return true;
+    const consecutive = appearances[p.id] ?? 0;
+    if (consecutive >= 4) return false;
+    return true;
+  };
+
+  // 連投制限を適用した利用可能投手
+  let fresh = available.filter(isAvailableByFatigue);
+  // 全員使用不可 → 連投制限を無視して最も連投日数が少ない投手を選択
+  if (fresh.length === 0) {
+    if (appearances) {
+      const sorted = [...available].sort((a, b) =>
+        (appearances[a.id] ?? 0) - (appearances[b.id] ?? 0)
+      );
+      fresh = [sorted[0]];
+    } else {
+      fresh = available;
+    }
+  }
+
+  // ヘルパー: ポリシーに一致する利用可能な投手を探す（連投少ない投手を優先）
   const findByPolicy = (...policies: string[]): Player | undefined => {
     if (!usages) return undefined;
     for (const policy of policies) {
-      const found = available.find(p => usages[p.id]?.relieverPolicy === policy);
-      if (found) return found;
+      const candidates = fresh.filter(p => usages[p.id]?.relieverPolicy === policy);
+      if (candidates.length === 0) continue;
+      if (candidates.length === 1) return candidates[0];
+      // 連投日数が少ない投手を優先選択（負荷分散）
+      if (appearances) {
+        candidates.sort((a, b) => (appearances[a.id] ?? 0) - (appearances[b.id] ?? 0));
+      }
+      return candidates[0];
     }
     return undefined;
   };
@@ -1339,8 +1368,8 @@ function selectNextPitcher(
     }
 
     // フォールバック: closer以外の先頭
-    const nonCloser = available.find(p => usages[p.id]?.relieverPolicy !== "closer");
-    return nonCloser ?? available[0];
+    const nonCloser = fresh.find(p => usages[p.id]?.relieverPolicy !== "closer");
+    return nonCloser ?? fresh[0];
   }
 
   // === 旧方式フォールバック ===
@@ -1348,33 +1377,33 @@ function selectNextPitcher(
   const setupIds = new Set(config?.setupIds ?? []);
 
   if (inning >= 9 && leadAmount >= 1 && leadAmount <= 3 && closerId) {
-    const closer = available.find(p => p.id === closerId);
+    const closer = fresh.find(p => p.id === closerId);
     if (closer) return closer;
   }
 
   if (inning >= 8 && leadAmount >= 1 && leadAmount <= 4) {
-    const setup = available.find(p => setupIds.has(p.id));
+    const setup = fresh.find(p => setupIds.has(p.id));
     if (setup) return setup;
   }
 
   if (inning >= 5 && inning <= 7 && leadAmount >= 1 && leadAmount <= 3) {
-    const midReliever = available.find(p => p.id !== closerId && !setupIds.has(p.id));
+    const midReliever = fresh.find(p => p.id !== closerId && !setupIds.has(p.id));
     if (midReliever) return midReliever;
   }
 
   if (leadAmount < 0) {
-    const lowPriority = available.filter(p => p.id !== closerId && !setupIds.has(p.id));
+    const lowPriority = fresh.filter(p => p.id !== closerId && !setupIds.has(p.id));
     if (lowPriority.length > 0) return lowPriority[lowPriority.length - 1];
-    return available[available.length - 1];
+    return fresh[fresh.length - 1];
   }
 
   if (leadAmount >= 5) {
-    const lowPriority = available.filter(p => p.id !== closerId && !setupIds.has(p.id));
+    const lowPriority = fresh.filter(p => p.id !== closerId && !setupIds.has(p.id));
     if (lowPriority.length > 0) return lowPriority[lowPriority.length - 1];
-    return available[available.length - 1];
+    return fresh[fresh.length - 1];
   }
 
-  return available[0];
+  return fresh[0];
 }
 
 /** 投手交代を実行 */
@@ -2003,7 +2032,7 @@ function simulateHalfInning(
       // リリーフのmaxInnings到達チェック
       if (!currentPitcher.log.isStarter) {
         const usage = defensiveTeam.lineupConfig?.pitcherUsages?.[currentPitcher.player.id];
-        const maxInn = usage?.maxInnings ?? 3;
+        const maxInn = usage?.maxInnings ?? 1;
         const inningsPitched = currentPitcher.log.inningsPitched / 3;
         if (inningsPitched >= maxInn) shouldChangeMidInning = true;
       }

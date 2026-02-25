@@ -53,8 +53,11 @@ export function simulateNextGame(state: GameState): GameState {
   // 選手成績更新
   const newTeams = updatePlayerStats(state.teams, result, season.year);
 
+  // リリーフ連投状態を更新
+  const teamsWithAppearances = updatePitcherAppearances(newTeams, result, entry.homeTeamId, entry.awayTeamId);
+
   // ローテーションインデックスを進める
-  const teamsWithRotation = advanceRotation(newTeams, entry.homeTeamId, entry.awayTeamId);
+  const teamsWithRotation = advanceRotation(teamsWithAppearances, entry.homeTeamId, entry.awayTeamId);
 
   const newIndex = season.currentGameIndex + 1;
   const isSeasonOver = newIndex >= season.schedule.length;
@@ -121,6 +124,52 @@ export function simulateDay(state: GameState): GameState {
 export function simulateWeek(state: GameState): GameState {
   const gamesPerDay = Math.floor(Object.keys(state.teams).length / 2);
   return simulateGames(state, gamesPerDay * 7);
+}
+
+/** リリーフ投手の連投状態を更新する */
+function updatePitcherAppearances(
+  teams: Record<string, Team>,
+  result: GameResult,
+  homeTeamId: string,
+  awayTeamId: string
+): Record<string, Team> {
+  // この試合に登板したリリーフ投手のIDを収集
+  const appearedIds = new Set<string>();
+  for (const pl of result.pitcherStats) {
+    if (!pl.isStarter) {
+      appearedIds.add(pl.playerId);
+    }
+  }
+
+  const newTeams = { ...teams };
+  for (const teamId of [homeTeamId, awayTeamId]) {
+    const team = newTeams[teamId];
+    if (!team?.lineupConfig) continue;
+
+    const prev = team.lineupConfig.pitcherAppearances ?? {};
+    const updated: Record<string, number> = {};
+
+    // リリーフ投手の連投状態を更新
+    const relieverIds = team.lineupConfig.relieverIds ?? [];
+    for (const pid of relieverIds) {
+      if (appearedIds.has(pid)) {
+        // 登板した投手: 連続登板日数+1
+        updated[pid] = (prev[pid] ?? 0) + 1;
+      } else {
+        // 登板しなかった投手: リセット
+        updated[pid] = 0;
+      }
+    }
+
+    newTeams[teamId] = {
+      ...team,
+      lineupConfig: {
+        ...team.lineupConfig,
+        pitcherAppearances: updated,
+      },
+    };
+  }
+  return newTeams;
 }
 
 /** 順位表を更新する */
