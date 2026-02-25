@@ -210,6 +210,8 @@ export interface Player {
   name: string;
   age: number;
   position: Position;
+  /** サブポジション（最大2つ） */
+  subPositions?: Position[];
   /** 投手も兼任可能な場合 */
   isPitcher: boolean;
   throwHand: ThrowHand;

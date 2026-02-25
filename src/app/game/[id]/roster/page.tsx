@@ -356,6 +356,11 @@ function BatterRow({
       <td className="py-2.5 px-3 text-right text-gray-100">{p.age}</td>
       <td className="py-2.5 px-3 text-center text-gray-300">
         {POSITION_NAMES[p.position]}
+        {p.subPositions && p.subPositions.length > 0 && (
+          <span className="text-gray-500 text-xs ml-1">
+            ({p.subPositions.map((sp) => POSITION_NAMES[sp]).join("/")})
+          </span>
+        )}
       </td>
       <td className="py-2.5 px-3 text-center text-gray-300">
         {BAT_SIDE_NAMES[p.batSide]}

@@ -1,6 +1,6 @@
 import type { Team } from "@/models/team";
 import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog } from "@/models/league";
-import type { Player, PitchRepertoire, PitchType } from "@/models/player";
+import type { Player, Position, PitchRepertoire, PitchType } from "@/models/player";
 import { calcBallLanding, evaluateFielders, resolveHitTypeFromLanding } from "./fielding-ai";
 import type { BallLanding, FielderDecision } from "./fielding-ai";
 import {
@@ -123,13 +123,27 @@ interface BaseRunners {
   third: Player | null;
 }
 
+const FIELDER_POSITION_NAMES: Record<FielderPosition, string> = {
+  1: "P", 2: "C", 3: "1B", 4: "2B", 5: "3B", 6: "SS", 7: "LF", 8: "CF", 9: "RF",
+};
+
+/** 選手が守備位置に対して持つ実効守備力を算出 */
+function getEffectiveFielding(player: Player, assignedPos: FielderPosition): number {
+  if (assignedPos === 1) return player.pitching?.fielding ?? 50;
+  const posName = FIELDER_POSITION_NAMES[assignedPos] as Position;
+  if (player.position === posName) return player.batting.fielding;
+  if (player.subPositions?.includes(posName)) {
+    return Math.round(player.batting.fielding * 0.80);
+  }
+  return Math.round(player.batting.fielding * 0.60);
+}
+
 /** 守備能力を取得するヘルパー (投手は pitching から、野手は batting から) */
 function getFieldingAbility(
   player: Player,
   pos: FielderPosition
 ): { fielding: number; catching: number; arm: number } {
   if (pos === 1) {
-    // 投手は pitching の守備能力を使う
     return {
       fielding: player.pitching?.fielding ?? 50,
       catching: player.pitching?.catching ?? 50,
@@ -137,7 +151,7 @@ function getFieldingAbility(
     };
   }
   return {
-    fielding: player.batting.fielding,
+    fielding: getEffectiveFielding(player, pos),
     catching: player.batting.catching,
     arm: player.batting.arm,
   };

@@ -325,7 +325,14 @@ function BattingOrderEditor({
                     : "bg-gray-800/50 border border-gray-700/50"
                 }`}
               >
-                <span className="text-gray-400 text-xs">{POSITION_NAMES[b.position]}</span>
+                <span className="text-gray-400 text-xs">
+                  {POSITION_NAMES[b.position]}
+                  {b.subPositions && b.subPositions.length > 0 && (
+                    <span className="text-gray-600 ml-0.5">
+                      ({b.subPositions.map((sp) => POSITION_NAMES[sp]).join("/")})
+                    </span>
+                  )}
+                </span>
                 <span className="text-white">{b.name}</span>
                 <span className="text-gray-500 text-xs ml-auto">
                   ミ{b.batting.contact} パ{b.batting.power}

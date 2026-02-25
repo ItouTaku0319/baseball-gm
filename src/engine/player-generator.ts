@@ -123,6 +123,18 @@ function generatePotential(): PlayerPotential {
 
 const POSITIONS: Position[] = ["P","C","1B","2B","3B","SS","LF","CF","RF"];
 
+const ADJACENT_POSITIONS: Record<Position, Position[]> = {
+  C: ["1B"],
+  "1B": ["3B", "C"],
+  "2B": ["SS", "3B"],
+  "3B": ["1B", "2B", "SS"],
+  SS: ["2B", "3B"],
+  LF: ["CF", "RF"],
+  CF: ["LF", "RF"],
+  RF: ["LF", "CF"],
+  P: [],
+};
+
 /** ランダムな選手を1人生成 */
 export function generatePlayer(options?: {
   forcePitcher?: boolean;
@@ -141,11 +153,26 @@ export function generatePlayer(options?: {
 
   const position: Position = isPitcher ? "P" : randomFrom(POSITIONS.filter((p) => p !== "P"));
 
+  let subPositions: Position[] | undefined;
+  if (!isPitcher) {
+    const adjacent = ADJACENT_POSITIONS[position];
+    if (adjacent.length > 0) {
+      const roll = Math.random();
+      if (roll < 0.10) {
+        const shuffled = [...adjacent].sort(() => Math.random() - 0.5);
+        subPositions = shuffled.slice(0, 2);
+      } else if (roll < 0.40) {
+        subPositions = [adjacent[Math.floor(Math.random() * adjacent.length)]];
+      }
+    }
+  }
+
   return {
     id: crypto.randomUUID(),
     name: `${randomFrom(LAST_NAMES)} ${randomFrom(FIRST_NAMES)}`,
     age,
     position,
+    ...(subPositions ? { subPositions } : {}),
     isPitcher,
     throwHand: (Math.random() < 0.75 ? "R" : "L") as ThrowHand,
     batSide: (Math.random() < 0.65 ? "R" : Math.random() < 0.85 ? "L" : "S") as BatSide,
