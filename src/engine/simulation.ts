@@ -1,6 +1,6 @@
 import type { Team } from "@/models/team";
 import type { GameResult, InningScore, PlayerGameStats, PitcherGameLog, AtBatLog } from "@/models/league";
-import type { Player, Position, PitchRepertoire, PitchType } from "@/models/player";
+import type { Player, Position, PitchRepertoire, PitchType, Injury } from "@/models/player";
 import { calcBallLanding, evaluateFielders, resolveHitTypeFromLanding } from "./fielding-ai";
 import type { BallLanding, FielderDecision } from "./fielding-ai";
 import {
@@ -1803,12 +1803,34 @@ function selectPinchRunner(
   return fastest;
 }
 
-/** 1軍選手のみ取得 */
+/** 1軍選手のみ取得（故障中の選手は除外） */
 function getActivePlayers(team: Team): Player[] {
-  if (!team.rosterLevels) return team.roster;
-  return team.roster.filter(
-    (p) => !team.rosterLevels || team.rosterLevels[p.id] === "ichi_gun"
-  );
+  const roster = !team.rosterLevels
+    ? team.roster
+    : team.roster.filter(
+        (p) => !team.rosterLevels || team.rosterLevels[p.id] === "ichi_gun"
+      );
+  return roster.filter((p) => !p.injury);
+}
+
+const MINOR_INJURIES = ["軽い打撲", "筋肉痛", "指のまめ", "軽い捻挫", "デッドボールの痛み"];
+const MODERATE_INJURIES = ["肉離れ", "靭帯損傷", "骨折（軽度）", "肩の炎症", "腰痛"];
+const SEVERE_INJURIES = ["前十字靭帯断裂", "アキレス腱断裂", "肩関節手術", "椎間板ヘルニア"];
+
+const INJURY_RATE = 0.0015;
+
+function generateInjury(remainingSeasonDays: number): Injury {
+  const roll = Math.random();
+  if (roll < 0.70) {
+    const desc = MINOR_INJURIES[Math.floor(Math.random() * MINOR_INJURIES.length)];
+    return { type: 'minor', daysRemaining: 7 + Math.floor(Math.random() * 8), description: desc };
+  } else if (roll < 0.95) {
+    const desc = MODERATE_INJURIES[Math.floor(Math.random() * MODERATE_INJURIES.length)];
+    return { type: 'moderate', daysRemaining: 30 + Math.floor(Math.random() * 31), description: desc };
+  } else {
+    const desc = SEVERE_INJURIES[Math.floor(Math.random() * SEVERE_INJURIES.length)];
+    return { type: 'severe', daysRemaining: Math.max(remainingSeasonDays, 1), description: desc };
+  }
 }
 
 /** 先発投手を取得 (lineupConfig参照、未設定ならフォールバック) */
@@ -1920,13 +1942,15 @@ function simulateHalfInning(
   opponentScore?: number,
   attackingTeam?: Team,
   attackingState?: TeamGameState,
-): { runs: number; hits: number; nextBatterIndex: number } {
+  remainingSeasonDays?: number,
+): { runs: number; hits: number; nextBatterIndex: number; injuries: Array<{ playerId: string; injury: Injury }> } {
   let outs = 0;
   let runs = 0;
   let hits = 0;
   let bases: BaseRunners = { first: null, second: null, third: null };
   let idx = batterIndex;
   let inningRuns = 0;
+  const halfInningInjuries: Array<{ playerId: string; injury: Injury }> = [];
 
   // 攻撃側のusedBatterIdsを参照（代打・代走の管理）
   const usedBatterIds = attackingState?.usedBatterIds ?? new Set<string>();
@@ -2345,7 +2369,7 @@ function simulateHalfInning(
       if (opponentScore + runs > teamScore) {
         defensiveState.currentPitcher.log.inningsPitched += (outs - outsAtLastPitcherChange);
         idx++;
-        return { runs, hits, nextBatterIndex: idx };
+        return { runs, hits, nextBatterIndex: idx, injuries: halfInningInjuries };
       }
     }
 
@@ -2404,6 +2428,17 @@ function simulateHalfInning(
       });
     }
 
+    // === 故障発生判定（インプレー結果後のみ） ===
+    if (
+      remainingSeasonDays != null &&
+      detail.battedBallType !== null &&
+      !batter.injury &&
+      Math.random() < INJURY_RATE
+    ) {
+      const newInjury = generateInjury(remainingSeasonDays);
+      halfInningInjuries.push({ playerId: batter.id, injury: newInjury });
+    }
+
     idx++;
     defensiveState.currentPitcher.battersFaced++;
 
@@ -2449,11 +2484,12 @@ function simulateHalfInning(
   // イニング終了: 最後の投手の残りアウト分を記録
   defensiveState.currentPitcher.log.inningsPitched += (3 - outsAtLastPitcherChange);
 
-  return { runs, hits, nextBatterIndex: idx };
+  return { runs, hits, nextBatterIndex: idx, injuries: halfInningInjuries };
 }
 
 export interface SimulateGameOptions {
   collectAtBatLogs?: boolean;
+  remainingSeasonDays?: number;
 }
 
 /**
@@ -2526,6 +2562,8 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
   let homeScore = 0;
   let awayScore = 0;
   const atBatLogs: AtBatLog[] = [];
+  const gameInjuries: Array<{ playerId: string; injury: Injury }> = [];
+  const rsd = options?.remainingSeasonDays;
 
   // 各イニングの守備投手を追跡（勝敗投手判定用）
   const homePitcherPerInning: string[] = [];
@@ -2541,10 +2579,11 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
       awayState.batterIndex, batterStatsMap,
       options, atBatLogs, i + 1, "top",
       homeTeam, homeScore, awayScore,
-      awayTeam, awayState
+      awayTeam, awayState, rsd
     );
     awayScore += topResult.runs;
     awayState.batterIndex = topResult.nextBatterIndex;
+    gameInjuries.push(...topResult.injuries);
 
     // 裏 (ホーム攻撃 → アウェイ守備)
     let bottomRuns = 0;
@@ -2555,11 +2594,12 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
         homeState.batterIndex, batterStatsMap,
         options, atBatLogs, i + 1, "bottom",
         awayTeam, awayScore, homeScore,
-        homeTeam, homeState
+        homeTeam, homeState, rsd
       );
       bottomRuns = bottomResult.runs;
       homeScore += bottomRuns;
       homeState.batterIndex = bottomResult.nextBatterIndex;
+      gameInjuries.push(...bottomResult.injuries);
     }
 
     innings.push({ top: topResult.runs, bottom: bottomRuns });
@@ -2591,10 +2631,11 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
       awayState.batterIndex, batterStatsMap,
       options, atBatLogs, extInning, "top",
       homeTeam, homeScore, awayScore,
-      awayTeam, awayState
+      awayTeam, awayState, rsd
     );
     awayScore += topResult.runs;
     awayState.batterIndex = topResult.nextBatterIndex;
+    gameInjuries.push(...topResult.injuries);
 
     awayPitcherPerInning.push(awayState.currentPitcher.player.id);
     const bottomResult = simulateHalfInning(
@@ -2602,10 +2643,11 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
       homeState.batterIndex, batterStatsMap,
       options, atBatLogs, extInning, "bottom",
       awayTeam, awayScore, homeScore,
-      homeTeam, homeState
+      homeTeam, homeState, rsd
     );
     homeScore += bottomResult.runs;
     homeState.batterIndex = bottomResult.nextBatterIndex;
+    gameInjuries.push(...bottomResult.injuries);
 
     innings.push({ top: topResult.runs, bottom: bottomResult.runs });
 
@@ -2675,6 +2717,7 @@ export function simulateGame(homeTeam: Team, awayTeam: Team, options?: SimulateG
     playerStats: Array.from(batterStatsMap.values()),
     pitcherStats: [...allHomeLogs, ...allAwayLogs],
     atBatLogs: options?.collectAtBatLogs ? atBatLogs : undefined,
+    injuries: gameInjuries.length > 0 ? gameInjuries : undefined,
   };
 }
 

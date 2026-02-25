@@ -51,6 +51,8 @@ export default function GameDashboard() {
   const currentDay = Math.floor(playedGames / gamesPerDay) + 1;
   const totalDays = Math.ceil(totalGames / gamesPerDay);
 
+  const injuredPlayers = myTeam.roster.filter((p) => p.injury);
+
   const phaseLabel: Record<string, string> = {
     preseason: "プレシーズン",
     regular_season: "レギュラーシーズン",
@@ -208,6 +210,35 @@ export default function GameDashboard() {
           </div>
         </div>
       </div>
+
+      {/* 故障者リスト */}
+      {injuredPlayers.length > 0 && (
+        <div className="bg-gray-800 rounded-lg p-4 mb-6 border border-gray-700">
+          <h3 className="text-red-400 font-bold mb-2">故障者リスト</h3>
+          <div className="space-y-2">
+            {injuredPlayers.map((player) => (
+              <div
+                key={player.id}
+                className="flex justify-between items-center text-sm"
+              >
+                <div>
+                  <span className="text-white">{player.name}</span>
+                  <span className="text-gray-400 ml-2">{player.position}</span>
+                </div>
+                <div
+                  className="text-right"
+                  style={{ fontVariantNumeric: "tabular-nums" }}
+                >
+                  <span className="text-red-400">{player.injury?.description}</span>
+                  <span className="text-gray-400 ml-2">
+                    残り{player.injury?.daysRemaining}日
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 試合進行パネル */}
       <div className="bg-gray-800 rounded-lg p-6 mb-6 border border-gray-700">

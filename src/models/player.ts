@@ -204,6 +204,13 @@ export interface PitcherSeasonStats {
   popups: number;          // 全ポップフライ数
 }
 
+/** 故障の種類と状態 */
+export interface Injury {
+  type: 'minor' | 'moderate' | 'severe';
+  daysRemaining: number;
+  description: string;
+}
+
 /** 選手データ */
 export interface Player {
   id: string;
@@ -216,6 +223,8 @@ export interface Player {
   isPitcher: boolean;
   throwHand: ThrowHand;
   batSide: BatSide;
+  /** 故障情報（故障中のみ存在） */
+  injury?: Injury;
   /** 打撃能力 */
   batting: BatterAbilities;
   /** 投手能力 (投手のみ) */

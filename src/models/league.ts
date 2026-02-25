@@ -105,6 +105,8 @@ export interface GameResult {
   pitcherStats: PitcherGameLog[];
   /** 打席ログ（診断モード時のみ） */
   atBatLogs?: AtBatLog[];
+  /** 試合中に発生した故障 */
+  injuries?: Array<{ playerId: string; injury: import("./player").Injury }>;
 }
 
 /** 1打席のログ（診断用） */

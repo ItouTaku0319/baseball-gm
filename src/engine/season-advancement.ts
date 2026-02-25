@@ -35,8 +35,15 @@ export function simulateNextGame(state: GameState): GameState {
   const homeTeam = state.teams[entry.homeTeamId];
   const awayTeam = state.teams[entry.awayTeamId];
 
+  const gamesPerDay = Math.floor(Object.keys(state.teams).length / 2);
+  const remainingGames = season.schedule.length - season.currentGameIndex;
+  const remainingSeasonDays = Math.ceil(remainingGames / gamesPerDay);
+
   const isMyGame = entry.homeTeamId === state.myTeamId || entry.awayTeamId === state.myTeamId;
-  const result = simulateGame(homeTeam, awayTeam, isMyGame ? { collectAtBatLogs: true } : undefined);
+  const result = simulateGame(homeTeam, awayTeam, {
+    collectAtBatLogs: isMyGame,
+    remainingSeasonDays,
+  });
 
   // スケジュール更新
   const newSchedule = [...season.schedule];
@@ -53,8 +60,11 @@ export function simulateNextGame(state: GameState): GameState {
   // 選手成績更新
   const newTeams = updatePlayerStats(state.teams, result, season.year);
 
+  // 故障選手の情報を反映
+  const teamsWithInjuries = applyGameInjuries(newTeams, result.injuries ?? []);
+
   // リリーフ連投状態を更新
-  const teamsWithAppearances = updatePitcherAppearances(newTeams, result, entry.homeTeamId, entry.awayTeamId);
+  const teamsWithAppearances = updatePitcherAppearances(teamsWithInjuries, result, entry.homeTeamId, entry.awayTeamId);
 
   // ローテーションインデックスを進める
   const teamsWithRotation = advanceRotation(teamsWithAppearances, entry.homeTeamId, entry.awayTeamId);
@@ -117,7 +127,11 @@ export function simulateToNextMyGame(state: GameState): GameState {
 /** 1日分 (6試合) をシミュレーションする */
 export function simulateDay(state: GameState): GameState {
   const gamesPerDay = Math.floor(Object.keys(state.teams).length / 2);
-  return simulateGames(state, gamesPerDay);
+  const afterGames = simulateGames(state, gamesPerDay);
+  return {
+    ...afterGames,
+    teams: recoverInjuredPlayers(afterGames.teams),
+  };
 }
 
 /** 1週間分 (42試合) をシミュレーションする */
@@ -359,5 +373,46 @@ function updatePlayerStats(
     newTeams[teamId] = { ...team, roster: newRoster };
   }
 
+  return newTeams;
+}
+
+/** 試合で発生した故障をチームに反映する */
+function applyGameInjuries(
+  teams: Record<string, Team>,
+  injuries: Array<{ playerId: string; injury: import("@/models/player").Injury }>
+): Record<string, Team> {
+  if (injuries.length === 0) return teams;
+
+  const newTeams = { ...teams };
+  for (const { playerId, injury } of injuries) {
+    for (const teamId of Object.keys(newTeams)) {
+      const team = newTeams[teamId];
+      const playerIdx = team.roster.findIndex((p) => p.id === playerId);
+      if (playerIdx === -1) continue;
+      const newRoster = [...team.roster];
+      newRoster[playerIdx] = { ...newRoster[playerIdx], injury };
+      newTeams[teamId] = { ...team, roster: newRoster };
+      break;
+    }
+  }
+  return newTeams;
+}
+
+/** 故障選手の日次回復処理（1日分減算） */
+function recoverInjuredPlayers(teams: Record<string, Team>): Record<string, Team> {
+  const newTeams = { ...teams };
+  for (const teamId of Object.keys(newTeams)) {
+    const team = newTeams[teamId];
+    const newRoster = team.roster.map((player) => {
+      if (!player.injury) return player;
+      const newDays = player.injury.daysRemaining - 1;
+      if (newDays <= 0) {
+        const { injury: _removed, ...rest } = player;
+        return rest;
+      }
+      return { ...player, injury: { ...player.injury, daysRemaining: newDays } };
+    });
+    newTeams[teamId] = { ...team, roster: newRoster };
+  }
   return newTeams;
 }
