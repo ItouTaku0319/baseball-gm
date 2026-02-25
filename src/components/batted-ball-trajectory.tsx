@@ -1020,6 +1020,7 @@ function computeBouncePoints(
   exitVelocityKmh: number,
   launchAngleDeg: number,
   maxBounces: number = 2,
+  fenceDist?: number,
 ): { x: number; y: number }[] {
   const restitution = 0.3;
   const friction = 0.8;
@@ -1039,6 +1040,7 @@ function computeBouncePoints(
   let currentVx = vx * friction;
   const bouncePoints: { x: number; y: number }[] = [];
   let cumX = lastPoint.x;
+  let hitFence = false;
 
   for (let b = 0; b < maxBounces; b++) {
     const tBounce = 2 * currentVy / GRAVITY;
@@ -1047,14 +1049,51 @@ function computeBouncePoints(
     const steps = 15;
     for (let i = 1; i <= steps; i++) {
       const t = (i / steps) * tBounce;
-      bouncePoints.push({
-        x: cumX + currentVx * t,
-        y: currentVy * t - 0.5 * GRAVITY * t * t,
-      });
+      const px = cumX + currentVx * t;
+      const py = currentVy * t - 0.5 * GRAVITY * t * t;
+
+      // フェンスに到達したらカットして跳ね返り開始
+      if (fenceDist != null && px >= fenceDist) {
+        bouncePoints.push({ x: fenceDist, y: Math.max(0, py) });
+        hitFence = true;
+        break;
+      }
+      bouncePoints.push({ x: px, y: py });
     }
+    if (hitFence) break;
     cumX += currentVx * tBounce;
     currentVy *= restitution;
     currentVx *= friction;
+  }
+
+  // フェンス跳ね返りポイントを追加
+  if (hitFence && fenceDist != null) {
+    const wallRestitution = 0.25;
+    const reboundVx = currentVx * wallRestitution;
+    const reboundVy = 2.0;
+    // 1st rebound bounce
+    const t1 = 2 * reboundVy / GRAVITY;
+    const steps1 = 10;
+    for (let i = 1; i <= steps1; i++) {
+      const t = (i / steps1) * t1;
+      bouncePoints.push({
+        x: fenceDist - reboundVx * t,
+        y: reboundVy * t - 0.5 * GRAVITY * t * t,
+      });
+    }
+    // 2nd small bounce
+    const v2y = reboundVy * 0.3;
+    const v2x = reboundVx * 0.4;
+    const t2 = 2 * v2y / GRAVITY;
+    const dist1 = reboundVx * t1;
+    const steps2 = 6;
+    for (let i = 1; i <= steps2; i++) {
+      const t = (i / steps2) * t2;
+      bouncePoints.push({
+        x: fenceDist - dist1 - v2x * t,
+        y: v2y * t - 0.5 * GRAVITY * t * t,
+      });
+    }
   }
 
   return bouncePoints;
@@ -1274,10 +1313,12 @@ function SideView({ log, currentTime, totalFlightTime, isFenceHit, isCaughtFly }
   const isHR = log.result === "homerun";
   const lastPoint = points[points.length - 1];
 
+  // isFence: フライ直撃, isFenceViaB: バウンド経由でフェンス到達
+  const isFenceViaBounce = !isFence && isFenceHit;
   const bouncePoints = (() => {
     if (isHR || isCaught) return [];
     if (isFence && lastPoint) {
-      // フェンスで跳ね返る場合、軌道上でフェンス位置の高さを補間で求める
+      // フライ直撃: 軌道上でフェンス位置の高さを補間で求める
       let heightAtFence = 0;
       for (let i = 1; i < allPoints.length; i++) {
         if (allPoints[i].x >= fenceDist) {
@@ -1291,7 +1332,8 @@ function SideView({ log, currentTime, totalFlightTime, isFenceHit, isCaughtFly }
       return computeFenceBounceBackPoints(fenceDist, log.exitVelocity!, log.launchAngle!, heightAtFence);
     }
     if (!lastPoint) return [];
-    return computeBouncePoints(lastPoint, log.exitVelocity!, log.launchAngle!, 2);
+    // バウンド経由フェンス到達の場合はフェンス距離を渡す
+    return computeBouncePoints(lastPoint, log.exitVelocity!, log.launchAngle!, 2, isFenceViaBounce ? fenceDist : undefined);
   })();
 
   const bouncePolyline = bouncePoints.length > 0
@@ -1322,7 +1364,7 @@ function SideView({ log, currentTime, totalFlightTime, isFenceHit, isCaughtFly }
 
   // バウンド後の転がり終端
   const bounceEndX = bouncePoints.length > 0 ? bouncePoints[bouncePoints.length - 1].x : lastPoint?.x ?? totalDist;
-  const showRollLine = !isHR && !isCaught && !isFence && bounceEndX < totalDist;
+  const showRollLine = !isHR && !isCaught && !isFence && !isFenceViaBounce && bounceEndX < totalDist;
 
   const { sx: fenceSx } = toSvgCoord(fenceDist, 0);
   const { sy: fenceTopSy } = toSvgCoord(fenceDist, FENCE_HEIGHT);
@@ -1424,6 +1466,16 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
 
   const fenceDistForDir = direction != null ? getFenceDistance(direction) : 95;
   const isFenceHit = !isHomerun && !isGrounder && !isCaughtFly && estimatedDist > fenceDistForDir;
+
+  // バウンド経由でフェンスに到達するか判定
+  const bounceFenceInfo = useMemo(() => {
+    if (isFenceHit || isHomerun || isGrounder || isCaughtFly || !hasFieldData) return null;
+    const info = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, estimatedDist, 999, fenceDistForDir);
+    return info?.hitFence ? info : null;
+  }, [isFenceHit, isHomerun, isGrounder, isCaughtFly, hasFieldData, exitVelocity, launchAngle, direction, estimatedDist, fenceDistForDir]);
+
+  // SideViewに渡すフェンスヒットフラグ（直撃 or バウンド経由）
+  const isFenceHitForSideView = isFenceHit || !!bounceFenceInfo;
 
   // 総アニメーション時間
   const totalTime = useMemo(() => {
@@ -1580,7 +1632,7 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
           </div>
           <div>
             <div className="text-gray-400 text-xs mb-1 text-center">軌道（横から）</div>
-            <SideView log={log} currentTime={currentTime * playbackSpeed} totalFlightTime={totalFlightTime} isFenceHit={isFenceHit} isCaughtFly={isCaughtFly} />
+            <SideView log={log} currentTime={currentTime * playbackSpeed} totalFlightTime={totalFlightTime} isFenceHit={isFenceHitForSideView} isCaughtFly={isCaughtFly} />
           </div>
         </div>
 
