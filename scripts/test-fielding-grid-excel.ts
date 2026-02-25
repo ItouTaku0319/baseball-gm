@@ -15,7 +15,6 @@ import { createCanvas } from "canvas";
 import { calcBallLanding, evaluateFielders, DEFAULT_FIELDER_POSITIONS } from "../src/engine/fielding-ai";
 import type { BallLanding, FielderDecision } from "../src/engine/fielding-ai";
 import { classifyBattedBallType, estimateDistance, getFenceDistance } from "../src/engine/simulation";
-import { generateRoster } from "../src/engine/player-generator";
 import {
   GRAVITY, BAT_HEIGHT, FENCE_HEIGHT, TRAJECTORY_CARRY_FACTORS,
   BOUNCE_CLOSE_THRESHOLD, BOUNCE_NEAR_THRESHOLD, BOUNCE_MID_THRESHOLD,
@@ -34,16 +33,42 @@ const POS_NAMES: Record<number, string> = {
   1: "P", 2: "C", 3: "1B", 4: "2B", 5: "3B", 6: "SS", 7: "LF", 8: "CF", 9: "RF",
 };
 
-// ========== ダミー選手 ==========
+// ========== テスト用選手(全能力50固定・再現性担保) ==========
+const POSITION_MAP: Record<FielderPosition, Player["position"]> = {
+  1: "P", 2: "C", 3: "1B", 4: "2B", 5: "3B", 6: "SS", 7: "LF", 8: "CF", 9: "RF",
+};
+
+function createTestPlayer(pos: FielderPosition): Player {
+  const position = POSITION_MAP[pos];
+  const isPitcher = pos === 1;
+  return {
+    id: `test-${position}`,
+    name: `テスト${position}`,
+    age: 25,
+    position,
+    isPitcher,
+    throwHand: "R",
+    batSide: "R",
+    batting: {
+      contact: 50, power: 50, trajectory: 2, speed: 50,
+      arm: 50, fielding: 50, catching: 50, eye: 50,
+    },
+    pitching: isPitcher ? {
+      velocity: 145, control: 50, pitches: [{ type: "slider", level: 4 }],
+      stamina: 50, mentalToughness: 50, arm: 50, fielding: 50, catching: 50,
+    } : null,
+    potential: { overall: "C" },
+    salary: 500,
+    contractYears: 1,
+    careerBattingStats: {},
+    careerPitchingStats: {},
+  };
+}
+
 function createFielderMap(): Map<FielderPosition, Player> {
-  const roster = generateRoster(65);
   const map = new Map<FielderPosition, Player>();
-  const pitchers = roster.filter(p => p.position === "P");
-  const batters = roster.filter(p => p.position !== "P");
-  if (pitchers.length > 0) map.set(1, pitchers[0]);
-  const positions: FielderPosition[] = [2, 3, 4, 5, 6, 7, 8, 9];
-  for (let i = 0; i < positions.length && i < batters.length; i++) {
-    map.set(positions[i], batters[i]);
+  for (const pos of [1, 2, 3, 4, 5, 6, 7, 8, 9] as FielderPosition[]) {
+    map.set(pos, createTestPlayer(pos));
   }
   return map;
 }

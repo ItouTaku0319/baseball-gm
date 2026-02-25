@@ -147,10 +147,11 @@ function detectAnomalies(logs: AtBatLog[]): Anomaly[] {
       );
     }
 
-    // 短距離長打: estimatedDistance < 50m + result in ["double","triple"]
+    // 短距離長打: estimatedDistance < 25m + result in ["double","triple"]
+    // (25-50mの二塁打はギャップへのライナー(Texas Leaguer)で正常な結果)
     if (
       dist !== null &&
-      dist < 50 &&
+      dist < 25 &&
       (result === "double" || result === "triple")
     ) {
       counts.shortDistanceLongHit++;

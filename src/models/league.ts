@@ -193,6 +193,10 @@ export interface FieldingTrace {
     basesReached?: number;
     margin2B?: number;
     margin3B?: number;
+    /** ゴロ経路インターセプト評価シーケンス */
+    interceptSequence?: Array<{ pos: number; projDist: number; canIntercept: boolean; result?: string }>;
+    /** フライ収束評価（複数野手の着地点距離） */
+    convergers?: Array<{ pos: number; distAtLanding: number; canReach: boolean }>;
   };
 }
 

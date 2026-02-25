@@ -4,7 +4,7 @@ import {
   GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR,
   GROUND_BALL_ANGLE_THRESHOLD, GROUND_BALL_MAX_DISTANCE,
   GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO, GROUND_BALL_BOUNCE_ANGLE_SCALE,
-  FIELDER_CATCH_RADIUS,
+  FIELDER_CATCH_RADIUS, PITCHER_REACTION_PENALTY,
 } from "./physics-constants";
 import { assignFielderDuties, getBallZone } from "./fielding-assignments";
 
@@ -35,6 +35,8 @@ export interface FielderDecision {
   action?: FielderAction;     // 移動アクション種別
   targetPos?: { x: number; y: number }; // 移動目標座標
   retrievalCandidate?: boolean; // 回収候補かどうか
+  interceptType?: "path_intercept" | "chase_to_stop" | "fly_converge" | "none";
+  projectionDistance?: number;  // ゴロ: 経路上の射影距離（ホームからの距離）
 }
 
 /** 打球の着地情報 */
@@ -178,6 +180,8 @@ export function evaluateFielders(
     posAtLanding: { x: number; y: number };
     action: FielderAction;
     targetPos: { x: number; y: number };
+    interceptType: "path_intercept" | "chase_to_stop" | "fly_converge" | "none";
+    projectionDistance: number | undefined;
   }[] = [];
 
   for (const pos of ALL_POSITIONS) {
@@ -189,6 +193,11 @@ export function evaluateFielders(
 
     // 反応時間: 守備力が高いほど短い (0.3-0.6秒)
     let reactionTime = 0.3 + (1 - skill.fielding / 100) * 0.3;
+    // 投手: 投球フォロースルー後の体勢回復ペナルティ
+    // 実際のPはゴロでもフライでも投球直後で反応が遅い
+    if (pos === 1) {
+      reactionTime += PITCHER_REACTION_PENALTY;
+    }
     // ライナーは軌道が低く速いため読みづらい → 反応遅延 +0.3-0.5秒
     if (isLineDrive) {
       reactionTime += 0.3 + (1 - skill.fielding / 100) * 0.2;
@@ -196,14 +205,16 @@ export function evaluateFielders(
     // 走力: batting.speed 依存 (5-8 m/s)
     const runSpeed = 5.0 + (player.batting.speed / 100) * 3.0;
 
-    let distanceToBall: number;
-    let timeToReach: number;
-    let ballArrival: number;
-    let canReach: boolean;
-    let distanceAtLanding: number;
-    let posAtLanding: { x: number; y: number };
-    let action: FielderAction;
-    let targetPos: { x: number; y: number };
+    let distanceToBall = 0;
+    let timeToReach = 0;
+    let ballArrival = 0;
+    let canReach = false;
+    let distanceAtLanding = 0;
+    let posAtLanding = { x: fielderPos.x, y: fielderPos.y };
+    let action: FielderAction = "charge";
+    let targetPos = { x: landing.position.x, y: landing.position.y };
+    let interceptType: "path_intercept" | "chase_to_stop" | "fly_converge" | "none" = "none";
+    let projectionDistance: number | undefined = undefined;
 
     if (landing.isGroundBall) {
       // ゴロ: ボール経路（ホーム→着地位置の直線）への垂直距離で判定
@@ -219,6 +230,8 @@ export function evaluateFielders(
         canReach = true;
         targetPos = { x: landing.position.x, y: landing.position.y };
         action = "field_ball";
+        interceptType = "chase_to_stop";
+        projectionDistance = pathLen;
       } else {
         const pathDirX = landing.position.x / pathLen;
         const pathDirY = landing.position.y / pathLen;
@@ -239,6 +252,11 @@ export function evaluateFielders(
           };
           action = "charge";
 
+          if (canReach) {
+            interceptType = "path_intercept";
+            projectionDistance = projDist;
+          }
+
           // チェイスフォールバック:
           // 経路上の捕球が間に合わない → ボール停止位置まで走って拾う
           if (!canReach) {
@@ -258,18 +276,66 @@ export function evaluateFielders(
                 y: landing.position.y,
               };
               action = "field_ball";
+              interceptType = "chase_to_stop";
+              projectionDistance = pathLen;
             }
           }
         } else {
-          // 野手の射影がボール経路外（外野手等）→ ボール停止位置へ走る
-          const dx = landing.position.x - fielderPos.x;
-          const dy = landing.position.y - fielderPos.y;
-          distanceToBall = Math.sqrt(dx * dx + dy * dy);
-          ballArrival = landing.flightTime; // ボール停止時間
-          timeToReach = reactionTime + distanceToBall / runSpeed;
-          canReach = timeToReach <= ballArrival + 1.0; // 停止後1秒以内ならOK
-          targetPos = { x: landing.position.x, y: landing.position.y };
-          action = "field_ball";
+          // 野手の射影がボール経路外 → まず前方チャージインターセプトを試行
+          // 野手がボール経路上の手前の地点に走り込んでインターセプトできるか
+          // 二次方程式: a*t^2 + b*t + c = 0 (t=経路上の距離)
+          // 解がpathLen以内にあれば前方チャージ可能
+          const sRatio = runSpeed / avgSpeed;
+          const sRatio2 = sRatio * sRatio;
+          const fx2fy2 = fielderPos.x * fielderPos.x + fielderPos.y * fielderPos.y;
+          const rDist = runSpeed * reactionTime;
+          const qa = 1 - sRatio2;
+          const qb = -2 * projDist + 2 * sRatio2 * reactionTime * avgSpeed;
+          const qc = fx2fy2 - rDist * rDist;
+          const disc = qb * qb - 4 * qa * qc;
+          const minT = reactionTime * avgSpeed; // ボールがfielder反応後に到達する最小距離
+
+          let chargeIntercepted = false;
+          if (disc >= 0 && qa > 0.01) {
+            const sqrtDisc = Math.sqrt(disc);
+            const t1 = (-qb - sqrtDisc) / (2 * qa);
+            const t2 = (-qb + sqrtDisc) / (2 * qa);
+            // 最小の有効なt（反応距離以上、pathLen以内）
+            const interceptT = (t1 >= minT && t1 <= pathLen) ? t1
+              : (t2 >= minT && t2 <= pathLen) ? t2 : -1;
+            if (interceptT > 0) {
+              // 前方チャージインターセプト成功
+              const ix = pathDirX * interceptT;
+              const iy = pathDirY * interceptT;
+              const idist = Math.sqrt(
+                (fielderPos.x - ix) * (fielderPos.x - ix) +
+                (fielderPos.y - iy) * (fielderPos.y - iy)
+              );
+              distanceToBall = idist;
+              ballArrival = interceptT / avgSpeed;
+              timeToReach = reactionTime + idist / runSpeed;
+              canReach = true;
+              targetPos = { x: ix, y: iy };
+              action = "charge";
+              interceptType = "path_intercept";
+              projectionDistance = interceptT;
+              chargeIntercepted = true;
+            }
+          }
+
+          if (!chargeIntercepted) {
+            // 前方チャージ不可 → ボール停止位置へ走る
+            const dx = landing.position.x - fielderPos.x;
+            const dy = landing.position.y - fielderPos.y;
+            distanceToBall = Math.sqrt(dx * dx + dy * dy);
+            ballArrival = landing.flightTime;
+            timeToReach = reactionTime + distanceToBall / runSpeed;
+            canReach = timeToReach <= ballArrival + 1.0;
+            targetPos = { x: landing.position.x, y: landing.position.y };
+            action = "field_ball";
+            interceptType = canReach ? "chase_to_stop" : "none";
+            projectionDistance = pathLen;
+          }
         }
       }
 
@@ -319,6 +385,7 @@ export function evaluateFielders(
         (posAtLanding.x - landing.position.x) ** 2 + (posAtLanding.y - landing.position.y) ** 2
       );
       canReach = distanceAtLanding < FIELDER_CATCH_RADIUS;
+      interceptType = canReach ? "fly_converge" : "none";
     } else if (pos >= 3 && pos <= 6) {
       // 内野手のフライ/ライナー
       const dx = landing.position.x - fielderPos.x;
@@ -344,6 +411,7 @@ export function evaluateFielders(
           (posAtLanding.x - landing.position.x) ** 2 + (posAtLanding.y - landing.position.y) ** 2
         );
         canReach = distanceAtLanding < FIELDER_CATCH_RADIUS;
+        interceptType = canReach ? "fly_converge" : "none";
       } else {
         // 打球が遠い → ベースカバー
         targetPos = { x: fielderPos.x, y: fielderPos.y };
@@ -351,6 +419,7 @@ export function evaluateFielders(
         posAtLanding = { x: fielderPos.x, y: fielderPos.y };
         distanceAtLanding = distanceToBall;
         canReach = false;
+        interceptType = "none";
       }
     } else {
       // P(1), C(2): 非ゴロ時の特殊処理
@@ -368,6 +437,7 @@ export function evaluateFielders(
         action = "hold";
         posAtLanding = { x: fielderPos.x, y: fielderPos.y };
         distanceAtLanding = distanceToBall;
+        interceptType = "none";
       } else {
         // 投手: ゴロのライト方向(direction > 45)なら1Bカバー
         const isRightSide = landing.position.x > 0 && landing.isGroundBall;
@@ -384,6 +454,7 @@ export function evaluateFielders(
           distanceAtLanding = Math.sqrt(
             (firstBase.x - landing.position.x) ** 2 + (firstBase.y - landing.position.y) ** 2
           );
+          interceptType = "none";
         } else {
           timeToReach = reactionTime + distanceToBall / runSpeed;
           canReach = timeToReach <= ballArrival;
@@ -391,6 +462,7 @@ export function evaluateFielders(
           action = "hold";
           posAtLanding = { x: fielderPos.x, y: fielderPos.y };
           distanceAtLanding = distanceToBall;
+          interceptType = canReach ? "fly_converge" : "none";
         }
       }
     }
@@ -406,6 +478,8 @@ export function evaluateFielders(
       posAtLanding,
       action,
       targetPos,
+      interceptType,
+      projectionDistance,
     });
   }
 
@@ -535,6 +609,8 @@ export function evaluateFielders(
       action: finalAction,
       targetPos: finalTargetPos,
       retrievalCandidate: finalRetrievalCandidate,
+      interceptType: e.interceptType,
+      projectionDistance: e.projectionDistance,
     });
   }
 
