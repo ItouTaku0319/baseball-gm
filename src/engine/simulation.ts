@@ -533,7 +533,16 @@ function resolvePlayWithAI(
         const best = findBestFielder(fieldingResult);
         return { result: "homerun", fielderPos: best?.position ?? assignOutfielder(ball.direction) };
       }
-      // 距離は足りるが高さ不足 → フェンス直撃（通常のフライとして守備処理）
+      // 距離は足りるが高さ不足 → フェンス直撃（捕球不可→ヒット確定）
+      {
+        const best = findBestFielder(fieldingResult);
+        const fielderPos = best?.position ?? assignOutfielder(ball.direction);
+        // フェンス直撃はほぼダブル、走力次第でトリプル
+        const runnerSpeed = batter.batting.speed;
+        const tripleChance = 0.15 + (runnerSpeed / 100) * 0.15; // 15〜30%
+        const hitResult: AtBatResult = Math.random() < tripleChance ? "triple" : "double";
+        return { result: hitResult, fielderPos };
+      }
     }
 
     // ポップフライでフェンス越えでなければ常にアウト
