@@ -211,35 +211,6 @@ export default function GameDashboard() {
         </div>
       </div>
 
-      {/* 故障者リスト */}
-      {injuredPlayers.length > 0 && (
-        <div className="bg-gray-800 rounded-lg p-4 mb-6 border border-gray-700">
-          <h3 className="text-red-400 font-bold mb-2">故障者リスト</h3>
-          <div className="space-y-2">
-            {injuredPlayers.map((player) => (
-              <div
-                key={player.id}
-                className="flex justify-between items-center text-sm"
-              >
-                <div>
-                  <span className="text-white">{player.name}</span>
-                  <span className="text-gray-400 ml-2">{player.position}</span>
-                </div>
-                <div
-                  className="text-right"
-                  style={{ fontVariantNumeric: "tabular-nums" }}
-                >
-                  <span className="text-red-400">{player.injury?.description}</span>
-                  <span className="text-gray-400 ml-2">
-                    残り{player.injury?.daysRemaining}日
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* 試合進行パネル */}
       <div className="bg-gray-800 rounded-lg p-6 mb-6 border border-gray-700">
         {season.phase === "preseason" && (
@@ -370,6 +341,28 @@ export default function GameDashboard() {
           <OffseasonPanel game={game} />
         )}
       </div>
+
+      {/* 故障者リスト（コンパクト表示） */}
+      {injuredPlayers.length > 0 && (
+        <div className="bg-gray-800 rounded-lg p-3 mb-4 border border-gray-700">
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="text-red-400 text-sm font-semibold">故障者</span>
+            <span className="text-xs text-gray-500">{injuredPlayers.length}人</span>
+          </div>
+          <div
+            className="flex flex-wrap gap-x-4 gap-y-1 text-xs"
+            style={{ fontVariantNumeric: "tabular-nums" }}
+          >
+            {injuredPlayers.map((player) => (
+              <span key={player.id} className="text-gray-300">
+                {player.name}
+                <span className="text-gray-500 ml-1">{player.position}</span>
+                <span className="text-red-400/70 ml-1">残{player.injury?.daysRemaining}日</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* メニュー */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-8">

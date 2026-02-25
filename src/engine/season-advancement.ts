@@ -72,9 +72,14 @@ export function simulateNextGame(state: GameState): GameState {
   const newIndex = season.currentGameIndex + 1;
   const isSeasonOver = newIndex >= season.schedule.length;
 
+  // 日境界（gamesPerDay試合ごと）で故障回復処理
+  const teamsAfterRecovery = newIndex % gamesPerDay === 0
+    ? recoverInjuredPlayers(teamsWithRotation)
+    : teamsWithRotation;
+
   let newState: GameState = {
     ...state,
-    teams: teamsWithRotation,
+    teams: teamsAfterRecovery,
     currentSeason: {
       ...season,
       schedule: newSchedule,
@@ -127,11 +132,7 @@ export function simulateToNextMyGame(state: GameState): GameState {
 /** 1日分 (6試合) をシミュレーションする */
 export function simulateDay(state: GameState): GameState {
   const gamesPerDay = Math.floor(Object.keys(state.teams).length / 2);
-  const afterGames = simulateGames(state, gamesPerDay);
-  return {
-    ...afterGames,
-    teams: recoverInjuredPlayers(afterGames.teams),
-  };
+  return simulateGames(state, gamesPerDay);
 }
 
 /** 1週間分 (42試合) をシミュレーションする */
