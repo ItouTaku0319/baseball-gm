@@ -58,6 +58,7 @@ export interface PlayerGameStats {
   hitByPitch?: number;       // 死球
   sacrificeFlies?: number;   // 犠牲フライ
   groundedIntoDP?: number;   // 併殺打
+  sacrificeBunts?: number;   // 犠打数
   putOuts?: number;          // 刺殺
   assists?: number;          // 補殺
   errors?: number;           // 失策
@@ -73,6 +74,7 @@ export interface PitcherGameLog {
   strikeouts: number;
   homeRunsAllowed: number;
   hitBatsmen?: number;       // 与死球
+  sacrificeBuntsAllowed?: number; // 被犠打数
   groundBallOuts?: number;   // ゴロアウト数
   flyBallOuts?: number;      // フライアウト数
   groundBalls?: number;      // 全ゴロ打球数（安打・エラー含む）

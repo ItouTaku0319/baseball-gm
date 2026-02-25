@@ -103,7 +103,8 @@ type AtBatResult =
   | "strikeout"
   | "groundout" | "flyout" | "lineout" | "popout"
   | "doublePlay" | "sacrificeFly"
-  | "fieldersChoice" | "infieldHit" | "error";
+  | "fieldersChoice" | "infieldHit" | "error"
+  | "sacrifice_bunt" | "bunt_hit" | "bunt_out";
 
 /** 1打席の詳細結果 */
 interface AtBatDetail {
@@ -394,6 +395,88 @@ export function generateBattedBall(batter: Player, pitcher: Player): BattedBall 
   const type = classifyBattedBallType(launchAngle, exitVelocity);
 
   return { direction, launchAngle, exitVelocity, type };
+}
+
+// === バント判定 ===
+
+/** 犠牲バント試行条件を判定 */
+function shouldAttemptSacrificeBunt(
+  bases: BaseRunners,
+  outs: number,
+  batter: Player,
+  batterIndex: number
+): boolean {
+  // 2アウトは犠打不要
+  if (outs >= 2) return false;
+  // 走者が1塁または2塁にいることが条件
+  const hasRunner = bases.first !== null || bases.second !== null;
+  if (!hasRunner) return false;
+  // 投手、または打順7-9番かつミート50未満
+  const isLowOrderBatter = batterIndex >= 6 && batter.batting.contact < 50;
+  return batter.isPitcher || isLowOrderBatter;
+}
+
+/** セーフティバント試行条件を判定 */
+function shouldAttemptSafetyBunt(batter: Player): boolean {
+  // 走力85以上が条件
+  if (batter.batting.speed < 85) return false;
+  // 試行確率: 1〜2%（NPB基準に準じた低頻度）
+  const attemptRate = 0.01 + (batter.batting.speed - 85) * 0.0005;
+  return Math.random() < attemptRate;
+}
+
+/** 犠牲バントを解決する */
+function resolveSacrificeBunt(
+  batter: Player,
+  bases: BaseRunners
+): { result: AtBatResult; newBases: BaseRunners } {
+  // 成功率: contact 50 → 70%, contact 100 → 80%
+  const successRate = 0.60 + batter.batting.contact * 0.002;
+  const rand = Math.random();
+
+  if (rand < successRate) {
+    // 成功: 走者を1つ進塁、打者アウト
+    const newBases: BaseRunners = { first: null, second: null, third: null };
+    if (bases.third) {
+      // 3塁走者はホームへ（この関数では得点処理は呼び出し元で行う）
+    }
+    if (bases.second) newBases.third = bases.second;
+    if (bases.first) newBases.second = bases.first;
+    return { result: "sacrifice_bunt", newBases };
+  }
+
+  // 失敗分岐
+  const failRand = Math.random();
+  if (failRand < 0.40) {
+    // ファウル → 再試行は呼び出し元で管理（ここでは失敗として返す）
+    return { result: "bunt_out", newBases: bases };
+  } else if (failRand < 0.80) {
+    // ゴロアウト: 打者アウト、走者進塁なし
+    return { result: "bunt_out", newBases: bases };
+  } else {
+    // フィルダースチョイス: 打者1塁、走者アウト
+    const newBases: BaseRunners = { first: batter, second: null, third: null };
+    if (bases.second) newBases.third = bases.second;
+    return { result: "bunt_out", newBases };
+  }
+}
+
+/** セーフティバントを解決する */
+function resolveSafetyBunt(batter: Player, bases: BaseRunners): { result: AtBatResult; newBases: BaseRunners } {
+  // 成功率: speed 80, contact 50 → 41%
+  const successRate = 0.20 + batter.batting.speed * 0.002 + batter.batting.contact * 0.001;
+  if (Math.random() < successRate) {
+    // 成功: 打者1塁、走者も進塁
+    const newBases: BaseRunners = { first: batter, second: null, third: null };
+    if (bases.third) {
+      // 3塁走者は生還（呼び出し元で処理）
+    }
+    if (bases.second) newBases.third = bases.second;
+    if (bases.first) newBases.second = bases.first;
+    return { result: "bunt_hit", newBases };
+  }
+  // 失敗: 打者アウト、走者進塁なし
+  return { result: "bunt_out", newBases: bases };
 }
 
 /** 内野手をゾーンベースで決定 */
@@ -830,12 +913,56 @@ function simulateAtBat(
   fielderMap: Map<FielderPosition, Player>,
   bases: BaseRunners,
   outs: number,
-  pitcherState?: PitcherGameState
-): AtBatDetail & { pitchCount: number } {
+  pitcherState?: PitcherGameState,
+  batterIndex?: number
+): AtBatDetail & { pitchCount: number; buntNewBases?: BaseRunners } {
   const bat = batter.batting;
   let balls = 0;
   let strikes = 0;
   let pitchCount = 0;
+
+  // === 犠牲バント判定（打席開始時、死球より先に判定）===
+  const actualBatterIndex = batterIndex ?? 8;
+  if (shouldAttemptSacrificeBunt(bases, outs, batter, actualBatterIndex)) {
+    // ファウル再試行を最大2回まで許容
+    let buntAttempts = 0;
+    while (buntAttempts < 3) {
+      const buntR = resolveSacrificeBunt(batter, bases);
+      pitchCount++;
+      if (buntAttempts < 2 && buntR.result === "bunt_out" && Math.random() < 0.40) {
+        // ファウル扱い: 再試行
+        buntAttempts++;
+        continue;
+      }
+      return {
+        result: buntR.result,
+        battedBallType: "ground_ball",
+        fielderPosition: 1,
+        direction: 10 + Math.random() * 60,
+        launchAngle: -5,
+        exitVelocity: 50 + Math.random() * 30,
+        pitchCount,
+        buntNewBases: buntR.newBases,
+      };
+    }
+    // 3回目はファウル扱いで通常打席へ
+  }
+
+  // === セーフティバント判定 ===
+  if (shouldAttemptSafetyBunt(batter)) {
+    const safetyR = resolveSafetyBunt(batter, bases);
+    pitchCount++;
+    return {
+      result: safetyR.result,
+      battedBallType: "ground_ball",
+      fielderPosition: 1,
+      direction: 10 + Math.random() * 60,
+      launchAngle: -5,
+      exitVelocity: 50 + Math.random() * 30,
+      pitchCount,
+      buntNewBases: safetyR.newBases,
+    };
+  }
 
   while (true) {
     // 疲労を考慮した投手能力を取得
@@ -1836,7 +1963,7 @@ function simulateHalfInning(
     const pitcher = pitcherState.player;
     const pitcherLog = pitcherState.log;
 
-    const detail = simulateAtBat(batter, pitcher, fielderMap, bases, outs, pitcherState);
+    const detail = simulateAtBat(batter, pitcher, fielderMap, bases, outs, pitcherState, idx % battingTeam.length);
     // 投球数をpitcherStateに累積
     pitcherState.pitchCount += detail.pitchCount;
     const result = detail.result;
@@ -2085,6 +2212,60 @@ function simulateHalfInning(
         for (const runner of errAdvance.scoredRunners) {
           getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
         }
+        break;
+      }
+
+      case "sacrifice_bunt": {
+        // 犠打: 打数カウントなし、アウト+1、走者進塁
+        outs++;
+        bs.sacrificeBunts = (bs.sacrificeBunts ?? 0) + 1;
+        pitcherLog.sacrificeBuntsAllowed = (pitcherLog.sacrificeBuntsAllowed ?? 0) + 1;
+        // 守備記録: 投手(P)にA、一塁手(1B)にPO
+        recordFielding(batterStatsMap, fielderMap, 1, "assist");
+        recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+        // 走者進塁（3塁走者の生還を処理）
+        const sbNewBases = detail.buntNewBases ?? bases;
+        // 3塁走者が生還したかを判定: 元の3塁に走者がいて、新しい3塁にいない場合
+        if (bases.third && !sbNewBases.third && sbNewBases.second !== bases.third && sbNewBases.first !== bases.third) {
+          const scorer = bases.third;
+          getOrCreateBatterStats(batterStatsMap, scorer.id).runs++;
+          runs += 1;
+          inningRuns += 1;
+          bs.rbi += 1;
+          pitcherLog.earnedRuns += 1;
+        }
+        bases = sbNewBases;
+        break;
+      }
+
+      case "bunt_hit": {
+        // バントヒット: 安打扱い
+        bs.atBats++;
+        bs.hits++;
+        hits++;
+        pitcherLog.hits++;
+        const bhNewBases = detail.buntNewBases ?? bases;
+        // 3塁走者の生還判定
+        if (bases.third && !bhNewBases.third && bhNewBases.second !== bases.third && bhNewBases.first !== bases.third) {
+          const scorer = bases.third;
+          getOrCreateBatterStats(batterStatsMap, scorer.id).runs++;
+          runs += 1;
+          inningRuns += 1;
+          bs.rbi += 1;
+          pitcherLog.earnedRuns += 1;
+        }
+        bases = bhNewBases;
+        break;
+      }
+
+      case "bunt_out": {
+        // バント失敗: 打者アウト、打数にカウント
+        outs++;
+        bs.atBats++;
+        // 守備記録: 投手(P)にA、一塁手(1B)にPO
+        recordFielding(batterStatsMap, fielderMap, 1, "assist");
+        recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+        bases = detail.buntNewBases ?? bases;
         break;
       }
 

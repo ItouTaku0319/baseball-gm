@@ -177,6 +177,7 @@ export interface BatterSeasonStats {
   hitByPitch: number;      // 死球
   sacrificeFlies: number;  // 犠牲フライ
   groundedIntoDP: number;  // 併殺打
+  sacrificeBunts?: number; // 犠打数
 }
 
 /** 投手のシーズン成績 */
@@ -194,6 +195,7 @@ export interface PitcherSeasonStats {
   strikeouts: number;
   homeRunsAllowed: number;
   hitBatsmen: number;      // 与死球
+  sacrificeBuntsAllowed?: number; // 被犠打数
   groundBallOuts: number;  // ゴロアウト数
   flyBallOuts: number;     // フライアウト数
   groundBalls: number;     // 全ゴロ打球数（安打・エラー含む）
