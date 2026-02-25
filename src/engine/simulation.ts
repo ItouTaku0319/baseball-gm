@@ -9,6 +9,7 @@ import {
   GROUND_BALL_ANGLE_THRESHOLD, GROUND_BALL_MAX_DISTANCE,
   GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO,
   TRAJECTORY_CARRY_FACTORS,
+  MENTAL_FATIGUE_RESISTANCE, MENTAL_PINCH_CONTROL_FACTOR,
 } from "./physics-constants";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
@@ -67,12 +68,16 @@ function getEffectivePitcherAbilities(pitcherState: PitcherGameState): {
 } {
   const pit = pitcherState.player.pitching!;
   const penalty = getFatiguePenalty(pitcherState);
+  // 精神力(0-100)による疲労ペナルティ軽減。mentalToughness 50が基準（軽減なし）
+  // mentalToughness 100 → 疲労ペナルティを最大30%軽減、0 → 軽減なし
+  const mentalResistance = 1 - (pit.mentalToughness / 100) * MENTAL_FATIGUE_RESISTANCE;
+  const adjustedPenalty = penalty * mentalResistance;
   const vel = pit.velocity <= 100 ? 120 + (pit.velocity / 100) * 45 : pit.velocity;
-  const effectiveVelocity = vel * (1 - penalty * 0.5);
-  const effectiveControl = pit.control * (1 - penalty);
+  const effectiveVelocity = vel * (1 - adjustedPenalty * 0.5);
+  const effectiveControl = pit.control * (1 - adjustedPenalty);
   const effectivePitches = pit.pitches.map(p => ({
     ...p,
-    level: Math.max(1, Math.round(p.level * (1 - penalty * 0.5)))
+    level: Math.max(1, Math.round(p.level * (1 - adjustedPenalty * 0.5)))
   }));
   return {
     velocity: effectiveVelocity,
@@ -850,8 +855,16 @@ function simulateAtBat(
       return { result: "hitByPitch", battedBallType: null, fielderPosition: null, direction: null, launchAngle: null, exitVelocity: null, pitchCount };
     }
 
+    // ピンチ時の精神力補正: 得点圏走者(2塁 or 3塁)がいる場合にcontrolを補正
+    // mentalToughness 50が基準（補正なし）、100で+5ポイント、0で-5ポイント
+    const runnersInScoringPosition = bases.second || bases.third;
+    const mentalControlBonus = runnersInScoringPosition
+      ? (effPit.mentalToughness - 50) * MENTAL_PINCH_CONTROL_FACTOR
+      : 0;
+    const effectiveControl = clamp(effPit.control + mentalControlBonus, 0, 100);
+
     // ゾーン内投球率: 制球依存。カウント補正あり
-    let zoneRate = 0.35 + (effPit.control / 100) * 0.30;
+    let zoneRate = 0.35 + (effectiveControl / 100) * 0.30;
     if (strikes > balls) zoneRate -= 0.05;  // 投手有利カウント: ボール球を使いやすい
     if (balls > strikes) zoneRate += 0.05;  // 打者有利カウント: ストライクを取りにいく
 

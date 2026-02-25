@@ -18,3 +18,11 @@ export const GROUND_BALL_AVG_SPEED_RATIO = 0.7; // ゴロ平均速度比
 // 弾道キャリーファクター (弾道1-4)
 // FLIGHT_TIME_FACTOR統一による飛距離短縮(×0.85)を補正
 export const TRAJECTORY_CARRY_FACTORS = [1.07, 1.19, 1.25, 1.30] as const;
+
+// 精神力(mentalToughness)による能力補正の定数
+// 基準値50が補正なし、最大値100で上限効果、最小値0で下限効果
+// 疲労ペナルティ軽減: 精神力100で疲労ペナルティを30%軽減（精神力0で軽減なし）
+export const MENTAL_FATIGUE_RESISTANCE = 0.30;
+// ピンチ時の制球ボーナス: 得点圏走者あり時、mentalToughness 50基準で±5ポイント
+// control 0-100スケール上での補正量 (mentalToughness - 50) * 0.10
+export const MENTAL_PINCH_CONTROL_FACTOR = 0.10;
