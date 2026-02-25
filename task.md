@@ -25,28 +25,7 @@ PMは以下の条件を**すべて**満たすタスクを自律的に実行し�
 
 ## 自律実行可能タスク
 
-### GAME-005: けが・故障システム
-- 優先度: MEDIUM
-- 自律: YES
-- 依存: GAME-001 ✅完了済み
-- 対象ファイル: `models/player.ts`, `engine/simulation.ts`, `engine/season-advancement.ts`, `store/game-store.ts`, `app/game/[id]/page.tsx`
-- 現状: Player型にinjury関連フィールドなし。season-advancement.tsの`simulateDay()`末尾が日次回復処理の挿入ポイント
-- 実装ポイント:
-  - Player型に `injury?: { type: 'minor'|'moderate'|'severe'; daysRemaining: number; description: string }` を追加
-  - 試合中の故障: `simulateAtBat()`内でインプレー時に低確率で発生判定
-  - 日次回復: `season-advancement.ts`の`simulateDay()`戻り値直前に`recoverInjuredPlayers()`を挿入
-  - 故障選手の自動2軍降格: `rosterLevels[playerId] = 'ni_gun'` に自動変更
-  - ダッシュボード: 故障者リスト（選手名・故障内容・残り日数）をカード表示
-- 完了条件:
-  - [ ] 試合中に低確率（全打席の0.1-0.2%）で故障発生
-  - [ ] 故障レベル: 軽傷（7-14日）/ 中傷（30-60日）/ 重傷（残りシーズン全休）
-    - 発生比率: 軽傷70% / 中傷25% / 重傷5%
-  - [ ] 故障中の選手は試合出場不可（打順・ローテから自動除外）
-  - [ ] 日次進行で`daysRemaining`を減算、0になったら故障解除
-  - [ ] ダッシュボードに故障者リスト表示
-  - [ ] 既存セーブデータとの互換性（`injury`フィールドはoptionalなので `?? undefined` で互換）
-  - [ ] `npm run build` 成功
-  - [ ] 143試合シーズンでチームあたり5-15件程度の故障が発生すること
+（現在すべて完了済み）
 
 ### GAME-006: サブポジション対応
 - 優先度: MEDIUM
@@ -163,6 +142,7 @@ PMは以下の条件を**すべて**満たすタスクを自律的に実行し�
 - [x] GAME-004: 得点期待値テーブル（24パターン・ヒートマップ表示 / 2e0e648）
 - [x] GAME-002: バント処理（犠牲バント・セーフティバント・投手守備機会増加 / 5304790）
 - [x] GAME-006: サブポジション対応（隣接ポジション付与・守備力80%補正・UI表示 / 0d6e182）
+- [x] GAME-005: けが・故障システム（試合中故障発生・日次回復・ダッシュボード表示 / 7440296）
 
 </details>
 
