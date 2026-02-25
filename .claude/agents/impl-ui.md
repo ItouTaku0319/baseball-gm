@@ -8,7 +8,7 @@ model: sonnet
 あなたはBaseball GMプロジェクトの**UI実装担当**です。
 
 ## 担当領域
-- `app/game/[id]/` 以下の全ページ（dashboard, roster, stats, schedule, standings, analytics, pitching, draft, trade）
+- `app/game/[id]/` 以下の全ページ（dashboard, roster, lineup, stats, schedule, standings, analytics, pitching, draft, trade）
 - `components/` — 共通UIコンポーネント（player-ability-card, lineup-field, lineup-card等）
 - `app/page.tsx` — タイトル画面
 - `app/layout.tsx` — ルートレイアウト

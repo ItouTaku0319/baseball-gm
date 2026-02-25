@@ -10,7 +10,7 @@ NPB（日本プロ野球）をモデルにした野球GMシミュレーション
 - **言語**: TypeScript 5 (strict mode)
 - **UI**: React 19 + Tailwind CSS 4
 - **状態管理**: Zustand 5
-- **データ永続化**: localStorage
+- **データ永続化**: IndexedDB (Dexie.js) — `src/db/`
 - **パスエイリアス**: `@/*` → `src/*`
 
 ## 開発コマンド
@@ -34,34 +34,52 @@ src/
 │       └── [id]/
 │           ├── page.tsx       # ダッシュボード（成績・順位・シム操作）
 │           ├── roster/page.tsx    # ロスター（選手一覧・能力）
+│           ├── lineup/page.tsx    # 打順・ローテ編集
 │           ├── standings/page.tsx # 順位表
 │           ├── schedule/page.tsx  # スケジュール（日程・結果）
 │           ├── stats/page.tsx     # 成績（打撃/投手・セイバー指標）
 │           ├── analytics/page.tsx # 打球分析（シーズンデータ・診断シミュ）
 │           ├── pitching/page.tsx  # 投球分析（ストライクゾーン・球種分析）
-│           ├── draft/page.tsx     # ドラフト（未実装UI）
-│           └── trade/page.tsx     # トレード（未実装UI）
+│           ├── draft/page.tsx     # ドラフト
+│           └── trade/page.tsx     # トレード
 ├── components/             # 共通UIコンポーネント
-│   ├── player-ability-card.tsx # 選手能力カード・グレード色・弾道アイコン
-│   ├── lineup-field.tsx       # SVGフィールド図（守備位置ノード）
-│   └── lineup-card.tsx        # 打順カード（選手情報+能力値+成績）
+│   ├── player-ability-card.tsx    # 選手能力カード・グレード色・弾道アイコン
+│   ├── lineup-field.tsx           # SVGフィールド図（守備位置ノード）
+│   ├── lineup-card.tsx            # 打順カード（選手情報+能力値+成績）
+│   ├── batted-ball-trajectory.tsx # 打球軌道可視化（フィールド/サイドビュー）
+│   └── player-tooltip.tsx         # 選手ツールチップ
 ├── engine/                 # ゲームエンジン（純粋関数）
-│   ├── physics-constants.ts # 打球物理の共通定数（重力・空気抵抗・フェンス距離等）
-│   ├── simulation.ts      # 試合シミュレーション（打席・走塁）
+│   ├── simulation.ts      # 試合シミュレーション（打席・走塁・投手交代）
 │   ├── fielding-ai.ts     # 守備AI（座標系・到達時間計算・判断ロジック）
+│   ├── physics-constants.ts # 打球物理の共通定数
 │   ├── season.ts          # シーズン生成・スケジュール・順位
 │   ├── season-advancement.ts # シーズン進行（1試合/1日/1週間/自チームまで）
+│   ├── player-generator.ts # 選手生成（能力値・球種・弾道）
+│   ├── lineup.ts          # 打順・ローテ自動構成
 │   ├── draft.ts           # ドラフトエンジン（ウェーバー方式）
-│   └── trade.ts           # トレードエンジン（選手価値算出・CPU交渉）
+│   ├── trade.ts           # トレードエンジン（選手価値算出・CPU交渉）
+│   ├── awards.ts          # 表彰（MVP・ベストナイン等）
+│   ├── playoffs.ts        # プレーオフ・CS
+│   ├── preseason.ts       # シーズン前処理
+│   ├── offseason.ts       # オフシーズン処理
+│   └── roster-management.ts # ロスター管理
 ├── models/                 # 型定義
 │   ├── player.ts          # Player, BatterSeasonStats, PitcherSeasonStats
-│   ├── team.ts            # Team, TeamRecord
-│   ├── league.ts          # Season, ScheduleEntry, League, GameResult
+│   ├── team.ts            # Team, TeamRecord, TeamLineupConfig
+│   ├── league.ts          # Season, ScheduleEntry, League, GameResult, AtBatLog
 │   └── game-state.ts      # GameState（セーブデータ構造）
+├── db/                     # データ永続化（IndexedDB / Dexie.js）
+│   ├── database.ts        # DB定義・テーブルスキーマ
+│   ├── save-load.ts       # セーブ/ロードAPI
+│   └── helpers.ts         # ヘルパー関数
 ├── store/
 │   └── game-store.ts      # Zustandストア（ゲーム状態・アクション）
 └── data/
     └── teams.ts           # 12チームテンプレート（セ6+パ6）
+
+scripts/
+├── test-balance-full.ts   # バランステスト（1000試合、品質ゲート）
+└── test-balance.ts        # 簡易バランステスト
 ```
 
 ## アーキテクチャ方針
@@ -71,9 +89,13 @@ src/
 - UIやストアに依存しない
 - 物理定数は必ず `physics-constants.ts` からimport
 
+### DB層（`src/db/`）
+- Dexie.js（IndexedDB）でセーブデータを永続化
+- `save-load.ts` がセーブ/ロードAPIを提供
+
 ### ストア層（`src/store/`）
 - Zustandでグローバル状態管理
-- localStorageでセーブ/ロード
+- DB層経由でセーブ/ロード
 - エンジン関数をラップしてアクションとして公開
 
 ### UI層（`src/app/`）
@@ -115,15 +137,16 @@ src/
 
 PMが専門エージェントに作業を委譲する。定義ファイルは `.claude/agents/` にある。
 
-| 役割 | エージェント名 | 担当領域 |
-|---|---|---|
-| PM（あなた自身） | メインセッション | 全体統括・タスク分解・Git操作 |
-| エンジン実装くん | `impl-engine` | simulation/fielding-ai/physics/season |
-| UI実装くん | `impl-ui` | app/pages/components |
-| データ実装くん | `impl-data` | models/store/GAME_SPEC/docs |
-| テストくん | `tester` | 動作検証（読み取り専用） |
-| レビューくん | `reviewer` | コードレビュー（編集不可） |
-| ガーディアン | `guardian` | 品質監査（編集不可） |
+| 役割 | エージェント名 | モデル | 担当領域 |
+|---|---|---|---|
+| PM（あなた自身） | メインセッション | opus | 全体統括・タスク分解・Git操作 |
+| エンジン実装くん | `impl-engine` | sonnet | engine/ (simulation/fielding-ai/physics/season等) |
+| UI実装くん | `impl-ui` | sonnet | app/game/[id]/ 全ページ・components/ |
+| データ実装くん | `impl-data` | sonnet | models/・store/・db/・GAME_SPEC/docs |
+| 汎用実装くん | `implementer` | sonnet | 領域横断・小規模修正（フォールバック） |
+| テストくん | `tester` | haiku | 動作検証（読み取り専用） |
+| レビューくん | `reviewer` | sonnet | コードレビュー（編集不可） |
+| ガーディアン | `guardian` | sonnet | 品質監査（編集不可） |
 
 ### ワークフロー
 
