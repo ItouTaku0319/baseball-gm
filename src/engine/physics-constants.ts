@@ -72,14 +72,15 @@ export const AGENT_MAX_TIME_GROUND = 8.0;        // ゴロの最大シミュレ�
 export const AGENT_MAX_TIME_FLY = 12.0;          // フライの最大シミュレーション時間(秒)
 
 // 反応時間
-export const AGENT_BASE_REACTION_IF = 0.35;      // 内野手基本反応時間(秒)
+export const AGENT_BASE_REACTION_IF = 0.60;      // 内野手基本反応時間(秒)
 export const AGENT_BASE_REACTION_OF = 0.45;      // 外野手基本反応時間(秒)
 export const AGENT_PITCHER_REACTION = 0.60;      // 投手の反応遅延(秒)
 export const AGENT_CATCHER_REACTION = 0.40;      // 捕手の反応時間(秒)
 
 // 捕球半径
-export const AGENT_CATCH_RADIUS_IF = 1.0;        // 内野手の標準捕球半径(m)
+export const AGENT_CATCH_RADIUS_IF = 1.0;        // 内野手の標準捕球半径(m) フライ用
 export const AGENT_CATCH_RADIUS_OF = 1.5;        // 外野手の標準捕球半径(m)
+export const AGENT_GROUND_INTERCEPT_RADIUS = 0.7; // ゴロ経路インターセプト半径(m)
 
 // ダイビングキャッチ
 export const AGENT_DIVE_MIN_DIST = 1.5;          // ダイビング可能最小距離(m)
