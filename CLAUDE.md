@@ -138,6 +138,7 @@ scripts/                   # プロジェクトルート直下
 | `docs/design-decisions.md` | 過去の設計判断・バランス調整履歴 | 関連機能の修正時 |
 | `docs/autonomous-workflow.md` | 自律開発の詳細手順・ReActループ | 自律モード実行時 |
 | `docs/fielding-distribution-analysis.md` | 守備機会分布のNPB実データ分析 | 守備ロジック修正時 |
+| `docs/testing-strategy.md` | テスト戦略・レイヤー別ガイド・既存テスト一覧 | テスト追加・修正時 |
 
 `GAME_SPEC.md` はゲームバランスに関わる実装を行う際に必ず参照する。
 確率・計算式・パラメータを変更した場合は、コードと仕様書を同時に更新する。
