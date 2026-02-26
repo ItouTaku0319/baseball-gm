@@ -4,7 +4,8 @@ import {
   GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR,
   GROUND_BALL_ANGLE_THRESHOLD, GROUND_BALL_MAX_DISTANCE,
   GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO, GROUND_BALL_BOUNCE_ANGLE_SCALE,
-  FIELDER_CATCH_RADIUS, PITCHER_REACTION_PENALTY,
+  FIELDER_CATCH_RADIUS, FLY_CATCH_RADIUS, PITCHER_REACTION_PENALTY,
+  CATCHER_POPUP_REACTION, CATCHER_POPUP_RUN_SPEED, CATCHER_POPUP_CATCH_RADIUS,
 } from "./physics-constants";
 import { assignFielderDuties, getBallZone } from "./fielding-assignments";
 
@@ -412,7 +413,7 @@ export function evaluateFielders(
         distanceAtLanding = Math.sqrt(
           (posAtLanding.x - landing.position.x) ** 2 + (posAtLanding.y - landing.position.y) ** 2
         );
-        canReach = distanceAtLanding < FIELDER_CATCH_RADIUS;
+        canReach = distanceAtLanding < FLY_CATCH_RADIUS;
         interceptType = canReach ? "fly_converge" : "none";
       } else {
         // 打球が遠い → ベースカバー
@@ -432,14 +433,36 @@ export function evaluateFielders(
       ballArrival = landing.flightTime;
 
       if (pos === 2) {
-        // キャッチャー: フライ/ライナー時はホーム待機
+        // キャッチャー: 近距離フライ → 捕球試行、遠距離 → ホーム待機
         timeToReach = reactionTime + distanceToBall / runSpeed;
-        canReach = false;
-        targetPos = { x: fielderPos.x, y: fielderPos.y };
-        action = "hold";
-        posAtLanding = { x: fielderPos.x, y: fielderPos.y };
-        distanceAtLanding = distanceToBall;
-        interceptType = "none";
+        if (distanceToBall < 20) {
+          // 近距離フライ: ポップフライ専門訓練で素早く反応・全力疾走
+          const catcherReaction = CATCHER_POPUP_REACTION;
+          const catcherRunSpeed = CATCHER_POPUP_RUN_SPEED;
+          targetPos = { x: landing.position.x, y: landing.position.y };
+          action = "charge";
+          const movableTime = Math.max(0, ballArrival - catcherReaction);
+          const movableDist = movableTime * catcherRunSpeed;
+          const dist = distanceToBall || 1;
+          const moved = Math.min(movableDist, dist);
+          posAtLanding = {
+            x: fielderPos.x + (dx / dist) * moved,
+            y: fielderPos.y + (dy / dist) * moved,
+          };
+          distanceAtLanding = Math.sqrt(
+            (posAtLanding.x - landing.position.x) ** 2 + (posAtLanding.y - landing.position.y) ** 2
+          );
+          canReach = distanceAtLanding < CATCHER_POPUP_CATCH_RADIUS;
+          interceptType = canReach ? "fly_converge" : "none";
+        } else {
+          // 遠距離フライ → ホーム待機（既存動作維持）
+          canReach = false;
+          targetPos = { x: fielderPos.x, y: fielderPos.y };
+          action = "hold";
+          posAtLanding = { x: fielderPos.x, y: fielderPos.y };
+          distanceAtLanding = distanceToBall;
+          interceptType = "none";
+        }
       } else {
         // 投手: ゴロのライト方向(direction > 45)なら1Bカバー
         const isRightSide = landing.position.x > 0 && landing.isGroundBall;
@@ -458,13 +481,32 @@ export function evaluateFielders(
           );
           interceptType = "none";
         } else {
-          timeToReach = reactionTime + distanceToBall / runSpeed;
-          canReach = timeToReach <= ballArrival;
-          targetPos = { x: landing.position.x, y: landing.position.y };
-          action = "hold";
-          posAtLanding = { x: fielderPos.x, y: fielderPos.y };
-          distanceAtLanding = distanceToBall;
-          interceptType = canReach ? "fly_converge" : "none";
+          // 投手: 近距離フライ(20m以内) → 捕球試行。それ以外はホーム前カバー
+          if (distanceToBall < 20) {
+            targetPos = { x: landing.position.x, y: landing.position.y };
+            action = "charge";
+            const movableTime = Math.max(0, ballArrival - reactionTime);
+            const movableDist = movableTime * runSpeed;
+            const dist = distanceToBall || 1;
+            const moved = Math.min(movableDist, dist);
+            posAtLanding = {
+              x: fielderPos.x + (dx / dist) * moved,
+              y: fielderPos.y + (dy / dist) * moved,
+            };
+            distanceAtLanding = Math.sqrt(
+              (posAtLanding.x - landing.position.x) ** 2 + (posAtLanding.y - landing.position.y) ** 2
+            );
+            canReach = distanceAtLanding < FLY_CATCH_RADIUS;
+            interceptType = canReach ? "fly_converge" : "none";
+          } else {
+            timeToReach = reactionTime + distanceToBall / runSpeed;
+            canReach = false;
+            targetPos = { x: fielderPos.x, y: fielderPos.y };
+            action = "hold";
+            posAtLanding = { x: fielderPos.x, y: fielderPos.y };
+            distanceAtLanding = distanceToBall;
+            interceptType = "none";
+          }
         }
       }
     }

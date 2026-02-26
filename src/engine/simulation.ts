@@ -11,7 +11,7 @@ import {
   TRAJECTORY_CARRY_FACTORS,
   MENTAL_FATIGUE_RESISTANCE, MENTAL_PINCH_CONTROL_FACTOR,
   BOUNCE_CLOSE_THRESHOLD, BOUNCE_NEAR_THRESHOLD, BOUNCE_MID_THRESHOLD,
-  FIELDER_CATCH_RADIUS,
+  FLY_CATCH_RADIUS,
 } from "./physics-constants";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
@@ -1097,14 +1097,14 @@ function resolveFlyMultiConverge(
     const fielderPos = fielder.position;
     const skill = fielder.skill;
     const fieldingRate = (skill.fielding * 0.6 + skill.catching * 0.4) / 100;
+    const distAtLand = fielder.distanceAtLanding ?? fielder.distanceToBall;
 
     if (!fielder.canReach) continue;
 
-    // 捕球成功率計算（既存ロジックと同一）
-    const distAtLand = fielder.distanceAtLanding ?? fielder.distanceToBall;
+    // 通常捕球（canReach=true, 90-99%成功）
     const margin = fielder.ballArrivalTime - fielder.timeToReach;
     const marginFactor = clamp(
-      margin > 0 ? margin / 1.0 : (FIELDER_CATCH_RADIUS - distAtLand) / FIELDER_CATCH_RADIUS,
+      margin > 0 ? margin / 1.0 : (FLY_CATCH_RADIUS - distAtLand) / FLY_CATCH_RADIUS,
       0, 1
     );
     const baseCatchRate = 0.90 + marginFactor * 0.07;

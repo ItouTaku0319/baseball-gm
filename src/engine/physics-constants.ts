@@ -22,7 +22,14 @@ export const TRAJECTORY_CARRY_FACTORS = [1.02, 1.12, 1.17, 1.22] as const;
 
 // 守備チャージ・バウンスペナルティ閾値
 export const PITCHER_REACTION_PENALTY = 0.6; // 投手の投球後反応遅延(秒)
-export const FIELDER_CATCH_RADIUS = 0.5;     // 捕球可能距離(m)
+export const FIELDER_CATCH_RADIUS = 0.5;     // 捕球可能距離(m) ゴロ用
+export const FLY_CATCH_RADIUS = 1.3;         // フライ/ライナーの確実捕球距離(m) 内野手用
+// キャッチャーはポップフライ専門訓練で近距離(20m以内)の反応が速い
+// 変更前: キャッチャーは一律ホーム待機(canReach=false)
+// 変更後: 近距離フライは0.15秒で即反応(通常0.45秒)、走速8.5m/s+飛び込み3.5m半径
+export const CATCHER_POPUP_REACTION = 0.15;  // キャッチャーの近距離フライ反応時間(秒)
+export const CATCHER_POPUP_RUN_SPEED = 8.5;  // キャッチャーの近距離フライ走速(m/s、通常6.5より速い)
+export const CATCHER_POPUP_CATCH_RADIUS = 3.5; // キャッチャーの近距離フライ捕球半径(m、飛び込み込み)
 export const BOUNCE_CLOSE_THRESHOLD = 3;     // 近距離(m)
 export const BOUNCE_NEAR_THRESHOLD = 8;      // 中距離(m)
 export const BOUNCE_MID_THRESHOLD = 15;      // 遠距離(m)
