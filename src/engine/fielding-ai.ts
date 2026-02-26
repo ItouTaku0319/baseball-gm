@@ -60,7 +60,7 @@ export const DEFAULT_FIELDER_POSITIONS: ReadonlyMap<FielderPosition, FieldPositi
   [3, { x: 20,  y: 28   }], // 1B
   [4, { x: 10,  y: 36   }], // 2B
   [5, { x: -19, y: 24   }], // 3B（三塁線ゴロ対応のため前進配置）
-  [6, { x: -12, y: 33   }], // SS（短距離ゴロ対応のため前進配置）
+  [6, { x: -12, y: 33   }], // SS
   [7, { x: -28, y: 75   }], // LF (フェンス95m × 79%)
   [8, { x: 0,   y: 84   }], // CF (フェンス118m × 71%)
   [9, { x: 28,  y: 75   }], // RF (フェンス95m × 79%)

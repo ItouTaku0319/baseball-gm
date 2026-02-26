@@ -108,6 +108,7 @@ export interface AgentSnapshot {
   action: FielderAction;
   perceivedX?: number;
   perceivedY?: number;
+  effectiveRange?: number;
 }
 
 export interface AgentTimelineEntry {

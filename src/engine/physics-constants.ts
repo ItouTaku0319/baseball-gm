@@ -72,9 +72,31 @@ export const FLY_CATCH_RADIUS = 1.3;         // フライ/ライナーの確実�
 // キャッチャーはポップフライ専門訓練で近距離(20m以内)の反応が速い
 // 変更前: キャッチャーは一律ホーム待機(canReach=false)
 // 変更後: 近距離フライは0.15秒で即反応(通常0.45秒)、走速8.5m/s+飛び込み3.5m半径
+// fielding-ai.ts (旧守備AI) との互換性のために残す
 export const CATCHER_POPUP_REACTION = 0.15;  // キャッチャーの近距離フライ反応時間(秒)
 export const CATCHER_POPUP_RUN_SPEED = 8.5;  // キャッチャーの近距離フライ走速(m/s、通常6.5より速い)
 export const CATCHER_POPUP_CATCH_RADIUS = 3.5; // キャッチャーの近距離フライ捕球半径(m、飛び込み込み)
+export const TRANSFER_TIME_BASE = 0.25;      // 送球準備時間ベース(秒) ※旧0.55s
+export const TRANSFER_TIME_ARM_SCALE = 0.15; // 肩力による送球準備時間変動(秒) ※旧0.25s
+
+// 守備範囲計算（捕球リーチ）— 物理ベースモデル
+// 変更前: 固定半径(AGENT_CATCH_RADIUS_IF=1.0m, AGENT_CATCH_RADIUS_OF=1.5m, GROUND_INTERCEPT=0.7m)
+// 変更後: 守備力依存の動的リーチ（base + fielding/100 * factor）
+export const CATCH_REACH_BASE_IF = 0.5;        // 内野手の基本捕球リーチ(m)
+export const CATCH_REACH_BASE_OF = 1.5;        // 外野手の基本捕球リーチ(m)
+export const CATCH_REACH_BASE_C = 4.0;         // 捕手の基本捕球リーチ(m、ポップフライ専門訓練)
+export const CATCH_REACH_SKILL_FACTOR = 1.5;   // fielding/100 あたりの追加リーチ(m)
+
+// コールオフ
+// 変更前: エージェント間距離 + ターゲット距離両方で判定(AGENT_CALLOFF_RADIUS=8m)
+// 変更後: ターゲット距離のみで判定
+export const CALLOFF_TARGET_THRESHOLD = 15;    // コールオフ判定ターゲット近接距離(m)
+
+// 近接野手判定（closerPursuer）
+// 自分より十分近い野手が追跡中なら、カバーに回る判定の比率
+export const CLOSER_PURSUER_INTERCEPT_RATIO = 0.7; // インターセプト時（70%以内なら譲る）
+export const CLOSER_PURSUER_CHASE_RATIO = 0.6;     // チェーシング/フライ時（60%以内なら譲る）
+
 export const BOUNCE_CLOSE_THRESHOLD = 3;     // 近距離(m)
 export const BOUNCE_NEAR_THRESHOLD = 8;      // 中距離(m)
 export const BOUNCE_MID_THRESHOLD = 15;      // 遠距離(m)
@@ -138,11 +160,6 @@ export const AGENT_BASE_REACTION_OF = 0.45;      // 外野手基本反応時間(
 export const AGENT_PITCHER_REACTION = 0.60;      // 投手の反応遅延(秒)
 export const AGENT_CATCHER_REACTION = 0.40;      // 捕手の反応時間(秒)
 
-// 捕球半径
-export const AGENT_CATCH_RADIUS_IF = 1.0;        // 内野手の標準捕球半径(m) フライ用
-export const AGENT_CATCH_RADIUS_OF = 1.5;        // 外野手の標準捕球半径(m)
-export const AGENT_GROUND_INTERCEPT_RADIUS = 0.7; // ゴロ経路インターセプト半径(m)
-
 // ダイビングキャッチ
 export const AGENT_DIVE_MIN_DIST = 1.5;          // ダイビング可能最小距離(m)
 export const AGENT_DIVE_MAX_DIST = 3.5;          // ダイビング可能最大距離(m)
@@ -157,9 +174,6 @@ export const AGENT_RUNNING_CATCH_SKILL = 0.003;  // 守備力1あたりの成功
 export const AGENT_PERCEPTION_BASE_NOISE = 12;   // 基本ノイズσ(m)
 export const AGENT_PERCEPTION_LINE_DRIVE_MULT = 2.0; // ライナーのノイズ倍率
 export const AGENT_PERCEPTION_POPUP_MULT = 0.3;  // ポップフライのノイズ倍率
-
-// コールオフ
-export const AGENT_CALLOFF_RADIUS = 8;           // コールオフ判定距離(m)
 
 // 移動
 export const AGENT_ACCELERATION_TIME = 0.3;      // 0→最高速に達するまでの時間(秒)
