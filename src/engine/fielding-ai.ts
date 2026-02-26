@@ -101,10 +101,12 @@ export function calcBallLanding(
   if (isGroundBall) {
     // ゴロ: 摩擦減速モデル
     const v0 = exitVelocity / 3.6; // km/h → m/s
-    // 叩きつけ角度による減衰: 負の角度が大きいほどバウンドでエネルギー損失
+    // 角度による減衰:
+    // 負の角度: 叩きつけバウンドでエネルギー損失（-30°で最大70%減衰）
+    // 正の角度: ホップするほど地面との接触回数増でエネルギー損失（9°で約15%減衰）
     const bounceFactor = launchAngle < 0
       ? Math.max(0.3, 1 + launchAngle / GROUND_BALL_BOUNCE_ANGLE_SCALE)
-      : 1.0;
+      : 1 - (launchAngle / GROUND_BALL_ANGLE_THRESHOLD) * 0.15;
     const groundDistance = Math.min(GROUND_BALL_MAX_DISTANCE, v0 * GROUND_BALL_SPEED_FACTOR) * bounceFactor;
     const groundTime = groundDistance / (v0 * GROUND_BALL_AVG_SPEED_RATIO);
 

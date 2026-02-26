@@ -75,6 +75,11 @@ function createFielderMap(): Map<FielderPosition, Player> {
 
 // ========== 判定ロジック ==========
 const BASE_LENGTH = 27.4;
+const BASE_POSITIONS = {
+  first:  { x: 19.4, y: 19.4 },
+  second: { x: 0,    y: 38.8 },
+  third:  { x: -19.4, y: 19.4 },
+};
 function clamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
 
 function distToLanding(d: FielderDecision, landing: BallLanding): number {
@@ -85,23 +90,50 @@ function distToLanding(d: FielderDecision, landing: BallLanding): number {
   );
 }
 
+// simulation.tsと同様のロジックで回収者を選出
+// - 外野converger(fly_converge, pos>=7)を distAtLanding 昇順で選択
+// - 浅い打球(<30m)は内野手(pos 3-6)の方が近ければそちらを使用
+// - フォールバック: 任意の外野手
 function selectRetriever(
   fieldingResult: Map<FielderPosition, FielderDecision>,
   landing: BallLanding,
-  best: FielderDecision
-): FielderDecision {
-  let retriever: FielderDecision | null = null;
-  let minDist = Infinity;
-  for (const decision of fieldingResult.values()) {
-    if (!(decision.retrievalCandidate ?? false)) continue;
-    const d = distToLanding(decision, landing);
-    if (d < minDist) { minDist = d; retriever = decision; }
+): FielderDecision | null {
+  // 1. 外野converger(ボールに向かって走っていた最寄り)
+  const ofConvergers = Array.from(fieldingResult.values())
+    .filter(d => d.interceptType === "fly_converge" && d.position >= 7)
+    .sort((a, b) => (a.distanceAtLanding ?? a.distanceToBall) - (b.distanceAtLanding ?? b.distanceToBall));
+  let retriever: FielderDecision | null = ofConvergers[0] ?? null;
+
+  // 2. 浅い打球(<30m)では内野手の方が近い場合がある
+  if (landing.distance < 30) {
+    const retDist = retriever
+      ? distToLanding(retriever, landing)
+      : Infinity;
+    for (const d of fieldingResult.values()) {
+      if (d.position <= 2 || d.position >= 7) continue; // 内野手のみ(3-6)
+      const dist = distToLanding(d, landing);
+      if (dist < retDist) { retriever = d; }
+    }
   }
-  return retriever ?? best;
+
+  // 3. フォールバック: 任意の外野手
+  if (!retriever) {
+    for (const d of fieldingResult.values()) {
+      if (d.position >= 7) { retriever = d; break; }
+    }
+  }
+  return retriever;
 }
 
-function getThrowDistToFirst(pos: number): number {
-  const d: Record<number, number> = { 1: 19.4, 2: 27.4, 3: 5, 4: 18, 5: 38.8, 6: 32, 7: 55, 8: 60, 9: 35 };
+function getThrowDistToFirst(pos: number, fielder: FielderDecision): number {
+  // targetPosがあればそこから1Bへの実際の距離を計算
+  if (fielder.targetPos) {
+    return Math.sqrt(
+      (fielder.targetPos.x - BASE_POSITIONS.first.x) ** 2 +
+      (fielder.targetPos.y - BASE_POSITIONS.first.y) ** 2
+    );
+  }
+  const d: Record<number, number> = { 1: 19.4, 2: 26.7, 3: 9.0, 4: 19.3, 5: 40.3, 6: 33.8, 7: 55, 8: 65, 9: 55 };
   return d[pos] ?? 30;
 }
 
@@ -130,20 +162,71 @@ function checkHR(dir: number, ev: number, la: number, trajectory: number): boole
   return height >= FENCE_HEIGHT;
 }
 
-function resolveGroundBallResult(best: FielderDecision, batter: Player): ResultType {
+// simulation.ts resolveGroundBallSequential と同様の逐次インターセプトモデル
+// テストでは確定的に判定（Math.randomは使わない、捕球成功率判定をスキップ）
+function resolveGroundBallResult(
+  fieldingResult: Map<FielderPosition, FielderDecision>,
+  landing: BallLanding,
+  batter: Player,
+): ResultType {
   const runnerSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
   const timePerBase = BASE_LENGTH / runnerSpeed;
-  const runnerTo1B = 0.3 + timePerBase;
-  const skill = best.skill;
-  const secureTime = 0.3 + (1 - skill.fielding / 100) * 0.3;
-  const transferTime = 0.6 + (1 - skill.arm / 100) * 0.4;
-  const throwSpeed = 25 + (skill.arm / 100) * 15;
-  const fieldTime = Math.max(best.timeToReach, best.ballArrivalTime);
-  const throwDist = getThrowDistToFirst(best.position);
-  const defenseTime = fieldTime + secureTime + transferTime + throwDist / throwSpeed;
-  return runnerTo1B < defenseTime ? "infieldHit" : "out";
+  // simulation.tsと同値: スイング完了→打球方向確認→加速フェーズ
+  const runnerTo1B = 0.7 + timePerBase;
+
+  // --- フェーズ1: path_intercept 野手を projectionDistance 昇順にソート ---
+  const pathInterceptors = Array.from(fieldingResult.values())
+    .filter(d => d.interceptType === "path_intercept")
+    .sort((a, b) => (a.projectionDistance ?? 0) - (b.projectionDistance ?? 0));
+
+  for (const fielder of pathInterceptors) {
+    // timeToReach > ballArrival → ボール通過（次の野手へ）
+    if (fielder.timeToReach > fielder.ballArrivalTime) continue;
+
+    // 捕球成功とみなす（テストでは確定的判定）
+    // Phase1 secureTime: simulation.tsと同値
+    const skill = fielder.skill;
+    const secureTime = 0.2 + (1 - skill.fielding / 100) * 0.2;
+    const transferTime = 0.45 + (1 - skill.arm / 100) * 0.25;
+    const throwSpeed = 25 + (skill.arm / 100) * 15;
+    const fieldTime = Math.max(fielder.timeToReach, fielder.ballArrivalTime);
+    const throwDist = getThrowDistToFirst(fielder.position, fielder);
+    const defenseTime = fieldTime + secureTime + transferTime + throwDist / throwSpeed;
+    return runnerTo1B < defenseTime ? "infieldHit" : "out";
+  }
+
+  // --- フェーズ2: chase_to_stop 内野手（投手・外野手除く）で最寄り ---
+  let chaseFielder: FielderDecision | null = null;
+  let minChaseDist = Infinity;
+  for (const decision of fieldingResult.values()) {
+    if (decision.interceptType !== "chase_to_stop" || !decision.canReach) continue;
+    if (decision.position > 6 || decision.position === 1) continue;
+    const distAtLand = distToLanding(decision, landing);
+    if (distAtLand < minChaseDist) {
+      minChaseDist = distAtLand;
+      chaseFielder = decision;
+    }
+  }
+
+  if (chaseFielder) {
+    const fielder = chaseFielder;
+    const skill = fielder.skill;
+    // Phase2 secureTime: simulation.tsと同値
+    const secureTime = 0.15 + (1 - skill.fielding / 100) * 0.15;
+    const transferTime = 0.45 + (1 - skill.arm / 100) * 0.25;
+    const throwSpeed = 25 + (skill.arm / 100) * 15;
+    const fieldTime = Math.max(fielder.timeToReach, fielder.ballArrivalTime);
+    const throwDist = getThrowDistToFirst(fielder.position, fielder);
+    const defenseTime = fieldTime + secureTime + transferTime + throwDist / throwSpeed;
+    return runnerTo1B < defenseTime ? "infieldHit" : "out";
+  }
+
+  // --- フェーズ3: 誰も届かない → single（外野抜け）---
+  return "single";
 }
 
+// simulation.ts resolveHitAdvancement と同様のロジック
+// テストでは確定的判定（Math.randomの代わりに中央値を使用）
 function resolveHitAdvancement(
   ball: { direction: number; exitVelocity: number },
   landing: BallLanding,
@@ -152,48 +235,71 @@ function resolveHitAdvancement(
 ): ResultType {
   const skill = retriever.skill;
   const distAtLanding = retriever.distanceAtLanding ?? retriever.distanceToBall;
+  const fenceDist = getFenceDistance(ball.direction);
+
   let bouncePenalty: number;
   let rollDistance: number;
+
   if (landing.isGroundBall) {
-    bouncePenalty = 0.75;
+    // ゴロが外野に抜けた場合: Math.random() * 0.5 → 中央値 0.25
+    bouncePenalty = 0.5 + 0.25;
     rollDistance = 3;
   } else {
+    // フライ/ライナー: depthFactorベースのバウンドペナルティ (simulation.tsと同値)
+    // Math.random() * 0.4 → 中央値 0.2
     const depthFactor = clamp((landing.distance - 50) / 50, 0, 1);
-    const fenceDist = getFenceDistance(ball.direction);
-    if (distAtLanding < BOUNCE_CLOSE_THRESHOLD) {
-      bouncePenalty = 0.5 + depthFactor * 0.5 + 0.2; rollDistance = 1 + depthFactor * 2;
-    } else if (distAtLanding < BOUNCE_NEAR_THRESHOLD) {
-      bouncePenalty = 0.8 + depthFactor * 1.0 + 0.3; rollDistance = 2 + depthFactor * 3;
-    } else if (distAtLanding < BOUNCE_MID_THRESHOLD) {
-      bouncePenalty = 1.2 + depthFactor * 1.5 + 0.35; rollDistance = clamp((landing.distance - 50) * 0.1, 0, 6);
-    } else {
-      bouncePenalty = 1.2 + depthFactor * 2.0 + 0.4; rollDistance = clamp((landing.distance - 50) * 0.15, 0, 12);
+    bouncePenalty = 0.3 + depthFactor * 0.5 + 0.2;
+    rollDistance = clamp((landing.distance - 50) * 0.08, 0, 6);
+
+    // フェンス際: Math.random() * 0.6 → 中央値 0.3
+    if (landing.distance >= fenceDist * 0.90) {
+      bouncePenalty += 0.6 + 0.3;
+      rollDistance = Math.min(rollDistance + 3, 10);
     }
-    if (landing.distance >= fenceDist * 0.90) bouncePenalty += 0.9;
   }
+
   const pickupTime = 0.3 + (1 - skill.catching / 100) * 0.4;
   const runSpeedFielder = retriever.speed ?? 6.5;
   const additionalRunTime = distAtLanding / runSpeedFielder;
   const totalFielderTime = landing.isGroundBall
     ? retriever.timeToReach + bouncePenalty + pickupTime
     : retriever.ballArrivalTime + additionalRunTime + bouncePenalty + pickupTime;
+
   const throwSpeed = 25 + (skill.arm / 100) * 15;
   const runnerSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
   const timePerBase = BASE_LENGTH / runnerSpeed;
+
   const angleRad = (ball.direction - 45) * Math.PI / 180;
   const retrievalPos = {
     x: landing.position.x + rollDistance * Math.sin(angleRad),
     y: landing.position.y + rollDistance * Math.cos(angleRad),
   };
-  const throwTo2B = Math.sqrt((retrievalPos.x) ** 2 + (retrievalPos.y - 38.8) ** 2);
-  const throwTo3B = Math.sqrt((retrievalPos.x + 19.4) ** 2 + (retrievalPos.y - 19.4) ** 2);
+
+  // simulation.tsと同じ塁座標を使用
+  const throwTo2B = Math.sqrt(
+    (retrievalPos.x - BASE_POSITIONS.second.x) ** 2 +
+    (retrievalPos.y - BASE_POSITIONS.second.y) ** 2
+  );
+  const throwTo3B = Math.sqrt(
+    (retrievalPos.x - BASE_POSITIONS.third.x) ** 2 +
+    (retrievalPos.y - BASE_POSITIONS.third.y) ** 2
+  );
+
   const runnerTo2B = 0.3 + timePerBase * 2;
   const runnerTo3B = 0.3 + timePerBase * 3;
   const defenseTo2B = totalFielderTime + throwTo2B / throwSpeed;
   const defenseTo3B = totalFielderTime + throwTo3B / throwSpeed;
+
   let basesReached = 1;
-  if (runnerTo2B < defenseTo2B + 1.2) basesReached = 2;
+  // simulation.tsと同じマージン: -0.3 (旧: +1.2)
+  if (runnerTo2B < defenseTo2B - 0.3) basesReached = 2;
   if (basesReached >= 2 && runnerTo3B < defenseTo3B - 0.9) basesReached = 3;
+
+  // ゴロで3塁打は現実的でない
+  if (landing.isGroundBall) basesReached = Math.min(basesReached, 2);
+  // 短距離(<25m)に落ちた打球は長打にならない
+  if (landing.distance < 25) basesReached = Math.min(basesReached, 1);
+
   if (basesReached >= 3) return "triple";
   if (basesReached >= 2) return "double";
   return "single";
@@ -249,10 +355,13 @@ for (const dir of DIRECTIONS) {
         result = "homerun";
       } else if (ballType === "popup") {
         result = "popupOut";
+      } else if (ballType === "ground_ball") {
+        // ゴロ: 逐次インターセプトモデルで判定（fieldingResult全体を渡す）
+        result = resolveGroundBallResult(fieldingResult, landing, batter);
       } else if (best.canReach) {
-        result = ballType === "ground_ball" ? resolveGroundBallResult(best, batter) : "out";
+        result = "out";
       } else {
-        const retriever = selectRetriever(fieldingResult, landing, best);
+        const retriever = selectRetriever(fieldingResult, landing) ?? best;
         retrieverPos = retriever.position;
         retrieverDist = Math.round(distToLanding(retriever, landing) * 10) / 10;
         result = resolveHitAdvancement({ direction: dir, exitVelocity: ev }, landing, retriever, batter);

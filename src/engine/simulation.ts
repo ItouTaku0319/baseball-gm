@@ -347,10 +347,13 @@ export function classifyBattedBallType(launchAngle: number, exitVelocity: number
 
 /** 推定打球飛距離(メートル)を放物運動+空気抵抗補正で計算 */
 export function estimateDistance(exitVelocityKmh: number, launchAngleDeg: number): number {
-  if (launchAngleDeg <= 0) {
+  if (launchAngleDeg < GROUND_BALL_ANGLE_THRESHOLD) {
     // ゴロ: 摩擦減速モデル（calcBallLanding と同じロジック）
     const v0 = exitVelocityKmh / 3.6;
-    return Math.min(GROUND_BALL_MAX_DISTANCE, v0 * GROUND_BALL_SPEED_FACTOR);
+    const bounceFactor = launchAngleDeg < 0
+      ? Math.max(0.3, 1 + launchAngleDeg / 30)
+      : 1 - (launchAngleDeg / GROUND_BALL_ANGLE_THRESHOLD) * 0.15;
+    return Math.min(GROUND_BALL_MAX_DISTANCE, v0 * GROUND_BALL_SPEED_FACTOR) * bounceFactor;
   }
 
   const v0 = exitVelocityKmh / 3.6;
