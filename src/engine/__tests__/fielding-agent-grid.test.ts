@@ -349,3 +349,341 @@ describe("エージェント守備グリッドテスト", () => {
     });
   });
 });
+
+// ====================================================================
+// シード付き乱数
+// ====================================================================
+
+function createSeededRng(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    return s / 0x7fffffff;
+  };
+}
+
+// 代表打球パターン（7種）
+const REPRESENTATIVE_BALLS = [
+  { name: "ゴロ正面(SS)", direction: 55, exitVelocity: 110, launchAngle: -5 },
+  { name: "ゴロ横(3B)", direction: 20, exitVelocity: 100, launchAngle: -3 },
+  { name: "ゴロ高速", direction: 45, exitVelocity: 150, launchAngle: -10 },
+  { name: "浅フライ", direction: 45, exitVelocity: 90, launchAngle: 25 },
+  { name: "深フライCF", direction: 45, exitVelocity: 130, launchAngle: 30 },
+  { name: "深フライLF", direction: 15, exitVelocity: 130, launchAngle: 30 },
+  { name: "ライナー", direction: 45, exitVelocity: 120, launchAngle: 15 },
+];
+
+const GROUNDER_PATTERNS = REPRESENTATIVE_BALLS.filter(b => b.launchAngle < 10);
+const FLY_PATTERNS = REPRESENTATIVE_BALLS.filter(b => b.launchAngle >= 20);
+const DEEP_FLY_PATTERNS = REPRESENTATIVE_BALLS.filter(b =>
+  b.launchAngle >= 25 && b.exitVelocity >= 120
+);
+
+// D50ランナー（打者と同じ能力）
+const d50Runner = createD50Player(4); // 2Bポジション流用
+
+// 低arm野手マップ（犠飛テスト専用: arm=15で送球が遅い）
+function createLowArmPlayer(pos: FielderPosition): Player {
+  const base = createD50Player(pos);
+  return {
+    ...base,
+    batting: { ...base.batting, arm: 15 },
+  };
+}
+
+const lowArmFielderMap = new Map<FielderPosition, Player>();
+for (const pos of [1, 2, 3, 4, 5, 6, 7, 8, 9] as FielderPosition[]) {
+  lowArmFielderMap.set(pos, createLowArmPlayer(pos));
+}
+
+// 犠飛テスト用フライパターン（低arm野手でSF条件成立するフライ）
+// D50走者 tagUpTime = 27.4/(6.5+0.5*2.5) = 3.54s
+// arm=15: throwSpeed = 25+0.15*15 = 27.25 m/s
+// 必要な throwDist = 27.25 * (3.54 - 0.3) = 88.3m 以上
+// exitVelocity=160, launchAngle=28: distance≈90.3m → throwTime=3.31s+0.3=3.61s > tagUpTime=3.54s → SF発生
+// exitVelocity=160, launchAngle=25: dirにより若干距離変化するが同条件
+const SF_FLY_PATTERNS = [
+  { name: "犠飛距離フライCF", direction: 45, exitVelocity: 160, launchAngle: 28 },
+  { name: "犠飛距離フライLF", direction: 20, exitVelocity: 160, launchAngle: 28 },
+];
+
+// ====================================================================
+// ランナーありシナリオ
+// ====================================================================
+
+interface ScenarioStats {
+  dpRate: number;
+  sfRate: number;
+  fcRate: number;
+  groundErrorRate: number;
+  flyErrorRate: number;
+}
+
+let scenarioStats: ScenarioStats = {
+  dpRate: 0,
+  sfRate: 0,
+  fcRate: 0,
+  groundErrorRate: 0,
+  flyErrorRate: 0,
+};
+
+describe("ランナーありシナリオ", () => {
+  const N_SCENARIO = 200;
+
+  beforeAll(() => {
+    const rng = createSeededRng(42);
+
+    // 一塁走者・0アウト・ゴロパターン: DP/FC集計
+    let groundOuts = 0;
+    let dpCount = 0;
+    let fcCount = 0;
+
+    for (const pat of GROUNDER_PATTERNS) {
+      const ball = {
+        direction: pat.direction,
+        launchAngle: pat.launchAngle,
+        exitVelocity: pat.exitVelocity,
+        type: "ground_ball",
+      };
+      const landing = calcBallLanding(pat.direction, pat.launchAngle, pat.exitVelocity);
+      const bases = { first: d50Runner, second: null, third: null };
+
+      for (let i = 0; i < N_SCENARIO; i++) {
+        const result = resolvePlayWithAgents(ball, landing, fielderMap, d50Batter, bases, 0, {
+          perceptionNoise: 0,
+          random: rng,
+        });
+        const isOut = OUT_RESULTS.has(result.result);
+        if (isOut) {
+          groundOuts++;
+          if (result.result === "doublePlay") dpCount++;
+          if (result.result === "fieldersChoice") fcCount++;
+        }
+      }
+    }
+
+    scenarioStats.dpRate = groundOuts > 0 ? dpCount / groundOuts : 0;
+    scenarioStats.fcRate = groundOuts > 0 ? fcCount / groundOuts : 0;
+
+    // 三塁走者・1アウト・中深フライパターン（低arm野手マップ使用）: SF集計
+    // arm=15選手: throwSpeed=27.25m/s、65-85m飛距離フライでSF成立条件を確認
+    let flyOuts = 0;
+    let sfCount = 0;
+
+    for (const pat of SF_FLY_PATTERNS) {
+      const ballType = classifyBallType(pat.launchAngle, pat.exitVelocity);
+      const ball = {
+        direction: pat.direction,
+        launchAngle: pat.launchAngle,
+        exitVelocity: pat.exitVelocity,
+        type: ballType,
+      };
+      const landing = calcBallLanding(pat.direction, pat.launchAngle, pat.exitVelocity);
+      const bases = { first: null, second: null, third: d50Runner };
+
+      for (let i = 0; i < N_SCENARIO; i++) {
+        const result = resolvePlayWithAgents(ball, landing, lowArmFielderMap, d50Batter, bases, 1, {
+          perceptionNoise: 0,
+          random: rng,
+        });
+        const isOut = OUT_RESULTS.has(result.result);
+        if (isOut) {
+          flyOuts++;
+          if (result.result === "sacrificeFly") sfCount++;
+        }
+      }
+    }
+
+    scenarioStats.sfRate = flyOuts > 0 ? sfCount / flyOuts : 0;
+
+    // エラー率計測（ゴロ）
+    const rngErr = createSeededRng(123);
+    let groundTotal = 0;
+    let groundErrors = 0;
+
+    for (const pat of GROUNDER_PATTERNS) {
+      const ball = {
+        direction: pat.direction,
+        launchAngle: pat.launchAngle,
+        exitVelocity: pat.exitVelocity,
+        type: "ground_ball",
+      };
+      const landing = calcBallLanding(pat.direction, pat.launchAngle, pat.exitVelocity);
+
+      for (let i = 0; i < 500; i++) {
+        const result = resolvePlayWithAgents(ball, landing, fielderMap, d50Batter, emptyBases, 0, {
+          perceptionNoise: 0,
+          random: rngErr,
+        });
+        groundTotal++;
+        if (result.result === "error") groundErrors++;
+      }
+    }
+
+    scenarioStats.groundErrorRate = groundTotal > 0 ? groundErrors / groundTotal : 0;
+
+    // エラー率計測（フライ）: perceptionNoise=1.0でノイズを入れる
+    // perceptionNoise=0では捕球成功率が常に0.9以上となりエラーが発生しない。
+    // 実際のゲームではノイズあり(=1.0)で動作するため、ノイズあり条件でエラー率を計測する。
+    const rngFlyErr = createSeededRng(456);
+    let flyTotal = 0;
+    let flyErrors = 0;
+
+    for (const pat of FLY_PATTERNS) {
+      const ballType = classifyBallType(pat.launchAngle, pat.exitVelocity);
+      const ball = {
+        direction: pat.direction,
+        launchAngle: pat.launchAngle,
+        exitVelocity: pat.exitVelocity,
+        type: ballType,
+      };
+      const landing = calcBallLanding(pat.direction, pat.launchAngle, pat.exitVelocity);
+
+      for (let i = 0; i < 500; i++) {
+        const result = resolvePlayWithAgents(ball, landing, fielderMap, d50Batter, emptyBases, 0, {
+          perceptionNoise: 1.0,
+          random: rngFlyErr,
+        });
+        flyTotal++;
+        if (result.result === "error") flyErrors++;
+      }
+    }
+
+    scenarioStats.flyErrorRate = flyTotal > 0 ? flyErrors / flyTotal : 0;
+
+    console.log(`\n=== ランナーありシナリオ 統計サマリ ===`);
+    console.log(`併殺テスト: ゴロアウト中DP率 = ${(scenarioStats.dpRate * 100).toFixed(1)}% (ゲート: 5-25%)`);
+    console.log(`犠飛テスト: フライアウト中SF率 = ${(scenarioStats.sfRate * 100).toFixed(1)}% (ゲート: 10-70%)`);
+    console.log(`FC率: ${(scenarioStats.fcRate * 100).toFixed(1)}% (ゲート: 1-10%)`);
+    console.log(`エラー率(ゴロ): ${(scenarioStats.groundErrorRate * 100).toFixed(1)}% (ゲート: 0.5-8%)`);
+    console.log(`エラー率(フライ): ${(scenarioStats.flyErrorRate * 100).toFixed(1)}% (ゲート: <=10%)`);
+    console.log(`==========================================\n`);
+  }, 60000);
+
+  it("併殺テスト: ゴロアウト中DP率が 5-25% の範囲内", () => {
+    expect(scenarioStats.dpRate).toBeGreaterThanOrEqual(0.05);
+    expect(scenarioStats.dpRate).toBeLessThanOrEqual(0.25);
+  });
+
+  it("犠飛テスト: フライアウト中SF率が 10-70% の範囲内", () => {
+    expect(scenarioStats.sfRate).toBeGreaterThanOrEqual(0.10);
+    expect(scenarioStats.sfRate).toBeLessThanOrEqual(0.70);
+  });
+
+  it("FCテスト: ゴロアウト中FC率が 1-10% の範囲内", () => {
+    expect(scenarioStats.fcRate).toBeGreaterThanOrEqual(0.01);
+    expect(scenarioStats.fcRate).toBeLessThanOrEqual(0.10);
+  });
+});
+
+// ====================================================================
+// アウトカウント別挙動
+// ====================================================================
+
+describe("アウトカウント別挙動", () => {
+  it("2アウトでは併殺が発生しない", () => {
+    const rng = createSeededRng(999);
+    let dpCount = 0;
+
+    for (const pat of GROUNDER_PATTERNS) {
+      const ball = {
+        direction: pat.direction,
+        launchAngle: pat.launchAngle,
+        exitVelocity: pat.exitVelocity,
+        type: "ground_ball",
+      };
+      const landing = calcBallLanding(pat.direction, pat.launchAngle, pat.exitVelocity);
+      const bases = { first: d50Runner, second: null, third: null };
+
+      for (let i = 0; i < 100; i++) {
+        const result = resolvePlayWithAgents(ball, landing, fielderMap, d50Batter, bases, 2, {
+          perceptionNoise: 0,
+          random: rng,
+        });
+        if (result.result === "doublePlay") dpCount++;
+      }
+    }
+
+    expect(dpCount).toBe(0);
+  });
+
+  it("2アウトでは犠飛が発生しない", () => {
+    const rng = createSeededRng(888);
+    let sfCount = 0;
+
+    // SF条件が成立しうる低arm野手マップ + SF_FLY_PATTERNSで2アウト時にSFが出ないことを確認
+    for (const pat of SF_FLY_PATTERNS) {
+      const ballType = classifyBallType(pat.launchAngle, pat.exitVelocity);
+      const ball = {
+        direction: pat.direction,
+        launchAngle: pat.launchAngle,
+        exitVelocity: pat.exitVelocity,
+        type: ballType,
+      };
+      const landing = calcBallLanding(pat.direction, pat.launchAngle, pat.exitVelocity);
+      const bases = { first: null, second: null, third: d50Runner };
+
+      for (let i = 0; i < 100; i++) {
+        const result = resolvePlayWithAgents(ball, landing, lowArmFielderMap, d50Batter, bases, 2, {
+          perceptionNoise: 0,
+          random: rng,
+        });
+        if (result.result === "sacrificeFly") sfCount++;
+      }
+    }
+
+    expect(sfCount).toBe(0);
+  });
+});
+
+// ====================================================================
+// 送球・エラー率
+// ====================================================================
+
+describe("送球・エラー率", () => {
+  it("ゴロ捕球エラー率が 0.5-8% の範囲内", () => {
+    expect(scenarioStats.groundErrorRate).toBeGreaterThanOrEqual(0.005);
+    expect(scenarioStats.groundErrorRate).toBeLessThanOrEqual(0.08);
+  });
+
+  it("フライ捕球エラー率が 10% 以下", () => {
+    // フライはキャッチ成功率が高く(0.9以上)エラーは稀。上限のみ確認。
+    expect(scenarioStats.flyErrorRate).toBeLessThanOrEqual(0.10);
+  });
+
+  it("高速打球ほどエラー率が高い", () => {
+    const rng = createSeededRng(777);
+    let lowErrors = 0;
+    let highErrors = 0;
+    const N = 500;
+
+    // 低速ゴロ
+    const lowBall = { direction: 45, launchAngle: -5, exitVelocity: 80, type: "ground_ball" };
+    const lowLanding = calcBallLanding(45, -5, 80);
+    for (let i = 0; i < N; i++) {
+      const result = resolvePlayWithAgents(lowBall, lowLanding, fielderMap, d50Batter, emptyBases, 0, {
+        perceptionNoise: 0,
+        random: rng,
+      });
+      if (result.result === "error") lowErrors++;
+    }
+
+    // 高速ゴロ
+    const highBall = { direction: 45, launchAngle: -10, exitVelocity: 160, type: "ground_ball" };
+    const highLanding = calcBallLanding(45, -10, 160);
+    for (let i = 0; i < N; i++) {
+      const result = resolvePlayWithAgents(highBall, highLanding, fielderMap, d50Batter, emptyBases, 0, {
+        perceptionNoise: 0,
+        random: rng,
+      });
+      if (result.result === "error") highErrors++;
+    }
+
+    const lowRate = lowErrors / N;
+    const highRate = highErrors / N;
+    console.log(`  低速ゴロエラー率: ${(lowRate * 100).toFixed(1)}%, 高速ゴロエラー率: ${(highRate * 100).toFixed(1)}%`);
+
+    // 高速の方がエラー率が高い（または同等以上）
+    expect(highRate).toBeGreaterThanOrEqual(lowRate);
+  });
+});
