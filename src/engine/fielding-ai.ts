@@ -61,9 +61,9 @@ export const DEFAULT_FIELDER_POSITIONS: ReadonlyMap<FielderPosition, FieldPositi
   [4, { x: 10,  y: 36   }], // 2B
   [5, { x: -19, y: 24   }], // 3B（三塁線ゴロ対応のため前進配置）
   [6, { x: -12, y: 33   }], // SS（短距離ゴロ対応のため前進配置）
-  [7, { x: -28, y: 72   }], // LF (フェンス95m × 76%)
-  [8, { x: 0,   y: 78   }], // CF (フェンス118m × 66%)
-  [9, { x: 28,  y: 72   }], // RF (フェンス95m × 76%)
+  [7, { x: -28, y: 78   }], // LF (フェンス95m × 82%)
+  [8, { x: 0,   y: 88   }], // CF (フェンス118m × 75%)
+  [9, { x: 28,  y: 78   }], // RF (フェンス95m × 82%)
 ]);
 
 /** 投手は pitching 側、野手は batting 側から守備能力を取得 */
@@ -387,7 +387,8 @@ export function evaluateFielders(
       distanceAtLanding = Math.sqrt(
         (posAtLanding.x - landing.position.x) ** 2 + (posAtLanding.y - landing.position.y) ** 2
       );
-      canReach = distanceAtLanding < FIELDER_CATCH_RADIUS;
+      // 外野手フライはFLY_CATCH_RADIUS(1.3m)を使用（ゴロ用FIELDER_CATCH_RADIUS=0.5mは不適切）
+      canReach = distanceAtLanding < FLY_CATCH_RADIUS;
       interceptType = canReach ? "fly_converge" : "none";
     } else if (pos >= 3 && pos <= 6) {
       // 内野手のフライ/ライナー

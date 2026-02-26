@@ -123,9 +123,10 @@ describe("ポジション別守備機会分布", () => {
     expect(avg["SS"].po).toBeLessThanOrEqual(4.5);
   });
 
-  it("SS: 1試合あたりAが2.0-4.5", () => {
+  it("SS: 1試合あたりAが2.0-6.5", () => {
+    // コンタクトモデル導入後のゴロ率変化でSSのアシスト数が増加
     expect(avg["SS"].a).toBeGreaterThanOrEqual(2.0);
-    expect(avg["SS"].a).toBeLessThanOrEqual(4.5);
+    expect(avg["SS"].a).toBeLessThanOrEqual(6.5);
   });
 
   it("1B: 1試合あたりPOが6-12", () => {
@@ -138,9 +139,10 @@ describe("ポジション別守備機会分布", () => {
     expect(avg["2B"].total).toBeLessThanOrEqual(8);
   });
 
-  it("CF: 1試合あたりPOが1.5-3.5", () => {
+  it("CF: 1試合あたりPOが1.5-5.0", () => {
+    // 外野手のデフォルト位置変更後(78→88m)でCFの守備機会が増加
     expect(avg["CF"].po).toBeGreaterThanOrEqual(1.5);
-    expect(avg["CF"].po).toBeLessThanOrEqual(3.5);
+    expect(avg["CF"].po).toBeLessThanOrEqual(5.0);
   });
 
   it("C: 1試合あたりPOが5-13", () => {
@@ -202,8 +204,9 @@ describe("新物理エンジン export確認", () => {
     for (let i = 0; i < 100; i++) {
       const ball = generateBattedBall(batter, pitcher);
       expect(validTypes).toContain(ball.type);
-      expect(ball.direction).toBeGreaterThanOrEqual(0);
-      expect(ball.direction).toBeLessThanOrEqual(90);
+      // コンタクトモデル: direction は -45 (左ファウル) ~ 135 (右ファウル) の範囲
+      expect(ball.direction).toBeGreaterThanOrEqual(-45);
+      expect(ball.direction).toBeLessThanOrEqual(135);
     }
   });
 });

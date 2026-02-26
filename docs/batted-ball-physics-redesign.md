@@ -100,11 +100,15 @@ efficiency = 1.0 - ((launchAngle - 10) / 70)² × 0.7
 
 **初速の最大値（playerMaxEV）**:
 ```
-playerMaxEV = 130 + (power / 100) × 40  [km/h]
-  power=10:  134 km/h
-  power=50:  150 km/h
-  power=80:  162 km/h
-  power=100: 170 km/h
+playerMaxEV = 152 + (power / 100) × 35  [km/h]
+  power=10:  155.5 km/h
+  power=50:  169.5 km/h
+  power=80:  180.0 km/h
+  power=100: 187.0 km/h
+
+※ 設計原案は BASE=130, SCALE=40 だったが、carry廃止により
+   旧弾道2(×1.12)の距離増加効果が失われたため BASE を 152 に引き上げ。
+   バランステスト HR/試合=1.09 で NPB目標(1.0-1.5)を達成。
 ```
 
 **結果の飛距離の例（D50選手, maxEV=150km/h）**:

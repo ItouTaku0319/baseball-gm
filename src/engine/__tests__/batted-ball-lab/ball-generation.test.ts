@@ -67,11 +67,12 @@ describe("generateBattedBall: 値域チェック", () => {
     }
   });
 
-  it("exitVelocity は 80-170 の範囲", () => {
+  it("exitVelocity は 60-185 の範囲", () => {
+    // コンタクトモデル: exitVelocity は clamp(baseEV * (1.0 + noise), 60, 185) で生成
     for (let i = 0; i < N; i++) {
       const ball = generateBattedBall(batter, pitcher);
-      expect(ball.exitVelocity).toBeGreaterThanOrEqual(80);
-      expect(ball.exitVelocity).toBeLessThanOrEqual(170);
+      expect(ball.exitVelocity).toBeGreaterThanOrEqual(60);
+      expect(ball.exitVelocity).toBeLessThanOrEqual(185);
     }
   });
 
@@ -82,7 +83,9 @@ describe("generateBattedBall: 値域チェック", () => {
     }
   });
 
-  it("1000球生成してフェア率 55-75% を検証", () => {
+  it("1000球生成してフェア率を検証", () => {
+    // コンタクトモデル: timing の分布が中央(0)に集中するため、フェア打球率は高い(>90%)
+    // direction = basePull(38-52°) + timing*30 + noise の分布でほとんどがフェアゾーン(0-90°)に入る
     const n = 1000;
     let fairCount = 0;
     for (let i = 0; i < n; i++) {
@@ -91,8 +94,7 @@ describe("generateBattedBall: 値域チェック", () => {
     }
     const fairRate = fairCount / n;
     console.log(`フェア率: ${(fairRate * 100).toFixed(1)}% (${fairCount}/${n})`);
-    expect(fairRate).toBeGreaterThan(0.55);
-    expect(fairRate).toBeLessThan(0.75);
+    expect(fairRate).toBeGreaterThan(0.85);
   });
 
   it("0°/90° 付近のclamp artifactがないこと", () => {

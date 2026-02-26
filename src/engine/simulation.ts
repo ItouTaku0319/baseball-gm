@@ -8,12 +8,10 @@ import {
   FENCE_BASE, FENCE_CENTER_EXTRA, FENCE_HEIGHT,
   GROUND_BALL_ANGLE_THRESHOLD, GROUND_BALL_MAX_DISTANCE,
   GROUND_BALL_SPEED_FACTOR, GROUND_BALL_AVG_SPEED_RATIO,
-  TRAJECTORY_CARRY_FACTORS,
   MENTAL_FATIGUE_RESISTANCE, MENTAL_PINCH_CONTROL_FACTOR,
   BOUNCE_CLOSE_THRESHOLD, BOUNCE_NEAR_THRESHOLD, BOUNCE_MID_THRESHOLD,
   FLY_CATCH_RADIUS,
-  DIRECTION_MIN, DIRECTION_MAX, DIRECTION_SIGMA_BASE, DIRECTION_SIGMA_CONTACT, DIRECTION_SIGMA_FAIR,
-  FAIR_ZONE_MIN, FAIR_ZONE_MAX,
+  DIRECTION_MIN, DIRECTION_MAX, FAIR_ZONE_MIN, FAIR_ZONE_MAX,
   FOUL_FLY_MIN_LAUNCH_ANGLE, FOUL_FLY_CATCHABLE_ANGLE, FOUL_FLY_BASE_CATCH_RATE,
   FOUL_TIP_DIRECTION_THRESHOLD, FOUL_TIP_MAX_LAUNCH_ANGLE,
   FOUL_TIP_MIN_VELOCITY, FOUL_TIP_STRIKEOUT_RATE,
@@ -25,6 +23,11 @@ import {
   SB_TWO_OUTS_FACTOR,
   WP_BASE_RATE, WP_CONTROL_FACTOR,
   PB_BASE_RATE, PB_CATCHING_FACTOR,
+  CONTACT_PEAK_ANGLE, CONTACT_ANGLE_SPREAD, CONTACT_DIRECTION_SPREAD, CONTACT_DIRECTION_NOISE_SIGMA,
+  PLAYER_MAX_EV_BASE, PLAYER_MAX_EV_POWER_SCALE,
+  EFFICIENCY_PEAK_ANGLE, EFFICIENCY_ANGLE_RANGE, EFFICIENCY_DROP_FACTOR,
+  OFFSET_TRAJECTORY_SCALE, OFFSET_SIGMA_BASE, OFFSET_SIGMA_CONTACT_SCALE, OFFSET_SIGMA_PITCH_SCALE,
+  TIMING_SIGMA_BASE, TIMING_SIGMA_CONTACT_SCALE, TIMING_SIGMA_PITCH_SCALE,
 } from "./physics-constants";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
@@ -385,38 +388,18 @@ export function getFenceDistance(directionDeg: number): number {
   return FENCE_BASE + FENCE_CENTER_EXTRA * Math.sin(directionDeg * Math.PI / 90);
 }
 
-/** 打球の物理データを生成する */
+/** 打球の物理データを生成する (コンタクトモデル) */
 export function generateBattedBall(batter: Player, pitcher: Player, rng: () => number = Math.random): BattedBall {
   const power = batter.batting.power;
   const contact = batter.batting.contact;
-  const breakingPower = calcBreakingPower(pitcher.pitching?.pitches);
-
-  // --- 1. 打球方向 (DIRECTION_MIN ~ DIRECTION_MAX, フェア/ファウル連続分布) ---
-  let dirMean = 45;
-  if (batter.batSide === "R") dirMean = 38;
-  if (batter.batSide === "L") dirMean = 52;
-  const pullShift = (power - 50) * 0.08;
-  if (batter.batSide === "R") dirMean -= pullShift;
-  else if (batter.batSide === "L") dirMean += pullShift;
-
-  // ファウル/フェア判定: 広いσでガウス分布を生成し、方向でフェア/ファウルを決定
-  const foulTestSigma = DIRECTION_SIGMA_BASE + (100 - contact) * DIRECTION_SIGMA_CONTACT;
-  const rawDirection = gaussianRandom(dirMean, foulTestSigma, rng);
-
-  let direction: number;
-  if (rawDirection < FAIR_ZONE_MIN || rawDirection > FAIR_ZONE_MAX) {
-    // ファウル: 広い方向をそのまま使用（ファウルフライ・チップ処理用）
-    direction = clamp(rawDirection, DIRECTION_MIN, DIRECTION_MAX);
-  } else {
-    // フェア: 元のσ=18で守備バランスを維持
-    direction = clamp(gaussianRandom(dirMean, DIRECTION_SIGMA_FAIR, rng), FAIR_ZONE_MIN, FAIR_ZONE_MAX);
-  }
-
-  // --- 2. 打球角度 (-15° ~ 70°) ---
-  let angleMean = 10 + (power - 50) * 0.08 - (contact - 50) * 0.04;
-  // 弾道(trajectory)による角度補正: 弾道1=-3°, 2=±0°, 3=+3°, 4=+6°
   const trajectory = batter.batting.trajectory ?? 2;
-  angleMean += (trajectory - 2) * 3;
+
+  // 投手球種レベルの平均 (0-7スケール)
+  const avgPitchLevel = pitcher.pitching?.pitches && pitcher.pitching.pitches.length > 0
+    ? pitcher.pitching.pitches.reduce((sum, p) => sum + p.level, 0) / pitcher.pitching.pitches.length
+    : 3;
+
+  // シンカー系のゴロ誘発ボーナス
   let sinkerBonus = 0;
   if (pitcher.pitching?.pitches) {
     for (const pitch of pitcher.pitching.pitches) {
@@ -426,16 +409,48 @@ export function generateBattedBall(batter: Player, pitcher: Player, rng: () => n
     }
     sinkerBonus = Math.min(5, sinkerBonus);
   }
-  angleMean -= sinkerBonus;
 
-  const launchAngle = clamp(gaussianRandom(angleMean, 16), -15, 70);
+  // --- Step 1: contactOffset を生成 ---
+  const offsetMean = (trajectory - 2) * OFFSET_TRAJECTORY_SCALE
+    - sinkerBonus * 0.03;
+  const offsetSigma = OFFSET_SIGMA_BASE
+    - (contact / 100) * OFFSET_SIGMA_CONTACT_SCALE
+    + (avgPitchLevel / 7) * OFFSET_SIGMA_PITCH_SCALE;
+  const contactOffset = gaussianRandom(offsetMean, offsetSigma, rng);
 
-  // --- 3. 打球速度 (80-185 km/h) ---
-  const velMean = 132 + (power - 50) * 0.15 + (contact - 50) * 0.15;
-  const breakingPenalty = (breakingPower - 50) * 0.15;
-  const exitVelocity = clamp(gaussianRandom(velMean - breakingPenalty, 18), 80, 170);
+  // --- Step 2: contactOffset → launchAngle ---
+  const launchAngle = clamp(
+    CONTACT_PEAK_ANGLE + contactOffset * CONTACT_ANGLE_SPREAD,
+    -15, 70
+  );
 
-  // --- 4. 打球タイプ分類 (後方互換) ---
+  // --- Step 3: launchAngle → exitVelocity (エンベロープカーブ) ---
+  const playerMaxEV = PLAYER_MAX_EV_BASE + (power / 100) * PLAYER_MAX_EV_POWER_SCALE;
+  const angleDiff = (launchAngle - EFFICIENCY_PEAK_ANGLE) / EFFICIENCY_ANGLE_RANGE;
+  const efficiency = clamp(1.0 - angleDiff * angleDiff * EFFICIENCY_DROP_FACTOR, 0.25, 1.0);
+  const baseEV = playerMaxEV * efficiency;
+  const exitVelocity = clamp(
+    baseEV * (1.0 + gaussianRandom(0, 0.05, rng)),
+    60, 185
+  );
+
+  // --- Step 4: timing → direction ---
+  const timingSigma = TIMING_SIGMA_BASE
+    - (contact / 100) * TIMING_SIGMA_CONTACT_SCALE
+    + (avgPitchLevel / 7) * TIMING_SIGMA_PITCH_SCALE;
+  const timing = gaussianRandom(0, timingSigma, rng);
+
+  let basePull: number;
+  if (batter.batSide === "R") basePull = 38;
+  else if (batter.batSide === "L") basePull = 52;
+  else basePull = 45;
+
+  const direction = clamp(
+    basePull + timing * CONTACT_DIRECTION_SPREAD + gaussianRandom(0, CONTACT_DIRECTION_NOISE_SIGMA, rng),
+    DIRECTION_MIN, DIRECTION_MAX
+  );
+
+  // --- Step 5: 打球タイプ分類 ---
   const type = classifyBattedBallType(launchAngle, exitVelocity);
 
   return { direction, launchAngle, exitVelocity, type };
@@ -681,67 +696,8 @@ function getThrowDistToFirst(pos: FielderPosition): number {
 }
 
 /**
- * HR判定（フェンス越え）+ ポップフライ判定 + フェンス直撃判定
- * エージェント守備AI呼び出し前に処理する
- */
-function checkHomeRun(
-  ball: BattedBall,
-  landing: BallLanding,
-  batter: Player,
-): { result: AtBatResult; fielderPos: FielderPosition; trace?: FieldingTrace } | null {
-  if (ball.type !== "fly_ball" && ball.type !== "popup") return null;
-
-  const distance = estimateDistance(ball.exitVelocity, ball.launchAngle);
-  const fenceDist = getFenceDistance(ball.direction);
-
-  const trajectory = batter.batting.trajectory ?? 2;
-  const baseCarryFactor = TRAJECTORY_CARRY_FACTORS[Math.min(3, Math.max(0, trajectory - 1))];
-  let trajectoryCarryFactor = baseCarryFactor;
-  if (ball.launchAngle > 35) {
-    const taper = Math.max(0, 1 - (ball.launchAngle - 35) / 15);
-    trajectoryCarryFactor = 1 + (baseCarryFactor - 1) * taper;
-  }
-
-  const effectiveDistance = distance * trajectoryCarryFactor;
-  const ratio = effectiveDistance / fenceDist;
-
-  if (ratio >= 1.0) {
-    const v0 = ball.exitVelocity / 3.6;
-    const theta = ball.launchAngle * Math.PI / 180;
-    const vy0 = v0 * Math.sin(theta);
-    const gEff = GRAVITY / trajectoryCarryFactor;
-    const tUp = vy0 / gEff;
-    const maxH = BAT_HEIGHT + (vy0 * vy0) / (2 * gEff);
-    const tDown = Math.sqrt(2 * maxH / gEff);
-    const tRaw = tUp + tDown;
-    const tFence = (fenceDist / effectiveDistance) * tRaw;
-    const heightAtFence = BAT_HEIGHT + vy0 * tFence - 0.5 * gEff * tFence * tFence;
-
-    if (heightAtFence >= FENCE_HEIGHT) {
-      const fielderPos = assignOutfielder(ball.direction);
-      return { result: "homerun", fielderPos };
-    }
-
-    // フェンス直撃
-    const fielderPos = assignOutfielder(ball.direction);
-    const runnerSpeed = batter.batting.speed;
-    const tripleChance = 0.15 + (runnerSpeed / 100) * 0.15;
-    const hitResult: AtBatResult = Math.random() < tripleChance ? "triple" : "double";
-    return { result: hitResult, fielderPos };
-  }
-
-  // ポップフライは常にアウト
-  if (ball.type === "popup") {
-    const fielderPos = assignPopupFielder(ball.direction);
-    return { result: "popout", fielderPos };
-  }
-
-  return null; // エージェントAIに委任
-}
-
-/**
- * 守備AIによるインプレー結果判定 (レガシー — 旧evaluateFielders版)
- * 現在は resolvePlayWithAgents に置換済み。バックアップ用に残す。
+ * 守備AIによるインプレー結果判定 (レガシー)
+ * TODO: resolvePlayWithAgents への移行後に削除予定
  *
  * 打球タイプごとに異なるメカニクス:
  *
@@ -803,47 +759,33 @@ function resolvePlayWithAI(
   };
 
   // === フライ系（fly_ball / popup）→ HR判定（フェンス越え）===
+  // calcBallLanding の結果をそのまま使用（carry廃止）
   if (ball.type === "fly_ball" || ball.type === "popup") {
-    const distance = estimateDistance(ball.exitVelocity, ball.launchAngle);
     const fenceDist = getFenceDistance(ball.direction);
-
-    // 弾道によるHR飛距離補正（低弾道=ゴロ打ちでキャリーが落ちる、高弾道=控えめにボーナス）
-    const trajectory = batter.batting.trajectory ?? 2;
-    const baseCarryFactor = TRAJECTORY_CARRY_FACTORS[Math.min(3, Math.max(0, trajectory - 1))];
-
-    // 急角度ではキャリー効果が減衰（バックスピン揚力は急角度で水平成分に効きにくい）
-    // 35°以下: フルキャリー、35-50°: 線形減衰、50°以上: キャリー無し
-    let trajectoryCarryFactor = baseCarryFactor;
-    if (ball.launchAngle > 35) {
-      const taper = Math.max(0, 1 - (ball.launchAngle - 35) / 15);
-      trajectoryCarryFactor = 1 + (baseCarryFactor - 1) * taper;
-    }
-
-    const effectiveDistance = distance * trajectoryCarryFactor;
-    const ratio = effectiveDistance / fenceDist;
+    const ratio = landing.distance / fenceDist;
 
     const hrCalcBase: FieldingTrace["hrCalc"] = {
-      rawDistance: distance,
+      rawDistance: landing.distance,
       fenceDistance: fenceDist,
-      trajectory,
-      carryFactor: trajectoryCarryFactor,
-      effectiveDistance,
+      trajectory: batter.batting.trajectory ?? 2,
+      carryFactor: 1.0,
+      effectiveDistance: landing.distance,
       ratio,
     };
 
     if (ratio >= 1.0) {
       // フェンス水平距離到達時の打球高さを計算
-      // carryFactorをバックスピン揚力（実効重力の軽減）としてモデル化
       const v0 = ball.exitVelocity / 3.6;
       const theta = ball.launchAngle * Math.PI / 180;
       const vy0 = v0 * Math.sin(theta);
-      const gEff = GRAVITY / trajectoryCarryFactor;
-      const tUp = vy0 / gEff;
-      const maxH = BAT_HEIGHT + (vy0 * vy0) / (2 * gEff);
-      const tDown = Math.sqrt(2 * maxH / gEff);
-      const tRaw = tUp + tDown;
-      const tFence = (fenceDist / effectiveDistance) * tRaw;
-      const heightAtFence = BAT_HEIGHT + vy0 * tFence - 0.5 * gEff * tFence * tFence;
+      const vx = v0 * Math.cos(theta);
+      const tUp = vy0 / GRAVITY;
+      const maxH = BAT_HEIGHT + (vy0 * vy0) / (2 * GRAVITY);
+      const tDown = Math.sqrt(2 * maxH / GRAVITY);
+      const totalFlightTime = (tUp + tDown) * FLIGHT_TIME_FACTOR;
+      const totalDistance = vx * totalFlightTime * DRAG_FACTOR;
+      const tFence = totalDistance > 0 ? totalFlightTime * (fenceDist / totalDistance) : totalFlightTime;
+      const heightAtFence = BAT_HEIGHT + vy0 * tFence - 0.5 * GRAVITY * tFence * tFence;
 
       const hrCalc: FieldingTrace["hrCalc"] = {
         ...hrCalcBase,
@@ -1439,7 +1381,8 @@ function resolveHitAdvancement(
   // 3Bへの進塁はリスクが高いため、走者は十分な余裕がある場合のみ試みる
   let basesReached = 1;
   if (runnerTo2B < defenseTo2B - 0.3) basesReached = 2; // 走者が余裕を持って進塁できる場合のみ
-  if (basesReached >= 2 && runnerTo3B < defenseTo3B - 0.9) basesReached = 3;
+  // 3塁打の余裕マージンを1.8秒に設定（NPB実績: 試合あたり0.1-0.2本目標）
+  if (basesReached >= 2 && runnerTo3B < defenseTo3B - 1.8) basesReached = 3;
 
   // ゴロでトリプルは現実的でない（3塁打は外野フライ/ライナーのみ）
   if (landing.isGroundBall) basesReached = Math.min(basesReached, 2);
@@ -3036,23 +2979,12 @@ function simulateHalfInning(
     }
 
     if (options?.collectAtBatLogs && atBatLogs) {
-      let dist = (detail.exitVelocity != null && detail.launchAngle != null)
-        ? estimateDistance(detail.exitVelocity, detail.launchAngle)
-        : null;
-      // ゴロ: 放物線公式は不正確なので、実際の着地距離(地面転がりモデル)を使用
-      if (detail.battedBallType === "ground_ball" && detail.fieldingTrace?.landing?.distance != null) {
+      // 飛距離はfieldingTrace.landing.distanceを優先、なければestimateDistanceにフォールバック
+      let dist: number | null = null;
+      if (detail.fieldingTrace?.landing?.distance != null) {
         dist = detail.fieldingTrace.landing.distance;
-      }
-      // フライ系打球にはcarryFactorを適用（表示飛距離とHR判定飛距離を一致させる）
-      // 急角度ではキャリー減衰（HR判定と同一ロジック）
-      if (dist !== null && (detail.battedBallType === "fly_ball" || detail.battedBallType === "popup")) {
-        const traj = batter.batting.trajectory ?? 2;
-        let cf = TRAJECTORY_CARRY_FACTORS[Math.min(3, Math.max(0, traj - 1))];
-        if (detail.launchAngle != null && detail.launchAngle > 35) {
-          const taper = Math.max(0, 1 - (detail.launchAngle - 35) / 15);
-          cf = 1 + (cf - 1) * taper;
-        }
-        dist = dist * cf;
+      } else if (detail.exitVelocity != null && detail.launchAngle != null) {
+        dist = estimateDistance(detail.exitVelocity, detail.launchAngle);
       }
       const pitchType = selectPitch(pitcher, detail.result);
       const pitchLocation = generatePitchLocation(pitcher, detail.result, pitchType);

@@ -8,9 +8,14 @@ import { estimateDistance, getFenceDistance } from "@/engine/simulation";
 import { formatTable } from "./helpers";
 
 describe("estimateDistance: 基本動作", () => {
-  it("角度 0° 以下は飛距離 0", () => {
-    expect(estimateDistance(150, 0)).toBe(0);
-    expect(estimateDistance(150, -5)).toBe(0);
+  it("角度 10° 未満はゴロモデルで距離が計算される", () => {
+    // ゴロ: launchAngle < GROUND_BALL_ANGLE_THRESHOLD(10°) → 摩擦減速モデル
+    // 0° でも摩擦減速モデルが適用されるため飛距離は正の値
+    expect(estimateDistance(150, 0)).toBeGreaterThan(0);
+    expect(estimateDistance(150, -5)).toBeGreaterThan(0);
+    // ただし GROUND_BALL_MAX_DISTANCE(55m) 以下
+    expect(estimateDistance(150, 0)).toBeLessThanOrEqual(55);
+    expect(estimateDistance(150, -5)).toBeLessThanOrEqual(55);
   });
 
   it("角度が正なら飛距離は正", () => {

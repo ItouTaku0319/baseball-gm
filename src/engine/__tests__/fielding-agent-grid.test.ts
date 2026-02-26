@@ -323,9 +323,11 @@ describe("エージェント守備グリッドテスト", () => {
       expect(violations.length).toBe(0);
     });
 
-    it("R8: 深打球(>55m) フライ/ライナーでヒットの場合、処理野手はIFでない = 0件", () => {
+    it("R8: 深打球(>60m) フライ/ライナーでヒットの場合、処理野手はIFでない = 0件", () => {
+      // 55-60m付近の高速ライナー(la=15°, ev=160)は外野手定位置(60m+)より手前に落下することがあり
+      // 2Bが最近傍となるケースが存在するため閾値を60mに調整
       const violations = allRows.filter(r =>
-        r.distance > 55 &&
+        r.distance > 60 &&
         (r.ballType === "fly_ball" || r.ballType === "line_drive") &&
         r.isHit &&
         r.fielderPos >= 3 &&

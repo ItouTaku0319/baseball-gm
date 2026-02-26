@@ -3,7 +3,7 @@
 
 import { calcBallLanding } from "../src/engine/fielding-ai";
 import { classifyBattedBallType, estimateDistance, getFenceDistance } from "../src/engine/simulation";
-import { TRAJECTORY_CARRY_FACTORS, GRAVITY, BAT_HEIGHT, FENCE_HEIGHT } from "../src/engine/physics-constants";
+import { GRAVITY, BAT_HEIGHT, FENCE_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR } from "../src/engine/physics-constants";
 import { resolvePlayWithAgents } from "../src/engine/fielding-agent";
 import type { Player } from "../src/models/player";
 import type { FielderPosition } from "../src/engine/fielding-agent-types";
@@ -37,25 +37,22 @@ const batter = createTestPlayer(4); // テスト打者
 const bases = { first: null, second: null, third: null };
 const BASE_LENGTH = 27.4;
 
-function checkHR(dir: number, ev: number, la: number, trajectory: number): boolean {
+function checkHR(dir: number, ev: number, la: number): boolean {
   if (la < 10) return false;
-  const distance = estimateDistance(ev, la);
+  const landing = calcBallLanding(dir, la, ev);
   const fenceDist = getFenceDistance(dir);
-  const baseCarry = TRAJECTORY_CARRY_FACTORS[Math.min(3, Math.max(0, trajectory - 1))];
-  let carryFactor = baseCarry;
-  if (la > 35) { const taper = Math.max(0, 1 - (la - 35) / 15); carryFactor = 1 + (baseCarry - 1) * taper; }
-  const effDist = distance * carryFactor;
-  if (effDist / fenceDist < 1.0) return false;
+  if (landing.distance < fenceDist) return false;
   const v0 = ev / 3.6;
   const theta = la * Math.PI / 180;
   const vy0 = v0 * Math.sin(theta);
-  const gEff = GRAVITY / carryFactor;
-  const tUp = vy0 / gEff;
-  const maxH = BAT_HEIGHT + (vy0 * vy0) / (2 * gEff);
-  const tDown = Math.sqrt(2 * maxH / gEff);
-  const tRaw = tUp + tDown;
-  const tFence = (fenceDist / effDist) * tRaw;
-  const height = BAT_HEIGHT + vy0 * tFence - 0.5 * gEff * tFence * tFence;
+  const vx = v0 * Math.cos(theta);
+  const tUp = vy0 / GRAVITY;
+  const maxH = BAT_HEIGHT + (vy0 * vy0) / (2 * GRAVITY);
+  const tDown = Math.sqrt(2 * maxH / GRAVITY);
+  const totalFlightTime = (tUp + tDown) * FLIGHT_TIME_FACTOR;
+  const totalDistance = vx * totalFlightTime * DRAG_FACTOR;
+  const tFence = totalDistance > 0 ? totalFlightTime * (fenceDist / totalDistance) : totalFlightTime;
+  const height = BAT_HEIGHT + vy0 * tFence - 0.5 * GRAVITY * tFence * tFence;
   return height >= FENCE_HEIGHT;
 }
 
@@ -85,7 +82,7 @@ for (const dir of DIRECTIONS) {
       const landing = calcBallLanding(dir, la, ev);
 
       // HR/ポップフライは事前判定（エージェント呼び出し不要）
-      if ((ballType === "fly_ball" || ballType === "popup") && checkHR(dir, ev, la, 2)) {
+      if ((ballType === "fly_ball" || ballType === "popup") && checkHR(dir, ev, la)) {
         allRows.push({
           dir, ev, la, ballType, dist: Math.round(landing.distance * 10) / 10,
           landX: Math.round(landing.position.x * 10) / 10,

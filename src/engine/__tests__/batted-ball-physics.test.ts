@@ -85,11 +85,12 @@ describe("generateBattedBall 物理値の範囲", () => {
   const pitcher = createTestPitcher();
   const N = 1000;
 
-  it("direction: 0-90の範囲内", () => {
+  it("direction: DIRECTION_MIN-DIRECTION_MAX の範囲内（フェア/ファウル連続分布）", () => {
+    // コンタクトモデル: direction は -45 (左ファウル) ~ 135 (右ファウル) の範囲
     for (let i = 0; i < N; i++) {
       const ball = generateBattedBall(batter, pitcher);
-      expect(ball.direction).toBeGreaterThanOrEqual(0);
-      expect(ball.direction).toBeLessThanOrEqual(90);
+      expect(ball.direction).toBeGreaterThanOrEqual(-45);
+      expect(ball.direction).toBeLessThanOrEqual(135);
     }
   });
 
@@ -101,10 +102,12 @@ describe("generateBattedBall 物理値の範囲", () => {
     }
   });
 
-  it("exitVelocity: 80-185の範囲内", () => {
+  it("exitVelocity: 60-185の範囲内", () => {
+    // コンタクトモデル: exitVelocity は clamp(baseEV * (1.0 + noise), 60, 185) で生成
+    // 弱い打球(高popup角度)では60km/h付近まで下がる
     for (let i = 0; i < N; i++) {
       const ball = generateBattedBall(batter, pitcher);
-      expect(ball.exitVelocity).toBeGreaterThanOrEqual(80);
+      expect(ball.exitVelocity).toBeGreaterThanOrEqual(60);
       expect(ball.exitVelocity).toBeLessThanOrEqual(185);
     }
   });

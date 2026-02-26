@@ -36,9 +36,36 @@ export const FOUL_TIP_MAX_LAUNCH_ANGLE = 10;   // 低角度のみ
 export const FOUL_TIP_MIN_VELOCITY = 100;      // 一定以上の速度 (km/h)
 export const FOUL_TIP_STRIKEOUT_RATE = 0.55;   // 捕手捕球成功率
 
-// 弾道キャリーファクター (弾道1-4)
-// FLIGHT_TIME_FACTOR統一による飛距離短縮(×0.85)を補正
-export const TRAJECTORY_CARRY_FACTORS = [1.02, 1.12, 1.17, 1.22] as const;
+// コンタクトモデル定数
+// Phase A: carry廃止・コンタクトモデル導入
+export const CONTACT_PEAK_ANGLE = 10;          // 芯の打ち出し角度 (度)
+export const CONTACT_ANGLE_SPREAD = 60;        // offset±1.0での角度振れ幅 (度)
+export const CONTACT_DIRECTION_SPREAD = 30;    // timing±1.0での方向振れ幅 (度)
+export const CONTACT_DIRECTION_NOISE_SIGMA = 8; // 打球方向のブレσ
+
+// playerMaxEV計算用
+// 変更前(設計書原案): BASE=130, SCALE=40 → power=50で150km/h → carry廃止後HRがほぼ出ない
+// 変更後: BASE=152, SCALE=35 → power=50で169.5km/h, power=70で176.5km/h
+// → carry廃止(旧来の弾道2キャリー1.12相当を吸収)、NPBのHR率1.0-1.5/試合目標
+export const PLAYER_MAX_EV_BASE = 152;         // 基本最大初速 (km/h)
+export const PLAYER_MAX_EV_POWER_SCALE = 35;   // パワー100での追加初速 (km/h)
+
+// 効率曲線パラメータ
+export const EFFICIENCY_PEAK_ANGLE = 10;       // 効率最大の角度 (度)
+export const EFFICIENCY_ANGLE_RANGE = 70;      // 効率が最低になるまでの角度幅
+// 設計書通り0.7を維持: angle=30°でeff=0.918、angle=50°でeff=0.673 (popup HR防止)
+export const EFFICIENCY_DROP_FACTOR = 0.7;     // 効率の最大低下量
+
+// contactOffset生成パラメータ
+export const OFFSET_TRAJECTORY_SCALE = 0.08;  // 弾道によるオフセット補正
+export const OFFSET_SIGMA_BASE = 0.40;         // オフセットσ基本値
+export const OFFSET_SIGMA_CONTACT_SCALE = 0.15; // ミート依存σ調整量
+export const OFFSET_SIGMA_PITCH_SCALE = 0.05; // 変化球依存σ調整量
+
+// timing生成パラメータ
+export const TIMING_SIGMA_BASE = 0.50;         // タイミングσ基本値
+export const TIMING_SIGMA_CONTACT_SCALE = 0.15; // ミート依存σ調整量
+export const TIMING_SIGMA_PITCH_SCALE = 0.05; // 変化球依存σ調整量
 
 // 守備チャージ・バウンスペナルティ閾値
 export const PITCHER_REACTION_PENALTY = 0.6; // 投手の投球後反応遅延(秒)

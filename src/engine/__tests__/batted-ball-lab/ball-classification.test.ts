@@ -27,10 +27,13 @@ describe("classifyBattedBallType: 境界値テスト", () => {
     expect(classifyBattedBallType(19, 150)).toBe("line_drive");
   });
 
-  it("10-14° + 速度<100 → ground_ball (弱いライナー→ゴロ)", () => {
-    expect(classifyBattedBallType(10, 90)).toBe("ground_ball");
-    expect(classifyBattedBallType(12, 95)).toBe("ground_ball");
-    expect(classifyBattedBallType(14, 99)).toBe("ground_ball");
+  it("10-11° + 速度<85 → ground_ball (弱いライナー→ゴロ)", () => {
+    // 実装: launchAngle < 12 && exitVelocity < 85 の場合のみゴロ
+    expect(classifyBattedBallType(10, 80)).toBe("ground_ball");
+    expect(classifyBattedBallType(11, 84)).toBe("ground_ball");
+    // 12°以上 or 速度85以上 → ライナー
+    expect(classifyBattedBallType(12, 80)).toBe("line_drive");
+    expect(classifyBattedBallType(10, 85)).toBe("line_drive");
   });
 
   it("15-19° → line_drive (15°以上は低速でもライナー)", () => {
@@ -47,13 +50,16 @@ describe("classifyBattedBallType: 境界値テスト", () => {
     expect(classifyBattedBallType(37, 150)).toBe("fly_ball");
   });
 
-  it("38°以上 → popup", () => {
-    expect(classifyBattedBallType(38, 150)).toBe("popup");
-    expect(classifyBattedBallType(40, 150)).toBe("popup");
-    expect(classifyBattedBallType(45, 120)).toBe("popup");
+  it("50°以上 → popup", () => {
+    // 実装: launchAngle >= 50 の場合のみポップフライ
     expect(classifyBattedBallType(50, 100)).toBe("popup");
     expect(classifyBattedBallType(55, 100)).toBe("popup");
     expect(classifyBattedBallType(70, 80)).toBe("popup");
+    // 49°以下 → フライボール
+    expect(classifyBattedBallType(38, 150)).toBe("fly_ball");
+    expect(classifyBattedBallType(40, 150)).toBe("fly_ball");
+    expect(classifyBattedBallType(45, 120)).toBe("fly_ball");
+    expect(classifyBattedBallType(49, 100)).toBe("fly_ball");
   });
 });
 
