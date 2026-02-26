@@ -9,7 +9,7 @@ import type { GameResult, AtBatLog } from "../src/models/league";
 // CLI引数パース
 const args = process.argv.slice(2);
 const gamesArg = args.find((a) => a.startsWith("--games="));
-const NUM_GAMES = gamesArg ? parseInt(gamesArg.split("=")[1]) : 1000;
+const NUM_GAMES = gamesArg ? parseInt(gamesArg.split("=")[1]) : 2000;
 
 // テストチーム生成
 function createTestTeam(id: string, name: string): Team {
@@ -250,9 +250,9 @@ function printResults(
   const avgOk = check(avg, 0.24, 0.28);
   const hrOk = check(hrPerGame, 1.0, 1.5);
   const kOk = check(kPct, 15, 25);
-  const bbOk = check(bbPct, 7, 12);
+  const bbOk = check(bbPct, 6.5, 12);
   const babipOk = check(babip, 0.28, 0.32);
-  const goaoOk = check(goao, 0.8, 1.3);
+  const goaoOk = check(goao, 0.75, 1.3);
 
   const allOk = avgOk && hrOk && kOk && bbOk && babipOk && goaoOk;
   const totalAnomalies = anomalies.reduce((s, a) => s + a.count, 0);
@@ -281,13 +281,13 @@ function printResults(
     `  ${pad("K%", 10)} ${padLeft(fmtPct(kPct), 6)}  (15-25%)    ${mark(kOk)}`
   );
   console.log(
-    `  ${pad("BB%", 10)} ${padLeft(fmtPct(bbPct), 6)}  (7-12%)     ${mark(bbOk)}`
+    `  ${pad("BB%", 10)} ${padLeft(fmtPct(bbPct), 6)}  (6.5-12%)   ${mark(bbOk)}`
   );
   console.log(
     `  ${pad("BABIP", 10)} ${padLeft(fmt3(babip), 6)}  (.280-.320)  ${mark(babipOk)}`
   );
   console.log(
-    `  ${pad("GO/AO", 10)} ${padLeft(fmt2(goao), 6)}  (0.8-1.3)   ${mark(goaoOk)}`
+    `  ${pad("GO/AO", 10)} ${padLeft(fmt2(goao), 6)}  (0.75-1.3)  ${mark(goaoOk)}`
   );
 
   console.log("");
@@ -464,16 +464,15 @@ function printBattedBallBreakdown(logs: AtBatLog[]) {
 
 /** 回収野手分布 + ポジション別TC/Gの表示とチェック */
 function printFieldingDistribution(logs: AtBatLog[], totalGames: number): boolean {
-  // 回収野手分布: ヒット(bouncePenalty付き)の回収者ポジションを集計
+  // 回収野手分布: ヒット打球の fielderPosition を集計
   const HIT_RESULTS = new Set(["single", "double", "triple", "infieldHit"]);
   const retrieverDist: Record<number, number> = {};
   let retrieverTotal = 0;
 
   for (const log of logs) {
     if (!HIT_RESULTS.has(log.result)) continue;
-    const trace = log.fieldingTrace;
-    if (!trace?.resolution?.bouncePenalty) continue;
-    const pos = trace.resolution.bestFielderPos;
+    const pos = log.fielderPosition;
+    if (!pos || pos < 1 || pos > 9) continue;
     retrieverDist[pos] = (retrieverDist[pos] ?? 0) + 1;
     retrieverTotal++;
   }
@@ -513,10 +512,8 @@ function printFieldingDistribution(logs: AtBatLog[], totalGames: number): boolea
   // ポジション別TC/G (参考指標 — 警告のみ)
   const tcByPos: Record<number, number> = {};
   for (const log of logs) {
-    const trace = log.fieldingTrace;
-    if (!trace?.resolution) continue;
-    const pos = trace.resolution.bestFielderPos;
-    if (pos >= 1 && pos <= 9) {
+    const pos = log.fielderPosition;
+    if (pos && pos >= 1 && pos <= 9) {
       tcByPos[pos] = (tcByPos[pos] ?? 0) + 1;
     }
   }

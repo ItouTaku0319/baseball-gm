@@ -78,11 +78,13 @@ export const CATCHER_POPUP_RUN_SPEED = 8.5;  // キャッチャーの近距離�
 export const CATCHER_POPUP_CATCH_RADIUS = 3.5; // キャッチャーの近距離フライ捕球半径(m、飛び込み込み)
 export const TRANSFER_TIME_BASE = 0.25;      // 送球準備時間ベース(秒) ※旧0.55s
 export const TRANSFER_TIME_ARM_SCALE = 0.15; // 肩力による送球準備時間変動(秒) ※旧0.25s
+export const RUNNER_START_DELAY = 0.65;      // 打者走者のスタート遅延(秒)：スイング完了→走り出し
 
 // 守備範囲計算（捕球リーチ）— 物理ベースモデル
 // 変更前: 固定半径(AGENT_CATCH_RADIUS_IF=1.0m, AGENT_CATCH_RADIUS_OF=1.5m, GROUND_INTERCEPT=0.7m)
 // 変更後: 守備力依存の動的リーチ（base + fielding/100 * factor）
 export const CATCH_REACH_BASE_IF = 0.5;        // 内野手の基本捕球リーチ(m)
+export const CATCH_REACH_GROUND_BONUS = 0.5;   // ゴロ捕球時の追加リーチ(m)：伸身・ダイブ・逆シングル
 export const CATCH_REACH_BASE_OF = 1.5;        // 外野手の基本捕球リーチ(m)
 export const CATCH_REACH_BASE_C = 4.0;         // 捕手の基本捕球リーチ(m、ポップフライ専門訓練)
 export const CATCH_REACH_SKILL_FACTOR = 1.5;   // fielding/100 あたりの追加リーチ(m)

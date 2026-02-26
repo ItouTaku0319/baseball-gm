@@ -34,7 +34,9 @@ import {
   AGENT_BASE_SPEED_OF,
   TRANSFER_TIME_BASE,
   TRANSFER_TIME_ARM_SCALE,
+  RUNNER_START_DELAY,
   CATCH_REACH_BASE_IF,
+  CATCH_REACH_GROUND_BONUS,
   CATCH_REACH_BASE_OF,
   CATCH_REACH_BASE_C,
   CATCH_REACH_SKILL_FACTOR,
@@ -302,12 +304,19 @@ function createAgents(
       speed: player.batting.speed,
     };
 
-    // 反応時間
+    // 反応時間（ゴロ時は内野手がレディ姿勢で構えており初動が速い）
     let baseReaction: number;
     if (pos === 1) baseReaction = AGENT_PITCHER_REACTION;
     else if (pos === 2) baseReaction = AGENT_CATCHER_REACTION;
     else if (pos >= 7) baseReaction = AGENT_BASE_REACTION_OF;
     else baseReaction = AGENT_BASE_REACTION_IF;
+    if (trajectory.isGroundBall && pos >= 3 && pos <= 6) {
+      baseReaction *= 0.60;
+    }
+    // ライナーは弾道が低く速いため初動判断が遅れる
+    if (trajectory.ballType === "line_drive") {
+      baseReaction *= 2.5;
+    }
 
     // 走速
     const isOF = pos >= 7;
@@ -455,6 +464,7 @@ function getCatchReach(agent: FielderAgent, forGroundBall = false, launchAngle?:
     base = CATCH_REACH_BASE_OF;
   } else {
     base = CATCH_REACH_BASE_IF;
+    if (forGroundBall) base += CATCH_REACH_GROUND_BONUS;
   }
   return base + (agent.skill.fielding / 100) * CATCH_REACH_SKILL_FACTOR;
 }
@@ -855,7 +865,11 @@ function checkFlyCatchAtLanding(
     .sort((a, b) => a.dist - b.dist);
 
   for (const { agent, dist } of candidates) {
-    const catchReach = getCatchReach(agent, false, launchAngle);
+    let catchReach = getCatchReach(agent, false, launchAngle);
+    // ライナーは低弾道・高速で到達するため捕球ゾーンが狭い
+    if (trajectory.ballType === "line_drive") {
+      catchReach *= 0.60;
+    }
     const extendedRadius = catchReach * 1.2;
 
     const fieldingRate =
@@ -958,6 +972,16 @@ function resolveGroundOut(
   agents: FielderAgent[],
   rng: () => number
 ): AgentFieldingResult {
+  // 外野手がゴロを回収 → 内野を抜けたヒット（シングル確定）
+  if (catcher.pos >= 7) {
+    return {
+      result: "single",
+      fielderPos: catcher.pos,
+      putOutPos: undefined,
+      assistPos: undefined,
+    };
+  }
+
   const fieldTime = catcher.arrivalTime;
   const secureTime = 0.3 + (1 - catcher.skill.fielding / 100) * 0.2;
   const transferTime = TRANSFER_TIME_BASE + (1 - catcher.skill.arm / 100) * TRANSFER_TIME_ARM_SCALE;
@@ -971,7 +995,7 @@ function resolveGroundOut(
     fieldTime + secureTime + transferTime + throwDist / throwSpeed;
 
   const runnerSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
-  const runnerTo1B = 0.3 + BASE_LENGTH / runnerSpeed;
+  const runnerTo1B = RUNNER_START_DELAY + BASE_LENGTH / runnerSpeed;
 
   // 内野安打
   if (runnerTo1B < defenseTime) {
@@ -1174,7 +1198,7 @@ function resolveHitWithRetriever(
   let basesReached = 1;
   if (batTimeTo2B < defenseTo2B - 0.3) basesReached = 2;
   if (basesReached >= 2 && batTimeTo3B < defenseTo3B - 0.3) basesReached = 3;
-  if (landing.isGroundBall) basesReached = Math.min(basesReached, 2);
+  if (landing.isGroundBall) basesReached = 1;
   if (landing.distance < 25) basesReached = 1;
   // 深いフライ（85m以上）は最低2塁打保証
   if (!landing.isGroundBall && landing.distance >= 85) {
