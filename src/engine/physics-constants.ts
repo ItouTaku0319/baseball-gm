@@ -44,10 +44,8 @@ export const CONTACT_DIRECTION_SPREAD = 30;    // timing±1.0での方向振れ�
 export const CONTACT_DIRECTION_NOISE_SIGMA = 8; // 打球方向のブレσ
 
 // playerMaxEV計算用
-// 変更前(設計書原案): BASE=130, SCALE=40 → power=50で150km/h → carry廃止後HRがほぼ出ない
-// 変更後: BASE=152, SCALE=35 → power=50で169.5km/h, power=70で176.5km/h
-// → carry廃止(旧来の弾道2キャリー1.12相当を吸収)、NPBのHR率1.0-1.5/試合目標
-export const PLAYER_MAX_EV_BASE = 152;         // 基本最大初速 (km/h)
+// carry廃止+ファウル率改善後の再調整: D50で163.5km/h, D80で174.0km/h
+export const PLAYER_MAX_EV_BASE = 150;         // 基本最大初速 (km/h)
 export const PLAYER_MAX_EV_POWER_SCALE = 35;   // パワー100での追加初速 (km/h)
 
 // 効率曲線パラメータ
@@ -63,7 +61,7 @@ export const OFFSET_SIGMA_CONTACT_SCALE = 0.15; // ミート依存σ調整量
 export const OFFSET_SIGMA_PITCH_SCALE = 0.05; // 変化球依存σ調整量
 
 // timing生成パラメータ
-export const TIMING_SIGMA_BASE = 0.50;         // タイミングσ基本値
+export const TIMING_SIGMA_BASE = 1.50;         // タイミングσ基本値 (D50でファウル率≈31%)
 export const TIMING_SIGMA_CONTACT_SCALE = 0.15; // ミート依存σ調整量
 export const TIMING_SIGMA_PITCH_SCALE = 0.05; // 変化球依存σ調整量
 

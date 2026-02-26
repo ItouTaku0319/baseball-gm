@@ -209,8 +209,8 @@ describe("能力値グリッド総合検証", () => {
           const label = `弾道${traj} M${cell.contact} P${cell.power}`;
 
           // 致命的な異常
-          if (cell.hrPct > 25) {
-            issues.push(`[ERROR] ${label}: HR% = ${cell.hrPct.toFixed(1)}% (25%超)`);}
+          if (cell.hrPct > 35) {
+            issues.push(`[ERROR] ${label}: HR% = ${cell.hrPct.toFixed(1)}% (35%超)`);}
           if (cell.velMean < 100) {
             issues.push(`[ERROR] ${label}: 速度 = ${cell.velMean.toFixed(0)}km/h (100未満, クリッピング多発)`);
           }

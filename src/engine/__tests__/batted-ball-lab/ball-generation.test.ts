@@ -84,8 +84,7 @@ describe("generateBattedBall: 値域チェック", () => {
   });
 
   it("1000球生成してフェア率を検証", () => {
-    // コンタクトモデル: timing の分布が中央(0)に集中するため、フェア打球率は高い(>90%)
-    // direction = basePull(38-52°) + timing*30 + noise の分布でほとんどがフェアゾーン(0-90°)に入る
+    // コンタクトモデル: timingSigma=1.50でD50のファウル率≈31%、フェア率≈69%
     const n = 1000;
     let fairCount = 0;
     for (let i = 0; i < n; i++) {
@@ -94,7 +93,8 @@ describe("generateBattedBall: 値域チェック", () => {
     }
     const fairRate = fairCount / n;
     console.log(`フェア率: ${(fairRate * 100).toFixed(1)}% (${fairCount}/${n})`);
-    expect(fairRate).toBeGreaterThan(0.85);
+    expect(fairRate).toBeGreaterThan(0.55);
+    expect(fairRate).toBeLessThan(0.85);
   });
 
   it("0°/90° 付近のclamp artifactがないこと", () => {
