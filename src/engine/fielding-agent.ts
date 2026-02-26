@@ -34,6 +34,7 @@ import {
   AGENT_CALLOFF_RADIUS,
   AGENT_ACCELERATION_TIME,
   AGENT_SPEED_SKILL_FACTOR,
+  CATCHER_POPUP_CATCH_RADIUS,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -446,13 +447,23 @@ function updateDecision(
         agent.interceptBallTime = intercept.ballTime;
         return;
       }
+      // インターセプト不可でも経路近傍なら停止球チャーシングを試みる
+      if (intercept && intercept.perpDist < 2.0) {
+        const chaseTime = distToTarget / agent.maxSpeed;
+        if (t + chaseTime < trajectory.flightTime + 4.0) {
+          agent.state = "PURSUING";
+          agent.action = "field_ball";
+          agent.targetPos = perceived;
+          return;
+        }
+      }
       assignNonPursuitRole(agent, trajectory, bases, outs);
       return;
     }
 
-    // --- 捕手(2): 近距離(8m以内)のみチャーシング（バント・弱いチョッパー対応）---
+    // --- 捕手(2): 近距離(13m以内)のみチャーシング（バント・弱いチョッパー対応）---
     if (agent.pos === 2) {
-      if (distToTarget < 8.0) {
+      if (distToTarget < 13.0) {
         agent.state = "PURSUING";
         agent.action = "field_ball";
         agent.targetPos = perceived;
@@ -474,8 +485,29 @@ function updateDecision(
     }
 
     // 停止球チャーシング
+    // 外野手は転がり距離が大きいため猶予を広く取る。
+    // 内野手も経路近傍（垂線距離10m以内）なら前方チャージとして猶予を拡大する。
     const chaseTime = distToTarget / agent.maxSpeed;
-    if (t + chaseTime < trajectory.flightTime + 1.5) {
+    let chaseDeadline = trajectory.flightTime + 1.5;
+    if (agent.pos >= 7) {
+      chaseDeadline = trajectory.flightTime + 4.0;
+    } else {
+      // 内野手: ゴロ経路との垂線距離を計算し、近傍なら猶予拡大
+      const landing = trajectory.landingPos;
+      const pathLen = Math.sqrt(landing.x * landing.x + landing.y * landing.y);
+      if (pathLen > 0.1) {
+        const pDirX = landing.x / pathLen;
+        const pDirY = landing.y / pathLen;
+        const proj = agent.currentPos.x * pDirX + agent.currentPos.y * pDirY;
+        const perpX = agent.currentPos.x - proj * pDirX;
+        const perpY = agent.currentPos.y - proj * pDirY;
+        const perpDist = Math.sqrt(perpX * perpX + perpY * perpY);
+        if (perpDist < 10.0) {
+          chaseDeadline = trajectory.flightTime + 4.0;
+        }
+      }
+    }
+    if (t + chaseTime < chaseDeadline) {
       agent.state = "PURSUING";
       agent.action = "field_ball";
       agent.targetPos = perceived;
@@ -503,15 +535,23 @@ function updateDecision(
     }
   }
 
-  // --- 捕手(2): ホーム近傍(15m以内)のフライのみ追跡 ---
+  // --- 捕手(2): ホーム近傍(20m以内)のフライのみ追跡 ---
   if (agent.pos === 2) {
-    if (distToTarget > 15.0) {
+    if (distToTarget > 20.0) {
       assignNonPursuitRole(agent, trajectory, bases, outs);
       return;
     }
   }
 
-  const estimatedArrivalTime = distToTarget / agent.maxSpeed;
+  // --- 内野手(3-6): 外野エリア(着地距離>50m)のフライは追跡しない ---
+  if (agent.pos >= 3 && agent.pos <= 6) {
+    if (trajectory.landingDistance > 50.0) {
+      assignNonPursuitRole(agent, trajectory, bases, outs);
+      return;
+    }
+  }
+
+  const estimatedArrivalTime = distToTarget / agent.maxSpeed + agent.reactionRemaining;
   const canReach = estimatedArrivalTime < timeRemaining + 1.0;
 
   if (canReach) {
@@ -781,9 +821,12 @@ function checkFlyCatchAtLanding(
 
   for (const { agent, dist } of candidates) {
     const isOF = agent.pos >= 7;
+    const isCatcher = agent.pos === 2;
     const standardRadius = isOF
       ? AGENT_CATCH_RADIUS_OF
-      : AGENT_CATCH_RADIUS_IF;
+      : isCatcher
+        ? CATCHER_POPUP_CATCH_RADIUS
+        : AGENT_CATCH_RADIUS_IF;
     const extendedRadius = standardRadius * 1.2;
 
     const fieldingRate =
@@ -889,7 +932,10 @@ function resolveGroundOut(
   const fieldTime = catcher.arrivalTime;
   const secureTime = 0.3 + (1 - catcher.skill.fielding / 100) * 0.2;
   const transferTime = 0.55 + (1 - catcher.skill.arm / 100) * 0.25;
-  const throwSpeed = 25 + (catcher.skill.arm / 100) * 15;
+  // NPB内野手の平均送球速度: arm=50で40m/s(144km/h)、arm=100で50m/s(180km/h)
+  // 変更前: base=25 + arm/100*15 (arm=50で32.5m/s=117km/h)
+  // 変更後: base=30 + arm/100*20 (arm=50で40m/s=144km/h)
+  const throwSpeed = 30 + (catcher.skill.arm / 100) * 20;
 
   const throwDist = vec2Distance(catcher.currentPos, BASE_POSITIONS.first);
   const defenseTime =
@@ -1192,8 +1238,9 @@ function calcPathIntercept(
   let bestBallTime = 0;
   let bestMargin = -Infinity;
 
-  // 探索範囲: 野手の射影点 ± 15m（ただし 2m〜maxDist）
-  const scanMin = Math.max(2, projDist - 15);
+  // 探索範囲: 野手の射影点 ± 25m（ただし 2m〜maxDist）
+  // 25mに拡大することで、三塁手が三塁線前方のゴロへのチャージも探索範囲に含める
+  const scanMin = Math.max(2, projDist - 25);
   const scanMax = Math.min(maxDist, projDist + 5); // 前方5mまで(後追いは少し)
   const stepSize = 1.5; // 1.5m刻み
 
