@@ -17,6 +17,14 @@ import {
   FOUL_FLY_MIN_LAUNCH_ANGLE, FOUL_FLY_CATCHABLE_ANGLE, FOUL_FLY_BASE_CATCH_RATE,
   FOUL_TIP_DIRECTION_THRESHOLD, FOUL_TIP_MAX_LAUNCH_ANGLE,
   FOUL_TIP_MIN_VELOCITY, FOUL_TIP_STRIKEOUT_RATE,
+  SB_ATTEMPT_80, SB_ATTEMPT_70, SB_ATTEMPT_60, SB_ATTEMPT_50,
+  SB3_ATTEMPT_85, SB3_ATTEMPT_75, SB3_ATTEMPT_65,
+  SB_BASE_SUCCESS_RATE, SB3_BASE_SUCCESS_RATE,
+  SB_SPEED_BONUS, SB_ARM_PENALTY, SB3_ARM_PENALTY,
+  SB_MAX_SUCCESS, SB_MIN_SUCCESS,
+  SB_TWO_OUTS_FACTOR,
+  WP_BASE_RATE, WP_CONTROL_FACTOR,
+  PB_BASE_RATE, PB_CATCHING_FACTOR,
 } from "./physics-constants";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
@@ -1800,12 +1808,46 @@ function advanceRunners(
 }
 
 /**
+ * WP/PB発生時の走者進塁処理
+ *
+ * 全走者が1塁ずつ進塁する。3塁走者はホームイン（得点）。
+ * isPB=trueの場合、生還した得点は非自責点とする。
+ * 走者がいない場合は何も起きない。
+ */
+function advanceRunnersOnWildPitch(
+  bases: BaseRunners,
+  batterStatsMap: Map<string, PlayerGameStats>,
+  pitcherLog: PitcherGameLog,
+  isPB: boolean,
+): { bases: BaseRunners; runsScored: number } {
+  const hasRunner = bases.first !== null || bases.second !== null || bases.third !== null;
+  if (!hasRunner) return { bases, runsScored: 0 };
+
+  const newBases: BaseRunners = { first: null, second: null, third: null };
+  let runsScored = 0;
+
+  if (bases.third) {
+    getOrCreateBatterStats(batterStatsMap, bases.third.id).runs++;
+    runsScored++;
+    // PBは非自責点: pitcherLog.earnedRunsに加算しない
+    if (!isPB) {
+      pitcherLog.earnedRuns++;
+    }
+  }
+  if (bases.second) newBases.third = bases.second;
+  if (bases.first) newBases.second = bases.first;
+  // 打者は出塁しないので1塁は空のまま
+
+  return { bases: newBases, runsScored };
+}
+
+/**
  * 盗塁を試みる
  *
  * 走力が高い走者ほど盗塁を試み、成功率は走力 vs 捕手の肩力で決まる。
  * - 1塁→2塁: 走力50以上で試行の可能性あり
  * - 2塁→3塁: 走力65以上で試行（頻度低め）
- * - 2アウト時は試行率が下がる
+ * - 2アウト時はリスクが低いため試行率が上がる（アウトになってもチェンジになるだけ）
  */
 function attemptStolenBases(
   bases: BaseRunners,
@@ -1817,7 +1859,8 @@ function attemptStolenBases(
   const newBases = { ...bases };
   let additionalOuts = 0;
 
-  const outsFactor = outs === 2 ? 0.3 : 1.0;
+  // 2アウト時はリスクが低いため試行率を促進（SB_TWO_OUTS_FACTOR > 1.0）
+  const outsFactor = outs === 2 ? SB_TWO_OUTS_FACTOR : 1.0;
   const catcherArm = catcher.batting.arm;
 
   // 1塁走者 → 2塁盗塁 (2塁が空いている場合のみ)
@@ -1826,16 +1869,17 @@ function attemptStolenBases(
     const speed = runner.batting.speed;
 
     let attemptRate = 0;
-    if (speed >= 80) attemptRate = 0.20;
-    else if (speed >= 70) attemptRate = 0.12;
-    else if (speed >= 60) attemptRate = 0.05;
-    else if (speed >= 50) attemptRate = 0.02;
+    if (speed >= 80) attemptRate = SB_ATTEMPT_80;
+    else if (speed >= 70) attemptRate = SB_ATTEMPT_70;
+    else if (speed >= 60) attemptRate = SB_ATTEMPT_60;
+    else if (speed >= 50) attemptRate = SB_ATTEMPT_50; // speed=50が基準点（補正なし）
 
     if (attemptRate > 0 && Math.random() < attemptRate * outsFactor) {
-      const baseRate = 0.65;
-      const speedBonus = (speed - 50) * 0.005;
-      const armPenalty = (catcherArm - 50) * 0.004;
-      const successRate = Math.min(0.95, Math.max(0.30, baseRate + speedBonus - armPenalty));
+      // 成功率: clamp(BASE + (speed-50)*SPEED_BONUS - (arm-50)*ARM_PENALTY, MIN, MAX)
+      // speed=50が基準点（speedBonus=0）
+      const speedBonus = (speed - 50) * SB_SPEED_BONUS;
+      const armPenalty = (catcherArm - 50) * SB_ARM_PENALTY;
+      const successRate = Math.min(SB_MAX_SUCCESS, Math.max(SB_MIN_SUCCESS, SB_BASE_SUCCESS_RATE + speedBonus - armPenalty));
 
       const bs = getOrCreateBatterStats(batterStatsMap, runner.id);
       if (Math.random() < successRate) {
@@ -1859,15 +1903,16 @@ function attemptStolenBases(
     const speed = runner.batting.speed;
 
     let attemptRate = 0;
-    if (speed >= 85) attemptRate = 0.08;
-    else if (speed >= 75) attemptRate = 0.04;
-    else if (speed >= 65) attemptRate = 0.01;
+    if (speed >= 85) attemptRate = SB3_ATTEMPT_85;
+    else if (speed >= 75) attemptRate = SB3_ATTEMPT_75;
+    else if (speed >= 65) attemptRate = SB3_ATTEMPT_65;
 
     if (attemptRate > 0 && Math.random() < attemptRate * outsFactor) {
-      const baseRate = 0.60;
-      const speedBonus = (speed - 50) * 0.005;
-      const armPenalty = (catcherArm - 50) * 0.005;
-      const successRate = Math.min(0.90, Math.max(0.25, baseRate + speedBonus - armPenalty));
+      // 成功率: clamp(BASE + (speed-50)*SPEED_BONUS - (arm-50)*ARM_PENALTY, MIN, MAX)
+      // speed=50が基準点（speedBonus=0）
+      const speedBonus = (speed - 50) * SB_SPEED_BONUS;
+      const armPenalty = (catcherArm - 50) * SB3_ARM_PENALTY;
+      const successRate = Math.min(SB_MAX_SUCCESS, Math.max(SB_MIN_SUCCESS, SB3_BASE_SUCCESS_RATE + speedBonus - armPenalty));
 
       const bs = getOrCreateBatterStats(batterStatsMap, runner.id);
       if (Math.random() < successRate) {
@@ -2574,6 +2619,35 @@ function simulateHalfInning(
     pitcherState.pitchCount += detail.pitchCount;
     const result = detail.result;
     const bs = getOrCreateBatterStats(batterStatsMap, batter.id);
+
+    // WP/PBは打席中の投球で発生するため、打席結果（ヒット/アウト等）より先に処理する
+    // 走者がいる時のみ、この打席の各投球について判定
+    // 打席開始時の走者状態で判定（各投球での走者有無の近似）
+    if (basesBeforeAtBat[0] || basesBeforeAtBat[1] || basesBeforeAtBat[2]) {
+      const pitcherControl = pitcher.pitching?.control ?? 50;
+      const catcherCatching = defensiveState.catcher.batting.catching;
+      const wpRate = Math.max(0, WP_BASE_RATE + (50 - pitcherControl) * WP_CONTROL_FACTOR);
+      const pbRate = Math.max(0, PB_BASE_RATE + (50 - catcherCatching) * PB_CATCHING_FACTOR);
+
+      // 打席の投球数分だけ試行（1投球あたりの確率 × 投球数）
+      for (let pitch = 0; pitch < detail.pitchCount; pitch++) {
+        if (Math.random() < wpRate) {
+          // WP発生: 投手のミス → 自責点あり
+          const wpResult = advanceRunnersOnWildPitch(bases, batterStatsMap, pitcherLog, false);
+          bases = wpResult.bases;
+          runs += wpResult.runsScored;
+          inningRuns += wpResult.runsScored;
+          break; // 1打席に複数WP/PBは発生しない
+        } else if (Math.random() < pbRate) {
+          // PB発生: 捕手のミス → 非自責点
+          const pbResult = advanceRunnersOnWildPitch(bases, batterStatsMap, pitcherLog, true);
+          bases = pbResult.bases;
+          runs += pbResult.runsScored;
+          inningRuns += pbResult.runsScored;
+          break; // 1打席に複数WP/PBは発生しない
+        }
+      }
+    }
 
     switch (result) {
       case "strikeout":

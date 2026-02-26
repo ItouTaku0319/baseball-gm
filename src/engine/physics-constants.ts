@@ -54,6 +54,42 @@ export const BOUNCE_CLOSE_THRESHOLD = 3;     // 近距離(m)
 export const BOUNCE_NEAR_THRESHOLD = 8;      // 中距離(m)
 export const BOUNCE_MID_THRESHOLD = 15;      // 遠距離(m)
 
+// 盗塁定数
+// NPB準拠: 企図0.5-0.8回/試合、成功率65-70%
+// 変更前: 試行率が高すぎ1.56企図/試合、成功率73.8%
+// 変更後: 試行率を約半減→目標0.6-0.8企図/試合、成功率65-70%
+// 2塁盗塁試行率 (speed閾値→試行率)
+export const SB_ATTEMPT_80 = 0.10;  // speed>=80: 変更前0.20→0.10
+export const SB_ATTEMPT_70 = 0.06;  // speed>=70: 変更前0.12→0.06
+export const SB_ATTEMPT_60 = 0.025; // speed>=60: 変更前0.05→0.025
+export const SB_ATTEMPT_50 = 0.008; // speed>=50: 変更前0.02→0.008
+// 3塁盗塁試行率
+export const SB3_ATTEMPT_85 = 0.04; // speed>=85: 変更前0.08→0.04
+export const SB3_ATTEMPT_75 = 0.02; // speed>=75: 変更前0.04→0.02
+export const SB3_ATTEMPT_65 = 0.006; // speed>=65: 変更前0.01→0.006
+// 成功率計算定数
+// baseRate 0.65→0.60に変更（成功率を73.8%→約67%に調整）
+export const SB_BASE_SUCCESS_RATE = 0.60;    // 2塁盗塁基本成功率 変更前0.65
+export const SB3_BASE_SUCCESS_RATE = 0.55;   // 3塁盗塁基本成功率 変更前0.60
+export const SB_SPEED_BONUS = 0.005;         // speed1ポイントあたりの成功率上乗せ
+export const SB_ARM_PENALTY = 0.004;         // 捕手arm1ポイントあたりの成功率低下(2塁)
+export const SB3_ARM_PENALTY = 0.005;        // 捕手arm1ポイントあたりの成功率低下(3塁)
+export const SB_MAX_SUCCESS = 0.90;          // 最大成功率上限
+export const SB_MIN_SUCCESS = 0.25;          // 最低成功率下限
+// 2アウト時の試行率係数
+// 変更前: 0.3（2アウト時に試行率を抑制）
+// 変更後: 1.3（2アウト時はアウトになってもチェンジだけなのでリスクが低く、試行率を促進）
+export const SB_TWO_OUTS_FACTOR = 1.3;
+
+// ワイルドピッチ(WP) / パスボール(PB) 確率定数
+// NPB準拠: WP約0.3回/試合、PB約0.1回/試合（1試合約270投球ベース）
+// 変更前: 実装なし
+// 変更後: WP基本確率0.0008/投球（control=50想定、低制球で上昇）、PB基本確率0.0003/投球（catching=50想定）
+export const WP_BASE_RATE = 0.0008;          // WP基本発生率(/投球)
+export const WP_CONTROL_FACTOR = 0.000012;   // control1ポイントごとのWP発生率変化（低controlで上昇）
+export const PB_BASE_RATE = 0.0003;          // PB基本発生率(/投球)
+export const PB_CATCHING_FACTOR = 0.000004;  // catching1ポイントごとのPB発生率変化（低catchingで上昇）
+
 // 精神力(mentalToughness)による能力補正の定数
 // 基準値50が補正なし、最大値100で上限効果、最小値0で下限効果
 // 疲労ペナルティ軽減: 精神力100で疲労ペナルティを30%軽減（精神力0で軽減なし）

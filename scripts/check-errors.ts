@@ -166,7 +166,7 @@ for (const dir of DIRECTIONS) {
       if (!best) { for (const d of fieldingResult.values()) { if (!best || d.distanceToBall < best.distanceToBall) best = d; } }
       if (!best) continue;
 
-      let result: string;
+      let result = "";
       let retrieverPos = best.position;
 
       if ((ballType === "fly_ball" || ballType === "popup") && checkHR(dir, ev, la)) {
@@ -223,9 +223,6 @@ for (const dir of DIRECTIONS) {
             if (ret) retrieverPos = ret.position;
           }
         }
-      } else if (ballType === "ground_ball") {
-        // already handled above
-        result = result!;
       } else if (best.canReach) {
         result = "out";
       } else {
