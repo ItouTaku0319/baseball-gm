@@ -208,10 +208,11 @@ export function resolvePlayWithAgents(
   }
 
   // === Phase 2: 結果解決 ===
+  const collectedTimeline = collectTimeline ? timeline : undefined;
 
   // ケース1: 捕球成功
   if (catchResult && catchResult.success && catcherAgent) {
-    return resolveSuccessfulCatch(
+    const res = resolveSuccessfulCatch(
       catcherAgent,
       ball,
       trajectory,
@@ -222,11 +223,12 @@ export function resolvePlayWithAgents(
       timeline,
       rng
     );
+    return { ...res, agentTimeline: collectedTimeline };
   }
 
   // ケース2: 捕球失敗
   if (catchResult && !catchResult.success && catcherAgent) {
-    return resolveFieldingError(
+    const res = resolveFieldingError(
       catcherAgent,
       ball,
       landing,
@@ -238,6 +240,7 @@ export function resolvePlayWithAgents(
       rng,
       finalT
     );
+    return { ...res, agentTimeline: collectedTimeline };
   }
 
   // ケース3: 誰も到達できなかった
@@ -246,9 +249,10 @@ export function resolvePlayWithAgents(
     return {
       result: "single",
       fielderPos: 8 as FielderPosition,
+      agentTimeline: collectedTimeline,
     };
   }
-  return resolveHitWithRetriever(
+  const res = resolveHitWithRetriever(
     retriever,
     ball,
     landing,
@@ -260,6 +264,7 @@ export function resolvePlayWithAgents(
     rng,
     finalT
   );
+  return { ...res, agentTimeline: collectedTimeline };
 }
 
 // ====================================================================

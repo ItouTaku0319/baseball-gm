@@ -160,6 +160,8 @@ export interface AgentFieldingResult {
   assistPos?: FielderPosition[];
   /** エラー者 */
   errorPos?: FielderPosition;
+  /** エージェントタイムライン (collectTimeline=true の場合のみ) */
+  agentTimeline?: AgentTimelineEntry[];
 }
 
 // --- 塁位置定数 ---

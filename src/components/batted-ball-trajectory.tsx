@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { AtBatLog } from "@/models/league";
 import { getFenceDistance, estimateDistance } from "@/engine/simulation";
 import { GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR, GROUND_BALL_AVG_SPEED_RATIO, FENCE_HEIGHT } from "@/engine/physics-constants";
+import { DEFAULT_FIELDER_POSITIONS } from "@/engine/fielding-ai";
 
 // ---- ユーティリティ ----
 
@@ -70,6 +71,13 @@ function toFieldSvg(distM: number, dirDeg: number): { x: number; y: number } {
     x: homeX + distM * scale * Math.cos(angleRad),
     y: homeY - distM * scale * Math.sin(angleRad),
   };
+}
+
+// フィールド直交座標(m) → SVG座標 (x=正→1塁側=右, y=正→外野=上)
+function fieldXYtoSvg(fx: number, fy: number): { x: number; y: number } {
+  const scale = 1.8;
+  const homeX = 150, homeY = 280;
+  return { x: homeX + fx * scale, y: homeY - fy * scale };
 }
 
 // ---- ベジェ曲線 ----
@@ -819,6 +827,17 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
         if (!occupied) return null;
         const p = BASE_COORDS[baseIdx + 1];
         return <circle key={baseIdx} cx={p.x} cy={p.y} r={3.5} fill="#22c55e" stroke="white" strokeWidth="0.8" />;
+      })}
+
+      {/* 野手デフォルト位置 */}
+      {Array.from(DEFAULT_FIELDER_POSITIONS.entries()).map(([pos, coord]) => {
+        const p = fieldXYtoSvg(coord.x, coord.y);
+        return (
+          <g key={pos}>
+            <circle cx={p.x} cy={p.y} r={4.5} fill="rgba(100,180,255,0.55)" stroke="rgba(100,180,255,0.9)" strokeWidth="0.8" />
+            <text x={p.x} y={p.y + 3} textAnchor="middle" fill="rgba(200,230,255,0.9)" fontSize="6" fontWeight="bold">{pos}</text>
+          </g>
+        );
       })}
 
       {/* 静的落下地点（アニメーション非再生時） */}
