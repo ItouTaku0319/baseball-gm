@@ -1147,7 +1147,7 @@ function resolveFlyMultiConverge(
   }
   // 2. 浅い打球(<30m)では内野手の方が近い場合がある
   if (landing.distance < 30) {
-    const retDist = retriever
+    let bestDist = retriever
       ? (retriever.posAtLanding
         ? Math.sqrt((retriever.posAtLanding.x - landing.position.x) ** 2 + (retriever.posAtLanding.y - landing.position.y) ** 2)
         : (retriever.distanceAtLanding ?? retriever.distanceToBall))
@@ -1157,7 +1157,7 @@ function resolveFlyMultiConverge(
       const dist = d.posAtLanding
         ? Math.sqrt((d.posAtLanding.x - landing.position.x) ** 2 + (d.posAtLanding.y - landing.position.y) ** 2)
         : (d.distanceAtLanding ?? d.distanceToBall);
-      if (dist < retDist) { retriever = d; }
+      if (dist < bestDist) { retriever = d; bestDist = dist; }
     }
   }
   // 3. フォールバック

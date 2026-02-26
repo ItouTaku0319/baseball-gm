@@ -106,13 +106,13 @@ function selectRetriever(
 
   // 2. 浅い打球(<30m)では内野手の方が近い場合がある
   if (landing.distance < 30) {
-    const retDist = retriever
+    let bestDist = retriever
       ? distToLanding(retriever, landing)
       : Infinity;
     for (const d of fieldingResult.values()) {
       if (d.position <= 2 || d.position >= 7) continue; // 内野手のみ(3-6)
       const dist = distToLanding(d, landing);
-      if (dist < retDist) { retriever = d; }
+      if (dist < bestDist) { retriever = d; bestDist = dist; }
     }
   }
 
