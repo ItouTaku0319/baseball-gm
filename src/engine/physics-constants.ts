@@ -86,6 +86,10 @@ export const CATCH_REACH_BASE_IF = 0.5;        // 内野手の基本捕球リー
 export const CATCH_REACH_BASE_OF = 1.5;        // 外野手の基本捕球リーチ(m)
 export const CATCH_REACH_BASE_C = 4.0;         // 捕手の基本捕球リーチ(m、ポップフライ専門訓練)
 export const CATCH_REACH_SKILL_FACTOR = 1.5;   // fielding/100 あたりの追加リーチ(m)
+// 変更前: 捕手はゴロ以外すべてにCATCH_REACH_BASE_C=4.0mを適用していた
+// 変更後: 高角度(>=50°)のポップフライのみ4.0m、それ以外はIF並み(0.5m)
+// 現実の捕手はライナー・通常フライは前方に飛ぶためほぼ捕れない
+export const POPUP_LAUNCH_ANGLE_THRESHOLD = 50;  // ポップフライ判定の打球角度閾値(度)
 
 // コールオフ
 // 変更前: エージェント間距離 + ターゲット距離両方で判定(AGENT_CALLOFF_RADIUS=8m)

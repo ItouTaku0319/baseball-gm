@@ -38,6 +38,7 @@ import {
   CATCH_REACH_BASE_OF,
   CATCH_REACH_BASE_C,
   CATCH_REACH_SKILL_FACTOR,
+  POPUP_LAUNCH_ANGLE_THRESHOLD,
   CALLOFF_TARGET_THRESHOLD,
   CLOSER_PURSUER_INTERCEPT_RATIO,
   CLOSER_PURSUER_CHASE_RATIO,
@@ -146,7 +147,7 @@ export function resolvePlayWithAgents(
     for (const agent of agents) {
       if (agent.reactionRemaining > 0) continue;
       if (agent.state === "FIELDING" || agent.state === "THROWING") continue;
-      updateDecision(agent, trajectory, t, agents, bases, outs);
+      updateDecision(agent, trajectory, t, agents, bases, outs, ball.launchAngle);
     }
 
     // --- Step 4: 移動 ---
@@ -173,7 +174,7 @@ export function resolvePlayWithAgents(
     }
 
     if (!trajectory.isGroundBall && ballOnGround && t > 0) {
-      const result = checkFlyCatchAtLanding(agents, trajectory, t, rng);
+      const result = checkFlyCatchAtLanding(agents, trajectory, t, rng, ball.launchAngle);
       if (result) {
         catcherAgent = result.agent;
         catchResult = result.catchResult;
@@ -184,7 +185,7 @@ export function resolvePlayWithAgents(
 
     // --- Step 6: タイムライン記録 ---
     if (collectTimeline) {
-      timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
+      timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory, ball.launchAngle));
     }
 
     // --- Step 7: 早期終了 ---
@@ -437,11 +438,19 @@ function calcReachableDistance(agent: FielderAgent, tRemaining: number): number 
   return accelDist + cruiseDist;
 }
 
-function getCatchReach(agent: FielderAgent, forGroundBall = false): number {
+function getCatchReach(agent: FielderAgent, forGroundBall = false, launchAngle?: number): number {
   let base: number;
   if (agent.pos === 2) {
-    // 捕手: ゴロはIF同等、フライはポップフライ専門訓練で広いリーチ
-    base = forGroundBall ? CATCH_REACH_BASE_IF : CATCH_REACH_BASE_C;
+    // 捕手: ゴロはIF同等
+    // ポップフライ(launchAngle>=50°)のみ専門訓練で広いリーチ
+    // ライナー・通常フライは前方に飛ぶため捕れない → IF並み
+    if (forGroundBall) {
+      base = CATCH_REACH_BASE_IF;
+    } else if (launchAngle !== undefined && launchAngle >= POPUP_LAUNCH_ANGLE_THRESHOLD) {
+      base = CATCH_REACH_BASE_C;
+    } else {
+      base = CATCH_REACH_BASE_IF;
+    }
   } else if (agent.pos >= 7) {
     base = CATCH_REACH_BASE_OF;
   } else {
@@ -450,8 +459,8 @@ function getCatchReach(agent: FielderAgent, forGroundBall = false): number {
   return base + (agent.skill.fielding / 100) * CATCH_REACH_SKILL_FACTOR;
 }
 
-function getEffectiveRange(agent: FielderAgent, tRemaining: number, forGroundBall = false): number {
-  return calcReachableDistance(agent, tRemaining) + getCatchReach(agent, forGroundBall);
+function getEffectiveRange(agent: FielderAgent, tRemaining: number, forGroundBall = false, launchAngle?: number): number {
+  return calcReachableDistance(agent, tRemaining) + getCatchReach(agent, forGroundBall, launchAngle);
 }
 
 // ====================================================================
@@ -464,7 +473,8 @@ function updateDecision(
   t: number,
   allAgents: FielderAgent[],
   bases: BaseRunners,
-  outs: number
+  outs: number,
+  launchAngle?: number
 ): void {
   if (agent.hasYielded) {
     agent.state = "BACKING_UP";
@@ -524,12 +534,8 @@ function updateDecision(
     return;
   }
 
-  // フライ/ライナー/ポップフライ: 統一ロジック
-  // 投手はゴロ対応専門。フライはカバー担当
-  if (agent.pos === 1) {
-    assignNonPursuitRole(agent, trajectory, bases, outs);
-    return;
-  }
+  // フライ/ライナー/ポップフライ: 統一ロジック（投手含む全ポジション）
+  // 投手は反応時間0.6sと位置(0, 18.44)で自然に制限される
 
   // 既にPURSUINGなら知覚更新のみ反映して継続（再判定でfloat誤差による脱落を防ぐ）
   if (agent.state === "PURSUING") {
@@ -538,7 +544,7 @@ function updateDecision(
   }
 
   // 到達判定: 物理ベース（加速フェーズ+等速フェーズでの移動距離 + 捕球リーチ）
-  const flyRange = getEffectiveRange(agent, timeRemaining + 1.0);
+  const flyRange = getEffectiveRange(agent, timeRemaining + 1.0, false, launchAngle);
   const canReachFly = distToTarget <= flyRange;
 
   if (!canReachFly) {
@@ -552,8 +558,8 @@ function updateDecision(
       if (other === agent || other.pos < 7) return false;
       // OFが既にPURSUING → 処理を任せる
       if (other.state === "PURSUING") return true;
-      const ofRange = getEffectiveRange(other, timeRemaining + 1.0);
       const ofDist = vec2Distance(other.currentPos, perceived);
+      const ofRange = getEffectiveRange(other, timeRemaining + 1.0, false, launchAngle);
       return ofDist <= ofRange;
     });
     if (ofCanReach) {
@@ -836,7 +842,8 @@ function checkFlyCatchAtLanding(
   agents: FielderAgent[],
   trajectory: BallTrajectory,
   t: number,
-  rng: () => number
+  rng: () => number,
+  launchAngle?: number
 ): { agent: FielderAgent; catchResult: CatchResult } | null {
   if (!trajectory.isOnGround(t)) return null;
 
@@ -848,7 +855,7 @@ function checkFlyCatchAtLanding(
     .sort((a, b) => a.dist - b.dist);
 
   for (const { agent, dist } of candidates) {
-    const catchReach = getCatchReach(agent);
+    const catchReach = getCatchReach(agent, false, launchAngle);
     const extendedRadius = catchReach * 1.2;
 
     const fieldingRate =
@@ -1378,7 +1385,8 @@ function snapshotAll(
   ballPos: Vec2,
   ballHeight: number,
   t: number,
-  trajectory?: BallTrajectory
+  trajectory?: BallTrajectory,
+  launchAngle?: number
 ): AgentTimelineEntry {
   return {
     t,
@@ -1386,19 +1394,21 @@ function snapshotAll(
     ballHeight,
     agents: (() => {
       const tRemaining = trajectory ? Math.max(0, trajectory.flightTime - t) : 0;
-      return agents.map((a) => ({
-        pos: a.pos,
-        state: a.state,
-        x: a.currentPos.x,
-        y: a.currentPos.y,
-        targetX: a.targetPos.x,
-        targetY: a.targetPos.y,
-        speed: a.currentSpeed,
-        action: a.action,
-        perceivedX: a.perceivedLanding.position.x,
-        perceivedY: a.perceivedLanding.position.y,
-        effectiveRange: trajectory ? getEffectiveRange(a, tRemaining) : undefined,
-      }));
+      return agents.map((a) => {
+        return {
+          pos: a.pos,
+          state: a.state,
+          x: a.currentPos.x,
+          y: a.currentPos.y,
+          targetX: a.targetPos.x,
+          targetY: a.targetPos.y,
+          speed: a.currentSpeed,
+          action: a.action,
+          perceivedX: a.perceivedLanding.position.x,
+          perceivedY: a.perceivedLanding.position.y,
+          effectiveRange: trajectory ? getEffectiveRange(a, tRemaining, false, launchAngle) : undefined,
+        };
+      });
     })(),
   };
 }
