@@ -12,6 +12,11 @@ import {
   MENTAL_FATIGUE_RESISTANCE, MENTAL_PINCH_CONTROL_FACTOR,
   BOUNCE_CLOSE_THRESHOLD, BOUNCE_NEAR_THRESHOLD, BOUNCE_MID_THRESHOLD,
   FLY_CATCH_RADIUS,
+  DIRECTION_MIN, DIRECTION_MAX, DIRECTION_SIGMA_BASE, DIRECTION_SIGMA_CONTACT, DIRECTION_SIGMA_FAIR,
+  FAIR_ZONE_MIN, FAIR_ZONE_MAX,
+  FOUL_FLY_MIN_LAUNCH_ANGLE, FOUL_FLY_CATCHABLE_ANGLE, FOUL_FLY_BASE_CATCH_RATE,
+  FOUL_TIP_DIRECTION_THRESHOLD, FOUL_TIP_MAX_LAUNCH_ANGLE,
+  FOUL_TIP_MIN_VELOCITY, FOUL_TIP_STRIKEOUT_RATE,
 } from "./physics-constants";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
@@ -236,9 +241,9 @@ interface BattedBall {
 }
 
 /** ガウス乱数 (Box-Muller法) */
-export function gaussianRandom(mean: number, stdDev: number): number {
-  const u1 = Math.random();
-  const u2 = Math.random();
+export function gaussianRandom(mean: number, stdDev: number, rng: () => number = Math.random): number {
+  const u1 = rng() || 0.0001; // log(0) 防止
+  const u2 = rng();
   const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
   return mean + z * stdDev;
 }
@@ -373,12 +378,12 @@ export function getFenceDistance(directionDeg: number): number {
 }
 
 /** 打球の物理データを生成する */
-export function generateBattedBall(batter: Player, pitcher: Player): BattedBall {
+export function generateBattedBall(batter: Player, pitcher: Player, rng: () => number = Math.random): BattedBall {
   const power = batter.batting.power;
   const contact = batter.batting.contact;
   const breakingPower = calcBreakingPower(pitcher.pitching?.pitches);
 
-  // --- 1. 打球方向 (0-90°) ---
+  // --- 1. 打球方向 (DIRECTION_MIN ~ DIRECTION_MAX, フェア/ファウル連続分布) ---
   let dirMean = 45;
   if (batter.batSide === "R") dirMean = 38;
   if (batter.batSide === "L") dirMean = 52;
@@ -386,7 +391,18 @@ export function generateBattedBall(batter: Player, pitcher: Player): BattedBall 
   if (batter.batSide === "R") dirMean -= pullShift;
   else if (batter.batSide === "L") dirMean += pullShift;
 
-  const direction = clamp(gaussianRandom(dirMean, 18), 0, 90);
+  // ファウル/フェア判定: 広いσでガウス分布を生成し、方向でフェア/ファウルを決定
+  const foulTestSigma = DIRECTION_SIGMA_BASE + (100 - contact) * DIRECTION_SIGMA_CONTACT;
+  const rawDirection = gaussianRandom(dirMean, foulTestSigma, rng);
+
+  let direction: number;
+  if (rawDirection < FAIR_ZONE_MIN || rawDirection > FAIR_ZONE_MAX) {
+    // ファウル: 広い方向をそのまま使用（ファウルフライ・チップ処理用）
+    direction = clamp(rawDirection, DIRECTION_MIN, DIRECTION_MAX);
+  } else {
+    // フェア: 元のσ=18で守備バランスを維持
+    direction = clamp(gaussianRandom(dirMean, DIRECTION_SIGMA_FAIR, rng), FAIR_ZONE_MIN, FAIR_ZONE_MAX);
+  }
 
   // --- 2. 打球角度 (-15° ~ 70°) ---
   let angleMean = 10 + (power - 50) * 0.08 - (contact - 50) * 0.04;
@@ -415,6 +431,75 @@ export function generateBattedBall(batter: Player, pitcher: Player): BattedBall 
   const type = classifyBattedBallType(launchAngle, exitVelocity);
 
   return { direction, launchAngle, exitVelocity, type };
+}
+
+/** フェアゾーン判定: direction が 0-90° の範囲内ならフェア */
+export function isFairBall(direction: number): boolean {
+  return direction >= FAIR_ZONE_MIN && direction <= FAIR_ZONE_MAX;
+}
+
+/** ファウルフライの担当野手を方向と距離で決定 */
+function assignFoulFlyFielder(
+  direction: number,
+  estimatedDistance: number
+): FielderPosition {
+  if (direction < FAIR_ZONE_MIN) {
+    // 左ファウル
+    if (estimatedDistance < 20) return Math.random() < 0.5 ? 2 : 5; // 捕手 or 三塁手
+    if (estimatedDistance < 50) return Math.random() < 0.5 ? 5 : 6; // 三塁手 or 遊撃手
+    return 7; // 左翼手
+  } else {
+    // 右ファウル (direction > 90)
+    if (estimatedDistance < 20) return Math.random() < 0.5 ? 2 : 3; // 捕手 or 一塁手
+    if (estimatedDistance < 50) return Math.random() < 0.5 ? 3 : 4; // 一塁手 or 二塁手
+    return 9; // 右翼手
+  }
+}
+
+/** ファウル打球の結果を解決する */
+interface FoulBallResult {
+  isOut: boolean;
+  result?: AtBatResult;
+  fielderPosition?: FielderPosition;
+}
+
+function resolveFoulBall(
+  ball: BattedBall,
+  strikes: number,
+  rng: () => number = Math.random
+): FoulBallResult {
+  const foulDepth = ball.direction < FAIR_ZONE_MIN
+    ? Math.abs(ball.direction)           // 左ファウル: 0からの距離
+    : ball.direction - FAIR_ZONE_MAX;    // 右ファウル: 90からの距離
+
+  // --- Phase 2: ファウルフライアウト ---
+  if (ball.launchAngle >= FOUL_FLY_MIN_LAUNCH_ANGLE && foulDepth <= FOUL_FLY_CATCHABLE_ANGLE) {
+    // 距離近似: フェアゾーン端の方向で飛距離計算
+    const clampedDir = clamp(ball.direction, FAIR_ZONE_MIN, FAIR_ZONE_MAX);
+    const landing = calcBallLanding(clampedDir, ball.launchAngle, ball.exitVelocity);
+    const fielder = assignFoulFlyFielder(ball.direction, landing.distance);
+    const catchRate = FOUL_FLY_BASE_CATCH_RATE * (1 - foulDepth / FOUL_FLY_CATCHABLE_ANGLE) + 0.005 * 50; // fielding/200 概算(平均fielding=50)
+    if (rng() < catchRate) {
+      const resultType: AtBatResult = ball.type === "popup" ? "popout" : "flyout";
+      return { isOut: true, result: resultType, fielderPosition: fielder };
+    }
+    return { isOut: false };
+  }
+
+  // --- Phase 3: ファウルチップ三振 ---
+  if (strikes === 2) {
+    const isBackward = ball.direction < -(FOUL_TIP_DIRECTION_THRESHOLD)
+      || ball.direction > FAIR_ZONE_MAX + FOUL_TIP_DIRECTION_THRESHOLD;
+    const isLow = ball.launchAngle <= FOUL_TIP_MAX_LAUNCH_ANGLE;
+    const isFast = ball.exitVelocity >= FOUL_TIP_MIN_VELOCITY;
+    if (isBackward && isLow && isFast) {
+      if (rng() < FOUL_TIP_STRIKEOUT_RATE) {
+        return { isOut: true, result: "strikeout", fielderPosition: 2 };
+      }
+    }
+  }
+
+  return { isOut: false };
 }
 
 // === バント判定 ===
@@ -588,7 +673,67 @@ function getThrowDistToFirst(pos: FielderPosition): number {
 }
 
 /**
- * 守備AIによるインプレー結果判定
+ * HR判定（フェンス越え）+ ポップフライ判定 + フェンス直撃判定
+ * エージェント守備AI呼び出し前に処理する
+ */
+function checkHomeRun(
+  ball: BattedBall,
+  landing: BallLanding,
+  batter: Player,
+): { result: AtBatResult; fielderPos: FielderPosition; trace?: FieldingTrace } | null {
+  if (ball.type !== "fly_ball" && ball.type !== "popup") return null;
+
+  const distance = estimateDistance(ball.exitVelocity, ball.launchAngle);
+  const fenceDist = getFenceDistance(ball.direction);
+
+  const trajectory = batter.batting.trajectory ?? 2;
+  const baseCarryFactor = TRAJECTORY_CARRY_FACTORS[Math.min(3, Math.max(0, trajectory - 1))];
+  let trajectoryCarryFactor = baseCarryFactor;
+  if (ball.launchAngle > 35) {
+    const taper = Math.max(0, 1 - (ball.launchAngle - 35) / 15);
+    trajectoryCarryFactor = 1 + (baseCarryFactor - 1) * taper;
+  }
+
+  const effectiveDistance = distance * trajectoryCarryFactor;
+  const ratio = effectiveDistance / fenceDist;
+
+  if (ratio >= 1.0) {
+    const v0 = ball.exitVelocity / 3.6;
+    const theta = ball.launchAngle * Math.PI / 180;
+    const vy0 = v0 * Math.sin(theta);
+    const gEff = GRAVITY / trajectoryCarryFactor;
+    const tUp = vy0 / gEff;
+    const maxH = BAT_HEIGHT + (vy0 * vy0) / (2 * gEff);
+    const tDown = Math.sqrt(2 * maxH / gEff);
+    const tRaw = tUp + tDown;
+    const tFence = (fenceDist / effectiveDistance) * tRaw;
+    const heightAtFence = BAT_HEIGHT + vy0 * tFence - 0.5 * gEff * tFence * tFence;
+
+    if (heightAtFence >= FENCE_HEIGHT) {
+      const fielderPos = assignOutfielder(ball.direction);
+      return { result: "homerun", fielderPos };
+    }
+
+    // フェンス直撃
+    const fielderPos = assignOutfielder(ball.direction);
+    const runnerSpeed = batter.batting.speed;
+    const tripleChance = 0.15 + (runnerSpeed / 100) * 0.15;
+    const hitResult: AtBatResult = Math.random() < tripleChance ? "triple" : "double";
+    return { result: hitResult, fielderPos };
+  }
+
+  // ポップフライは常にアウト
+  if (ball.type === "popup") {
+    const fielderPos = assignPopupFielder(ball.direction);
+    return { result: "popout", fielderPos };
+  }
+
+  return null; // エージェントAIに委任
+}
+
+/**
+ * 守備AIによるインプレー結果判定 (レガシー — 旧evaluateFielders版)
+ * 現在は resolvePlayWithAgents に置換済み。バックアップ用に残す。
  *
  * 打球タイプごとに異なるメカニクス:
  *
@@ -1442,15 +1587,11 @@ function simulateAtBat(
       const contactRate = 0.50 + (bat.contact / 100) * 0.40 - (avgPitchLevel / 7) * 0.15;
 
       if (Math.random() < contactRate) {
-        // コンタクト成功
-        const foulRate = 0.40 - (bat.contact / 100) * 0.10;
-        if (Math.random() < foulRate) {
-          // ファウル
-          if (strikes < 2) strikes++;
-          // 2ストライク時はファウルでカウント変わらず
-        } else {
-          // インプレー
-          const ball = generateBattedBall(batter, pitcher);
+        // コンタクト成功 → 打球生成（方向拡張: フェア/ファウル連続分布）
+        const ball = generateBattedBall(batter, pitcher);
+
+        if (isFairBall(ball.direction)) {
+          // フェア打球 → 既存フロー（レガシー守備AI）
           const landing = calcBallLanding(ball.direction, ball.launchAngle, ball.exitVelocity);
           const runnersInfo = {
             first: !!bases.first,
@@ -1469,6 +1610,22 @@ function simulateAtBat(
             pitchCount,
             fieldingTrace: aiResult.trace,
           };
+        } else {
+          // ファウル打球 → resolveFoulBall で判定
+          const foulResult = resolveFoulBall(ball, strikes);
+          if (foulResult.isOut) {
+            return {
+              result: foulResult.result!,
+              battedBallType: ball.type,
+              fielderPosition: foulResult.fielderPosition ?? null,
+              direction: ball.direction,
+              launchAngle: ball.launchAngle,
+              exitVelocity: ball.exitVelocity,
+              pitchCount,
+            };
+          }
+          // ファウル（アウトにならず）: ストライクカウント加算
+          if (strikes < 2) strikes++;
         }
       } else {
         // 空振り

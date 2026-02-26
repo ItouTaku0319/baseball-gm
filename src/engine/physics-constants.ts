@@ -16,6 +16,26 @@ export const GROUND_BALL_SPEED_FACTOR = 1.2;   // ゴロ距離変換係数
 export const GROUND_BALL_AVG_SPEED_RATIO = 0.5; // ゴロ平均速度比（等減速モデル: 平均=初速/2）
 export const GROUND_BALL_BOUNCE_ANGLE_SCALE = 30; // 叩きつけ減衰スケール (度, この角度で全エネルギー損失)
 
+// 打球方向拡張（フェア/ファウル連続分布）
+export const DIRECTION_MIN = -45;              // 方向角の下限（左ファウル奥）
+export const DIRECTION_MAX = 135;              // 方向角の上限（右ファウル奥）
+export const DIRECTION_SIGMA_BASE = 38;        // ファウル判定用σの基本値
+export const DIRECTION_SIGMA_CONTACT = 0.20;   // ミート依存σ調整
+export const DIRECTION_SIGMA_FAIR = 18;        // フェア打球の方向σ（守備バランス維持）
+export const FAIR_ZONE_MIN = 0;                // フェアゾーン下限
+export const FAIR_ZONE_MAX = 90;               // フェアゾーン上限
+
+// ファウルフライアウト
+export const FOUL_FLY_MIN_LAUNCH_ANGLE = 25;   // ファウルフライの最低打球角度
+export const FOUL_FLY_CATCHABLE_ANGLE = 20;    // ファウルラインからの捕球可能角度幅
+export const FOUL_FLY_BASE_CATCH_RATE = 0.70;  // 基本捕球成功率
+
+// ファウルチップ三振
+export const FOUL_TIP_DIRECTION_THRESHOLD = 5; // ファウルライン外の角度閾値
+export const FOUL_TIP_MAX_LAUNCH_ANGLE = 10;   // 低角度のみ
+export const FOUL_TIP_MIN_VELOCITY = 100;      // 一定以上の速度 (km/h)
+export const FOUL_TIP_STRIKEOUT_RATE = 0.55;   // 捕手捕球成功率
+
 // 弾道キャリーファクター (弾道1-4)
 // FLIGHT_TIME_FACTOR統一による飛距離短縮(×0.85)を補正
 export const TRAJECTORY_CARRY_FACTORS = [1.02, 1.12, 1.17, 1.22] as const;
@@ -41,3 +61,46 @@ export const MENTAL_FATIGUE_RESISTANCE = 0.30;
 // ピンチ時の制球ボーナス: 得点圏走者あり時、mentalToughness 50基準で±5ポイント
 // control 0-100スケール上での補正量 (mentalToughness - 50) * 0.10
 export const MENTAL_PINCH_CONTROL_FACTOR = 0.10;
+
+// ============================================================
+// エージェントベース守備AI用定数
+// ============================================================
+
+// シミュレーション刻み
+export const AGENT_DT = 0.1;                    // タイムステップ(秒)
+export const AGENT_MAX_TIME_GROUND = 8.0;        // ゴロの最大シミュレーション時間(秒)
+export const AGENT_MAX_TIME_FLY = 12.0;          // フライの最大シミュレーション時間(秒)
+
+// 反応時間
+export const AGENT_BASE_REACTION_IF = 0.35;      // 内野手基本反応時間(秒)
+export const AGENT_BASE_REACTION_OF = 0.45;      // 外野手基本反応時間(秒)
+export const AGENT_PITCHER_REACTION = 0.60;      // 投手の反応遅延(秒)
+export const AGENT_CATCHER_REACTION = 0.40;      // 捕手の反応時間(秒)
+
+// 捕球半径
+export const AGENT_CATCH_RADIUS_IF = 1.0;        // 内野手の標準捕球半径(m)
+export const AGENT_CATCH_RADIUS_OF = 1.5;        // 外野手の標準捕球半径(m)
+
+// ダイビングキャッチ
+export const AGENT_DIVE_MIN_DIST = 1.5;          // ダイビング可能最小距離(m)
+export const AGENT_DIVE_MAX_DIST = 3.5;          // ダイビング可能最大距離(m)
+export const AGENT_DIVE_BASE_RATE = 0.20;        // ダイビング基本成功率
+export const AGENT_DIVE_SKILL_FACTOR = 0.005;    // 守備力1あたりのダイビング成功率上昇
+
+// ランニングキャッチ
+export const AGENT_RUNNING_CATCH_BASE = 0.70;    // ランニングキャッチ基本成功率
+export const AGENT_RUNNING_CATCH_SKILL = 0.003;  // 守備力1あたりの成功率上昇
+
+// 知覚ノイズ
+export const AGENT_PERCEPTION_BASE_NOISE = 12;   // 基本ノイズσ(m)
+export const AGENT_PERCEPTION_LINE_DRIVE_MULT = 2.0; // ライナーのノイズ倍率
+export const AGENT_PERCEPTION_POPUP_MULT = 0.3;  // ポップフライのノイズ倍率
+
+// コールオフ
+export const AGENT_CALLOFF_RADIUS = 8;           // コールオフ判定距離(m)
+
+// 移動
+export const AGENT_ACCELERATION_TIME = 0.3;      // 0→最高速に達するまでの時間(秒)
+export const AGENT_BASE_SPEED_IF = 6.5;          // 内野手基本走速(m/s)
+export const AGENT_BASE_SPEED_OF = 7.0;          // 外野手基本走速(m/s)
+export const AGENT_SPEED_SKILL_FACTOR = 2.5;     // speed/100 あたりの走速追加(m/s)

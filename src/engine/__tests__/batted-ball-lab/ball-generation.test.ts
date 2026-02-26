@@ -4,7 +4,8 @@
  * generateBattedBall の分布を打者/投手プロファイル別に検証
  */
 import { describe, it, expect } from "vitest";
-import { generateBattedBall, classifyBattedBallType } from "@/engine/simulation";
+import { generateBattedBall, classifyBattedBallType, isFairBall } from "@/engine/simulation";
+import { DIRECTION_MIN, DIRECTION_MAX } from "@/engine/physics-constants";
 import {
   BATTER_PROFILES,
   PITCHER_PROFILES,
@@ -50,11 +51,11 @@ describe("generateBattedBall: 値域チェック", () => {
   const batter = createBatter();
   const pitcher = createPitcher();
 
-  it("direction は 0-90 の範囲", () => {
+  it("direction は DIRECTION_MIN-DIRECTION_MAX の範囲（フェア/ファウル連続分布）", () => {
     for (let i = 0; i < N; i++) {
       const ball = generateBattedBall(batter, pitcher);
-      expect(ball.direction).toBeGreaterThanOrEqual(0);
-      expect(ball.direction).toBeLessThanOrEqual(90);
+      expect(ball.direction).toBeGreaterThanOrEqual(DIRECTION_MIN);
+      expect(ball.direction).toBeLessThanOrEqual(DIRECTION_MAX);
     }
   });
 
@@ -79,6 +80,36 @@ describe("generateBattedBall: 値域チェック", () => {
       const ball = generateBattedBall(batter, pitcher);
       expect(ball.type).toBe(classifyBattedBallType(ball.launchAngle, ball.exitVelocity));
     }
+  });
+
+  it("1000球生成してフェア率 55-75% を検証", () => {
+    const n = 1000;
+    let fairCount = 0;
+    for (let i = 0; i < n; i++) {
+      const ball = generateBattedBall(batter, pitcher);
+      if (isFairBall(ball.direction)) fairCount++;
+    }
+    const fairRate = fairCount / n;
+    console.log(`フェア率: ${(fairRate * 100).toFixed(1)}% (${fairCount}/${n})`);
+    expect(fairRate).toBeGreaterThan(0.55);
+    expect(fairRate).toBeLessThan(0.75);
+  });
+
+  it("0°/90° 付近のclamp artifactがないこと", () => {
+    const n = 5000;
+    const directions: number[] = [];
+    for (let i = 0; i < n; i++) {
+      directions.push(generateBattedBall(batter, pitcher).direction);
+    }
+    // 境界付近のビン (0±2° と 90±2°) に不自然な集中がないことを確認
+    const nearZero = directions.filter(d => d >= -2 && d <= 2).length;
+    const nearNinety = directions.filter(d => d >= 88 && d <= 92).length;
+    const midRange = directions.filter(d => d >= 43 && d <= 47).length;
+
+    // 境界ビンが中央ビンの3倍以上なら artifact
+    console.log(`0°付近: ${nearZero}, 90°付近: ${nearNinety}, 45°付近: ${midRange}`);
+    expect(nearZero).toBeLessThan(midRange * 3);
+    expect(nearNinety).toBeLessThan(midRange * 3);
   });
 });
 

@@ -321,6 +321,60 @@ function printResults(
   }
 }
 
+/** ファウル関連指標の表示 */
+function printFoulMetrics(logs: AtBatLog[], totalGames: number) {
+  const OUT_RESULTS = new Set(["flyout", "popout"]);
+
+  // ファウルアウト: direction < 0 or > 90 の flyout/popout
+  let foulOuts = 0;
+  // ファウルチップK: direction < -5 or > 95 の strikeout (fielderPosition === 2)
+  let foulTipK = 0;
+  // 全三振
+  let totalK = 0;
+  // コンタクト(打球あり)の打席
+  let contactAB = 0;
+  let fairBalls = 0;
+
+  for (const log of logs) {
+    const dir = log.direction;
+    const result = log.result;
+
+    if (result === "strikeout") totalK++;
+
+    // 打球データがあるもの = コンタクト成功
+    if (dir !== null) {
+      contactAB++;
+      if (dir >= 0 && dir <= 90) {
+        fairBalls++;
+      }
+
+      // ファウルゾーンのアウト
+      if ((dir < 0 || dir > 90) && OUT_RESULTS.has(result)) {
+        foulOuts++;
+      }
+
+      // ファウルチップ三振
+      if ((dir < -5 || dir > 95) && result === "strikeout" && log.fielderPosition === 2) {
+        foulTipK++;
+      }
+    }
+  }
+
+  const foulOutsPerGame = totalGames > 0 ? foulOuts / totalGames : 0;
+  const foulTipKPerGame = totalGames > 0 ? foulTipK / totalGames : 0;
+  const foulTipKPct = totalK > 0 ? (foulTipK / totalK * 100) : 0;
+  const fairRate = contactAB > 0 ? (fairBalls / contactAB * 100) : 0;
+
+  console.log("⚾ ファウル関連指標");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log(`  ファウルアウト/試合:  ${foulOutsPerGame.toFixed(2)}  (目標: ~1-2)`);
+  console.log(`  ファウルチップK/試合: ${foulTipKPerGame.toFixed(2)}  (目標: ~0.7-1.4)`);
+  console.log(`  ファウルチップK/全K:  ${foulTipKPct.toFixed(1)}%  (目標: 5-10%)`);
+  console.log(`  フェア打球率:         ${fairRate.toFixed(1)}%  (目標: 60-70%)`);
+  console.log(`  (コンタクト打席: ${contactAB}, フェア: ${fairBalls}, ファウルアウト: ${foulOuts}, ファウルチップK: ${foulTipK})`);
+  console.log("");
+}
+
 // メイン
 function main() {
   console.log(`⚾ ${NUM_GAMES}試合バランステスト開始...`);
@@ -356,6 +410,9 @@ function main() {
 
   // 打球タイプ別ヒット率
   printBattedBallBreakdown(allLogs);
+
+  // ファウル指標
+  printFoulMetrics(allLogs, stats.totalGames);
 
   // 守備分布チェック
   const fieldingPassed = printFieldingDistribution(allLogs, stats.totalGames);
