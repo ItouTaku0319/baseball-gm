@@ -24,6 +24,7 @@ import {
   SB_TWO_OUTS_FACTOR,
   WP_BASE_RATE, WP_CONTROL_FACTOR,
   PB_BASE_RATE, PB_CATCHING_FACTOR,
+  PICKOFF_ATTEMPT_RATE, PICKOFF_SUCCESS_RATE,
   CONTACT_PEAK_ANGLE, CONTACT_ANGLE_SPREAD, CONTACT_DIRECTION_SPREAD, CONTACT_DIRECTION_NOISE_SIGMA,
   PLAYER_MAX_EV_BASE, PLAYER_MAX_EV_POWER_SCALE,
   EFFICIENCY_PEAK_ANGLE, EFFICIENCY_ANGLE_RANGE, EFFICIENCY_DROP_FACTOR,
@@ -1772,6 +1773,48 @@ function simulateHalfInning(
       if (outs >= 3) break;
     }
 
+    // 牽制球判定（走者ありの打席前）
+    // 試行率4% × 成功率8% ≈ 0.32%/打席、P(A) + カバー内野手(PO)を記録
+    if ((bases.first || bases.second || bases.third) && Math.random() < PICKOFF_ATTEMPT_RATE) {
+      // 牽制対象の走者を選択（優先: 1塁 > 2塁 > 3塁）
+      let pickoffBase: 1 | 2 | 3 | null = null;
+      let coverPos: FielderPosition | null = null;
+      if (bases.first) {
+        pickoffBase = 1;
+        coverPos = 3;
+      } else if (bases.second) {
+        pickoffBase = 2;
+        coverPos = Math.random() < 0.60 ? 6 : 4;
+      } else if (bases.third) {
+        pickoffBase = 3;
+        coverPos = 5;
+      }
+
+      if (pickoffBase !== null && coverPos !== null) {
+        let runner: Player | null = null;
+        if (pickoffBase === 1) runner = bases.first;
+        else if (pickoffBase === 2) runner = bases.second;
+        else runner = bases.third;
+
+        // 走者速度が高いほど牽制成功率が低下
+        const runnerSpeed = runner?.batting.speed ?? 50;
+        const speedPenalty = (runnerSpeed - 50) * 0.001;
+        const successRate = Math.max(0.02, PICKOFF_SUCCESS_RATE - speedPenalty);
+
+        if (Math.random() < successRate) {
+          // 牽制成功: 走者アウト
+          outs++;
+          recordFielding(batterStatsMap, fielderMap, 1, "assist");
+          recordFielding(batterStatsMap, fielderMap, coverPos, "putOut");
+          if (pickoffBase === 1) bases.first = null;
+          else if (pickoffBase === 2) bases.second = null;
+          else bases.third = null;
+          if (outs >= 3) break;
+        }
+        // 牽制失敗: 走者進塁なし（シンプルに何も起きない）
+      }
+    }
+
     let batter = battingTeam[idx % battingTeam.length];
 
     // === 代打判定 ===
@@ -1845,7 +1888,13 @@ function simulateHalfInning(
         bs.atBats++;
         bs.strikeouts++;
         pitcherLog.strikeouts++;
-        recordFielding(batterStatsMap, fielderMap, 2, "putOut");
+        // 振り逃げ風プレー(3%): C(A)+1B(PO)、通常(97%): C(PO)
+        if (Math.random() < 0.03) {
+          recordFielding(batterStatsMap, fielderMap, 2, "assist");
+          recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+        } else {
+          recordFielding(batterStatsMap, fielderMap, 2, "putOut");
+        }
         break;
 
       case "groundout":
@@ -1854,8 +1903,8 @@ function simulateHalfInning(
         pitcherLog.groundBallOuts = (pitcherLog.groundBallOuts ?? 0) + 1;
         if (detail.fielderPosition) {
           const fp = detail.fielderPosition;
-          if (bases.first && Math.random() < 0.40) {
-            // 2塁フォースアウト: 走者1塁時の40%
+          if (bases.first && Math.random() < 0.60) {
+            // 2塁フォースアウト: 走者1塁時の60%（NPBでは2塁封殺が多い）
             if (fp === 6) {
               // SS自身が2塁ベースを踏む → 無補殺刺殺
               recordFielding(batterStatsMap, fielderMap, 6, "putOut");
@@ -1887,8 +1936,14 @@ function simulateHalfInning(
           } else {
             // 1塁送球
             if (fp === 3) {
-              // 1B自己処理: 無補殺刺殺 (3U)
-              recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+              if (Math.random() < 0.30) {
+                // 1Bが打球処理 → 投手がベースカバー: 1B(A) + P(PO)
+                recordFielding(batterStatsMap, fielderMap, 3, "assist");
+                recordFielding(batterStatsMap, fielderMap, 1, "putOut");
+              } else {
+                // 1B自己処理: 無補殺刺殺 (3U)
+                recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+              }
             } else {
               // 他の内野手 → 1B送球
               recordFielding(batterStatsMap, fielderMap, fp, "assist");
@@ -1897,7 +1952,7 @@ function simulateHalfInning(
           }
         }
         // 捕手が関与したプレー（バント処理・牽制等）
-        if (Math.random() < 0.05) {
+        if (Math.random() < 0.10) {
           recordFielding(batterStatsMap, fielderMap, 2, "assist");
         }
         break;
@@ -1909,13 +1964,20 @@ function simulateHalfInning(
         pitcherLog.flyBallOuts = (pitcherLog.flyBallOuts ?? 0) + 1;
         if (detail.fielderPosition) {
           recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "putOut");
-          // 外野フライでの中継/カットオフ補殺 (走者ありの場合)
           const fp = detail.fielderPosition;
-          if (fp >= 7 && fp <= 9 && (bases.first || bases.second || bases.third)) {
-            if (Math.random() < 0.03) {
+          if (fp >= 7 && fp <= 9) {
+            if (bases.first || bases.second || bases.third) {
+              // 外野フライでの中継/カットオフ補殺
+              if (Math.random() < 0.06) {
+                recordFielding(batterStatsMap, fielderMap, fp, "assist");
+                const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
+                recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
+              }
+            }
+            // タグアップ阻止: 3塁走者がタグアップ → OF(A) + C(PO)（stat記録のみ）
+            if (bases.third && Math.random() < 0.10) {
               recordFielding(batterStatsMap, fielderMap, fp, "assist");
-              const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
-              recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
+              recordFielding(batterStatsMap, fielderMap, 2, "putOut");
             }
           }
         }
@@ -1928,13 +1990,20 @@ function simulateHalfInning(
         pitcherLog.flyBallOuts = (pitcherLog.flyBallOuts ?? 0) + 1;
         if (detail.fielderPosition) {
           recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "putOut");
-          // 外野ライナーでの中継補殺 (走者ありの場合)
           const fp = detail.fielderPosition;
-          if (fp >= 7 && fp <= 9 && (bases.first || bases.second || bases.third)) {
-            if (Math.random() < 0.03) {
+          if (fp >= 7 && fp <= 9) {
+            if (bases.first || bases.second || bases.third) {
+              // 外野ライナーでの中継補殺
+              if (Math.random() < 0.06) {
+                recordFielding(batterStatsMap, fielderMap, fp, "assist");
+                const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
+                recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
+              }
+            }
+            // タグアップ阻止（ライナーは少ない）: OF(A) + C(PO)（stat記録のみ）
+            if (bases.third && Math.random() < 0.05) {
               recordFielding(batterStatsMap, fielderMap, fp, "assist");
-              const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
-              recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
+              recordFielding(batterStatsMap, fielderMap, 2, "putOut");
             }
           }
         }
@@ -1982,12 +2051,18 @@ function simulateHalfInning(
         pitcherLog.flyBallOuts = (pitcherLog.flyBallOuts ?? 0) + 1;
         if (detail.fielderPosition) {
           recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "putOut");
-          // 犠飛での中継補殺
-          if (detail.fielderPosition >= 7 && detail.fielderPosition <= 9) {
+          const sfFp = detail.fielderPosition;
+          if (sfFp >= 7 && sfFp <= 9) {
+            // 犠飛での中継補殺
             if (Math.random() < 0.05) {
-              recordFielding(batterStatsMap, fielderMap, detail.fielderPosition, "assist");
+              recordFielding(batterStatsMap, fielderMap, sfFp, "assist");
               const relayPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
               recordFielding(batterStatsMap, fielderMap, relayPos, "assist");
+            }
+            // タグアップ阻止: 別走者のタグアップ送球 → OF(A) + C(PO)（stat記録のみ）
+            if (bases.third && Math.random() < 0.10) {
+              recordFielding(batterStatsMap, fielderMap, sfFp, "assist");
+              recordFielding(batterStatsMap, fielderMap, 2, "putOut");
             }
           }
         }
@@ -2092,9 +2167,26 @@ function simulateHalfInning(
         outs++;
         bs.sacrificeBunts = (bs.sacrificeBunts ?? 0) + 1;
         pitcherLog.sacrificeBuntsAllowed = (pitcherLog.sacrificeBuntsAllowed ?? 0) + 1;
-        // 守備記録: 投手(P)にA、一塁手(1B)にPO
-        recordFielding(batterStatsMap, fielderMap, 1, "assist");
-        recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+        // バント守備バリエーション
+        {
+          const buntRand = Math.random();
+          if (buntRand < 0.60) {
+            // 投手処理 → 1B送球（最多パターン）
+            recordFielding(batterStatsMap, fielderMap, 1, "assist");
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          } else if (buntRand < 0.80) {
+            // サード前バント: 3B処理 → 1B送球
+            recordFielding(batterStatsMap, fielderMap, 5, "assist");
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          } else if (buntRand < 0.95) {
+            // 捕手処理 → 1B送球
+            recordFielding(batterStatsMap, fielderMap, 2, "assist");
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          } else {
+            // 1B自身が処理: 無補殺刺殺
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          }
+        }
         // 走者進塁（3塁走者の生還を処理）
         const sbNewBases = detail.buntNewBases ?? bases;
         // 3塁走者が生還したかを判定: 元の3塁に走者がいて、新しい3塁にいない場合
@@ -2134,9 +2226,26 @@ function simulateHalfInning(
         // バント失敗: 打者アウト、打数にカウント
         outs++;
         bs.atBats++;
-        // 守備記録: 投手(P)にA、一塁手(1B)にPO
-        recordFielding(batterStatsMap, fielderMap, 1, "assist");
-        recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+        // バント守備バリエーション
+        {
+          const buntRand = Math.random();
+          if (buntRand < 0.60) {
+            // 投手処理 → 1B送球
+            recordFielding(batterStatsMap, fielderMap, 1, "assist");
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          } else if (buntRand < 0.80) {
+            // サード前バント: 3B処理 → 1B送球
+            recordFielding(batterStatsMap, fielderMap, 5, "assist");
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          } else if (buntRand < 0.95) {
+            // 捕手処理 → 1B送球
+            recordFielding(batterStatsMap, fielderMap, 2, "assist");
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          } else {
+            // 1B自身が処理: 無補殺刺殺
+            recordFielding(batterStatsMap, fielderMap, 3, "putOut");
+          }
+        }
         bases = detail.buntNewBases ?? bases;
         break;
       }

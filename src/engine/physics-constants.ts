@@ -134,6 +134,10 @@ export const SB_MIN_SUCCESS = 0.25;          // 最低成功率下限
 // 変更後: 1.3（2アウト時はアウトになってもチェンジだけなのでリスクが低く、試行率を促進）
 export const SB_TWO_OUTS_FACTOR = 1.3;
 
+// 牽制球パラメータ
+export const PICKOFF_ATTEMPT_RATE = 0.04;     // 走者ありの打席で牽制を試みる確率
+export const PICKOFF_SUCCESS_RATE = 0.08;     // 牽制成功率（走者速度で補正）
+
 // ワイルドピッチ(WP) / パスボール(PB) 確率定数
 // NPB準拠: WP約0.3回/試合、PB約0.1回/試合（1試合約270投球ベース）
 // 変更前: 実装なし

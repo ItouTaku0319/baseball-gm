@@ -866,9 +866,9 @@ function checkFlyCatchAtLanding(
 
   for (const { agent, dist } of candidates) {
     let catchReach = getCatchReach(agent, false, launchAngle);
-    // ライナーは低弾道・高速で到達するため捕球ゾーンが狭い
-    if (trajectory.ballType === "line_drive") {
-      catchReach *= 0.60;
+    // ライナーは低弾道・高速で到達するため外野手の捕球ゾーンが狭い
+    if (trajectory.ballType === "line_drive" && agent.pos >= 7) {
+      catchReach *= 0.40;
     }
     const extendedRadius = catchReach * 1.2;
 
@@ -884,11 +884,21 @@ function checkFlyCatchAtLanding(
         0,
         1
       );
-      const catchRate = clamp(
-        0.9 + marginFactor * 0.07 + fieldingRate * 0.03,
-        0.9,
-        0.99
-      );
+      // ライナー: marginが小さい（ギリギリ到達）ほど捕球困難
+      let catchRate: number;
+      if (trajectory.ballType === "line_drive" && agent.pos >= 7) {
+        catchRate = clamp(
+          0.70 + marginFactor * 0.20 + fieldingRate * 0.05,
+          0.70,
+          0.95
+        );
+      } else {
+        catchRate = clamp(
+          0.9 + marginFactor * 0.07 + fieldingRate * 0.03,
+          0.9,
+          0.99
+        );
+      }
       const success = rng() < catchRate;
       return {
         agent,
