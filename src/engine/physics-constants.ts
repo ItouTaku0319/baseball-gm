@@ -93,6 +93,10 @@ export const CATCH_REACH_SKILL_FACTOR = 1.5;   // fielding/100 あたりの追�
 // 変更後: 高角度(>=50°)のポップフライのみ4.0m、それ以外はIF並み(0.5m)
 // 現実の捕手はライナー・通常フライは前方に飛ぶためほぼ捕れない
 export const POPUP_LAUNCH_ANGLE_THRESHOLD = 50;  // ポップフライ判定の打球角度閾値(度)
+// ポップフライ(50°以上)の初速上限
+// 芯を外した不完全コンタクトで初速が大幅に低下する
+// 80km/hで着地距離18-27m（NPB内野ポップフライの典型的な範囲）
+export const POPUP_EV_CAP = 80;
 
 // コールオフ
 // 変更前: エージェント間距離 + ターゲット距離両方で判定(AGENT_CALLOFF_RADIUS=8m)

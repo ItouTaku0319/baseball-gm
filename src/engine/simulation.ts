@@ -29,6 +29,7 @@ import {
   CONTACT_PEAK_ANGLE, CONTACT_ANGLE_SPREAD, CONTACT_DIRECTION_SPREAD, CONTACT_DIRECTION_NOISE_SIGMA,
   PLAYER_MAX_EV_BASE, PLAYER_MAX_EV_POWER_SCALE,
   EFFICIENCY_PEAK_ANGLE, EFFICIENCY_ANGLE_RANGE, EFFICIENCY_DROP_FACTOR,
+  POPUP_EV_CAP,
   OFFSET_TRAJECTORY_SCALE, OFFSET_SIGMA_BASE, OFFSET_SIGMA_CONTACT_SCALE, OFFSET_SIGMA_PITCH_SCALE,
   TIMING_SIGMA_BASE, TIMING_SIGMA_CONTACT_SCALE, TIMING_SIGMA_PITCH_SCALE,
 } from "./physics-constants";
@@ -440,10 +441,14 @@ export function generateBattedBall(batter: Player, pitcher: Player, rng: () => n
   const angleDiff = (launchAngle - EFFICIENCY_PEAK_ANGLE) / EFFICIENCY_ANGLE_RANGE;
   const efficiency = clamp(1.0 - angleDiff * angleDiff * EFFICIENCY_DROP_FACTOR, 0.25, 1.0);
   const baseEV = playerMaxEV * efficiency;
-  const exitVelocity = clamp(
+  let exitVelocity = clamp(
     baseEV * (1.0 + gaussianRandom(0, 0.05, rng)),
     60, 185
   );
+  // ポップフライ(50°+): 芯を外した不完全コンタクトで初速が大幅低下
+  if (launchAngle >= 50) {
+    exitVelocity = Math.min(exitVelocity, POPUP_EV_CAP);
+  }
 
   // --- Step 4: timing → direction ---
   const timingSigma = TIMING_SIGMA_BASE
