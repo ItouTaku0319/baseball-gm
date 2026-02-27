@@ -68,6 +68,7 @@ import {
   vec2Distance,
   clamp,
   gaussianRandom,
+  PRIMARY_ZONE,
 } from "./fielding-agent-types";
 import type { FielderAction } from "../models/league";
 
@@ -143,15 +144,15 @@ export function resolvePlayWithAgents(
       updatePerception(agent, trajectory, t, noiseScale, rng);
     }
 
-    // --- Step 2: コールオフ解決 ---
-    resolveCallOffs(agents);
-
-    // --- Step 3: 行動決定 ---
+    // --- Step 2: 行動決定 ---
     for (const agent of agents) {
       if (agent.reactionRemaining > 0) continue;
       if (agent.state === "FIELDING" || agent.state === "THROWING") continue;
       updateDecision(agent, trajectory, t, agents, bases, outs, ball.launchAngle);
     }
+
+    // --- Step 3: コールオフ解決（行動決定後に実行し、捕球チェック前に競合解消） ---
+    resolveCallOffs(agents, trajectory);
 
     // --- Step 4: 移動 ---
     for (const agent of agents) {
@@ -403,7 +404,7 @@ function updatePerception(
 // コールオフ
 // ====================================================================
 
-function resolveCallOffs(agents: FielderAgent[]): void {
+function resolveCallOffs(agents: FielderAgent[], trajectory: BallTrajectory): void {
   const pursuers = agents.filter(
     (a) => a.state === "PURSUING" && !a.hasYielded
   );
@@ -416,23 +417,44 @@ function resolveCallOffs(agents: FielderAgent[]): void {
       const targetDist = vec2Distance(a.targetPos, b.targetPos);
 
       if (targetDist < CALLOFF_TARGET_THRESHOLD) {
-        // 外野手同士(pos>=7): ターゲットに近い方が呼び込む（ゾーン尊重）
+        // 外野手同士(pos>=7): ゾーン持ちが優先、同条件ならターゲットに近い方が呼び込む
         if (a.pos >= 7 && b.pos >= 7) {
+          const ballAngle = getBallZoneAngle(trajectory);
+          const aInZone = isInPrimaryZone(a.pos, ballAngle);
+          const bInZone = isInPrimaryZone(b.pos, ballAngle);
           const aDist = vec2Distance(a.currentPos, a.targetPos);
           const bDist = vec2Distance(b.currentPos, b.targetPos);
-          if (aDist <= bDist) {
+          if (aInZone && !bInZone) {
+            (b as { hasYielded: boolean }).hasYielded = true;
+            (a as { hasCalled: boolean }).hasCalled = true;
+          } else if (!aInZone && bInZone) {
+            (a as { hasYielded: boolean }).hasYielded = true;
+            (b as { hasCalled: boolean }).hasCalled = true;
+          } else if (aDist <= bDist) {
             (b as { hasYielded: boolean }).hasYielded = true;
             (a as { hasCalled: boolean }).hasCalled = true;
           } else {
             (a as { hasYielded: boolean }).hasYielded = true;
             (b as { hasCalled: boolean }).hasCalled = true;
           }
-        } else if (CALLOFF_PRIORITY[a.pos] >= CALLOFF_PRIORITY[b.pos]) {
-          (b as { hasYielded: boolean }).hasYielded = true;
-          (a as { hasCalled: boolean }).hasCalled = true;
         } else {
-          (a as { hasYielded: boolean }).hasYielded = true;
-          (b as { hasCalled: boolean }).hasCalled = true;
+          // 内野手含む一般ケース: ゾーン持ちが優先、同条件ならCALLOFF_PRIORITYで決定
+          const ballAngleIF = getBallZoneAngle(trajectory);
+          const aInZoneIF = isInPrimaryZone(a.pos, ballAngleIF);
+          const bInZoneIF = isInPrimaryZone(b.pos, ballAngleIF);
+          if (aInZoneIF && !bInZoneIF) {
+            (b as { hasYielded: boolean }).hasYielded = true;
+            (a as { hasCalled: boolean }).hasCalled = true;
+          } else if (!aInZoneIF && bInZoneIF) {
+            (a as { hasYielded: boolean }).hasYielded = true;
+            (b as { hasCalled: boolean }).hasCalled = true;
+          } else if (CALLOFF_PRIORITY[a.pos] >= CALLOFF_PRIORITY[b.pos]) {
+            (b as { hasYielded: boolean }).hasYielded = true;
+            (a as { hasCalled: boolean }).hasCalled = true;
+          } else {
+            (a as { hasYielded: boolean }).hasYielded = true;
+            (b as { hasCalled: boolean }).hasCalled = true;
+          }
         }
       }
     }
@@ -485,6 +507,16 @@ function getEffectiveRange(agent: FielderAgent, tRemaining: number, forGroundBal
   return calcReachableDistance(agent, tRemaining) + getCatchReach(agent, forGroundBall, launchAngle);
 }
 
+function getBallZoneAngle(trajectory: BallTrajectory): number {
+  return clamp(trajectory.direction, 0, 90);
+}
+
+function isInPrimaryZone(pos: FielderPosition, ballAngle: number): boolean {
+  const zone = PRIMARY_ZONE[pos];
+  if (!zone) return false;
+  return ballAngle >= zone.min && ballAngle <= zone.max;
+}
+
 // ====================================================================
 // 行動決定
 // ====================================================================
@@ -512,13 +544,19 @@ function updateDecision(
   if (trajectory.isGroundBall) {
     // ゴロ: 統一ロジック — インターセプト点を物理計算で求める
     const intercept = calcPathIntercept(agent, trajectory, t);
+    const ballAngle = getBallZoneAngle(trajectory);
+    const iAmZoneOwner = isInPrimaryZone(agent.pos, ballAngle);
     if (intercept && intercept.canReach) {
       // より近い野手が既にインターセプトに向かっている場合はカバーに回る
+      // ただし自分がゾーン持ちで相手がゾーン外の場合は譲らない
       const closerPursuer = allAgents.find((other) => {
         if (other === agent || other.state !== "PURSUING") return false;
         if (!other.interceptPoint) return false;
         const otherDist = vec2Distance(other.currentPos, other.interceptPoint);
-        return otherDist < distToTarget * CLOSER_PURSUER_INTERCEPT_RATIO;
+        const isCloser = otherDist < distToTarget * CLOSER_PURSUER_INTERCEPT_RATIO;
+        if (!isCloser) return false;
+        if (iAmZoneOwner && !isInPrimaryZone(other.pos, ballAngle)) return false;
+        return true;
       });
       if (closerPursuer) {
         assignNonPursuitRole(agent, trajectory, bases, outs);
@@ -537,10 +575,14 @@ function updateDecision(
     const chaseTime = distToTarget / agent.maxSpeed + agent.reactionRemaining;
     if (t + chaseTime < chaseDeadline) {
       // より近い野手が既に追跡中ならカバーに回る
+      // ただし自分がゾーン持ちで相手がゾーン外の場合は譲らない
       const closerChaser = allAgents.find((other) => {
         if (other === agent || other.state !== "PURSUING") return false;
         const otherDist = vec2Distance(other.currentPos, perceived);
-        return otherDist < distToTarget * CLOSER_PURSUER_CHASE_RATIO;
+        const isCloser = otherDist < distToTarget * CLOSER_PURSUER_CHASE_RATIO;
+        if (!isCloser) return false;
+        if (iAmZoneOwner && !isInPrimaryZone(other.pos, ballAngle)) return false;
+        return true;
       });
       if (closerChaser) {
         assignNonPursuitRole(agent, trajectory, bases, outs);
@@ -591,10 +633,16 @@ function updateDecision(
   }
 
   // より近い野手が既に追跡中ならカバーに回る
+  // ただし自分がゾーン持ちで相手がゾーン外の場合は譲らない
+  const flyBallAngle = getBallZoneAngle(trajectory);
+  const iAmFlyZoneOwner = isInPrimaryZone(agent.pos, flyBallAngle);
   const closerFlyPursuer = allAgents.find((other) => {
     if (other === agent || other.state !== "PURSUING") return false;
     const otherDist = vec2Distance(other.currentPos, perceived);
-    return otherDist < distToTarget * CLOSER_PURSUER_CHASE_RATIO;
+    const isCloser = otherDist < distToTarget * CLOSER_PURSUER_CHASE_RATIO;
+    if (!isCloser) return false;
+    if (iAmFlyZoneOwner && !isInPrimaryZone(other.pos, flyBallAngle)) return false;
+    return true;
   });
   if (closerFlyPursuer) {
     assignNonPursuitRole(agent, trajectory, bases, outs);
@@ -739,7 +787,7 @@ function checkGroundBallIntercept(
   // 停止球到達チェック（ボール停止後は線分長が0になるため先にチェック）
   if (t >= trajectory.flightTime) {
     const chasersForStop = agents
-      .filter((a) => a.state === "PURSUING" && a.action === "field_ball")
+      .filter((a) => a.state === "PURSUING" && a.action === "field_ball" && !a.hasYielded)
       .sort((a, b) => {
         const da = vec2Distance(a.currentPos, currBallPos);
         const db = vec2Distance(b.currentPos, currBallPos);
@@ -769,7 +817,7 @@ function checkGroundBallIntercept(
   // 経路インターセプト中のエージェント: インターセプト点への近さでソート
   // （移動中の野手が目標に近いほど優先 = 先着者が処理）
   const candidates = agents
-    .filter((a) => a.state === "PURSUING" && a.interceptPoint != null)
+    .filter((a) => a.state === "PURSUING" && !a.hasYielded && a.interceptPoint != null)
     .sort((a, b) => {
       const da = vec2Distance(a.currentPos, a.interceptPoint!);
       const db = vec2Distance(b.currentPos, b.interceptPoint!);
@@ -778,7 +826,7 @@ function checkGroundBallIntercept(
 
   // 停止球チャーシング中
   const chasers = agents.filter(
-    (a) => a.state === "PURSUING" && a.action === "field_ball"
+    (a) => a.state === "PURSUING" && !a.hasYielded && a.action === "field_ball"
   );
 
   for (const agent of [...candidates, ...chasers]) {
@@ -872,7 +920,7 @@ function checkFlyCatchAtLanding(
   const landingPos = trajectory.landingPos;
 
   const candidates = agents
-    .filter((a) => a.state === "PURSUING")
+    .filter((a) => a.state === "PURSUING" && !a.hasYielded)
     .map((a) => ({ agent: a, dist: vec2Distance(a.currentPos, landingPos) }))
     .sort((a, b) => a.dist - b.dist);
 
