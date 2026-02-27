@@ -530,19 +530,16 @@ describe("ゴールデンテスト: ポップフライ", () => {
     expect(pos2Rate + pos5Rate + pos1Rate).toBeGreaterThan(0.8);
   });
 
-  test("P03: 一塁側ポップフライ → 捕手 or 1B or SSがアウト 【現状値記録】", () => {
-    // 現状: SS=100%, C=0%, 1B=0%, アウト率=100%
-    // 問題: 一塁側なのにSSが処理している（C/1Bが処理すべき）
+  test("P03: 一塁側ポップフライ → 1B or 捕手がアウト", () => {
+    // dir=70は1Bゾーン(65-90)内、2Bゾーン(48-68)外
     const stats = runCase(70, 65, 70, noRunners, 0);
     logStats("P03", stats);
     expect(stats.outRate).toBeGreaterThan(0.9);
     const pos2Rate = stats.fielderDistribution[2] ?? 0;
     const pos3Rate = stats.fielderDistribution[3] ?? 0;
-    const pos6Rate = stats.fielderDistribution[6] ?? 0;
-    const pos4Rate = stats.fielderDistribution[4] ?? 0;
-    console.log(`P03現状値: C=${(pos2Rate * 100).toFixed(1)}%, 1B=${(pos3Rate * 100).toFixed(1)}%, SS=${(pos6Rate * 100).toFixed(1)}%, 2B=${(pos4Rate * 100).toFixed(1)}% (C/1B期待: >=70%)`);
-    // 現状SSが処理しているが、本来は捕手/1B/2Bが処理すべき
-    console.log(`P03: 一塁側ポップフライの処理野手割り当て改善が必要 (C+1B現状${((pos2Rate + pos3Rate) * 100).toFixed(0)}% → 目標70%+)`);
+    console.log(`P03: C=${(pos2Rate * 100).toFixed(1)}%, 1B=${(pos3Rate * 100).toFixed(1)}%`);
+    // 一塁側ポップフライはC+1Bで70%以上処理
+    expect(pos2Rate + pos3Rate).toBeGreaterThanOrEqual(0.70);
   });
 
   test("P04: やや高いポップフライ → 内野フライアウト", () => {

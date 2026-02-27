@@ -242,8 +242,8 @@ export const PRIMARY_ZONE: Record<FielderPosition, { min: number; max: number } 
   2: null,  // C: ゾーンなし
   5: { min: 0,  max: 28 },  // 3B: 三塁線付近
   6: { min: 22, max: 52 },  // SS: 二遊間
-  4: { min: 48, max: 75 },  // 2B: 一二塁間
-  3: { min: 68, max: 90 },  // 1B: 一塁線付近
+  4: { min: 48, max: 68 },  // 2B: 一二塁間（68°以上は1B管轄）
+  3: { min: 65, max: 90 },  // 1B: 一塁線付近（65°から担当）
   7: { min: 0,  max: 38 },  // LF: 左翼
   8: { min: 30, max: 60 },  // CF: 中堅
   9: { min: 52, max: 90 },  // RF: 右翼
