@@ -1079,9 +1079,10 @@ function attemptStolenBases(
         newBases.first = null;
         bs.caughtStealing++;
         additionalOuts++;
-        // 盗塁死: 捕手にA、SSにPO
+        // 盗塁死: 捕手にA、2塁カバー(SS 60% / 2B 40%)にPO
         recordFielding(batterStatsMap, fielderMap, 2, "assist");
-        recordFielding(batterStatsMap, fielderMap, 6, "putOut");
+        const csCoverPos: FielderPosition = Math.random() < 0.60 ? 6 : 4;
+        recordFielding(batterStatsMap, fielderMap, csCoverPos, "putOut");
       }
     }
   }
@@ -1862,9 +1863,9 @@ function simulateHalfInning(
               // 2B自身が2塁ベースを踏む → 無補殺刺殺
               recordFielding(batterStatsMap, fielderMap, 4, "putOut");
             } else {
-              // 他の内野手 → 2塁送球 → 処理野手A + SS(85%) or 2B(15%)が刺殺
+              // 他の内野手 → 2塁送球 → 処理野手A + SS(55%) or 2B(45%)が刺殺
               recordFielding(batterStatsMap, fielderMap, fp, "assist");
-              const coverPos: FielderPosition = Math.random() < 0.85 ? 6 : 4;
+              const coverPos: FielderPosition = Math.random() < 0.55 ? 6 : 4;
               recordFielding(batterStatsMap, fielderMap, coverPos, "putOut");
             }
           } else if (!bases.first && (bases.second || bases.third) && Math.random() < 0.35) {
@@ -1874,14 +1875,14 @@ function simulateHalfInning(
               // 本塁送球 → 捕手PO
               recordFielding(batterStatsMap, fielderMap, 2, "putOut");
             } else {
-              // 2塁/3塁タッチプレー → SS(70%) or 3B(30%) PO
-              const tagPos: FielderPosition = Math.random() < 0.70 ? 6 : 5;
+              // 2塁/3塁タッチプレー → SS(50%) or 3B(50%) PO
+              const tagPos: FielderPosition = Math.random() < 0.50 ? 6 : 5;
               recordFielding(batterStatsMap, fielderMap, tagPos, "putOut");
             }
           } else if (fp !== 6 && fp !== 4 && Math.random() < 0.12) {
-            // SSタグプレー: SS(70%) or 2B(30%)が2塁ベースカバーでPO
+            // SSタグプレー: SS(55%) or 2B(45%)が2塁ベースカバーでPO
             recordFielding(batterStatsMap, fielderMap, fp, "assist");
-            const tagCoverPos: FielderPosition = Math.random() < 0.70 ? 6 : 4;
+            const tagCoverPos: FielderPosition = Math.random() < 0.55 ? 6 : 4;
             recordFielding(batterStatsMap, fielderMap, tagCoverPos, "putOut");
           } else {
             // 1塁送球
@@ -1959,8 +1960,8 @@ function simulateHalfInning(
             recordFielding(batterStatsMap, fielderMap, 4, "assist");
             recordFielding(batterStatsMap, fielderMap, 3, "putOut");
           } else {
-            // 5-6-3等: 処理野手(A)→SS or 2B: PO+A→1B: PO
-            const pivotPos: FielderPosition = Math.random() < 0.65 ? 6 : 4;
+            // 5-6-3等: 処理野手(A)→SS(55%) or 2B(45%): PO+A→1B: PO
+            const pivotPos: FielderPosition = Math.random() < 0.55 ? 6 : 4;
             recordFielding(batterStatsMap, fielderMap, pivotPos, "putOut");
             recordFielding(batterStatsMap, fielderMap, pivotPos, "assist");
             recordFielding(batterStatsMap, fielderMap, 3, "putOut");

@@ -83,7 +83,7 @@ export const CALLOFF_PRIORITY: Record<FielderPosition, number> = {
   6: 6,
   7: 7,
   9: 7,
-  8: 8, // CF最優先
+  8: 7, // CF（LF/RFと同優先度、距離で決定）
 };
 
 // --- 捕球 ---

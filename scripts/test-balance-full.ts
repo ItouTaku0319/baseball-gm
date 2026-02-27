@@ -509,39 +509,66 @@ function printFieldingDistribution(logs: AtBatLog[], totalGames: number, results
   console.log(`  ${mark(pOk)} P回収率 (1):      ${pPct.toFixed(1)}%  (< 3%)`);
   console.log("");
 
-  // ポジション別TC/G: PlayerGameStats の PO+A+E をポジション別に集計（NPB準拠）
-  const tcByPos: Record<number, number> = {};
+  // ポジション別守備指標: PlayerGameStats の PO/A/E をポジション別に集計（NPB準拠）
+  const poByPos: Record<number, number> = {};
+  const aByPos: Record<number, number> = {};
+  const eByPos: Record<number, number> = {};
   for (const result of results) {
     for (const ps of result.playerStats) {
       const pos = ps.fieldingPosition;
       if (!pos || pos < 1 || pos > 9) continue;
-      const tc = (ps.putOuts ?? 0) + (ps.assists ?? 0) + (ps.errors ?? 0);
-      tcByPos[pos] = (tcByPos[pos] ?? 0) + tc;
+      poByPos[pos] = (poByPos[pos] ?? 0) + (ps.putOuts ?? 0);
+      aByPos[pos] = (aByPos[pos] ?? 0) + (ps.assists ?? 0);
+      eByPos[pos] = (eByPos[pos] ?? 0) + (ps.errors ?? 0);
     }
   }
 
-  const tcgBenchmarks: Record<number, { name: string; min: number; max: number; npb: number }> = {
-    1: { name: "P",  min: 0.05, max: 3.5,  npb: 1.87 },
-    2: { name: "C",  min: 5.0,  max: 10.5, npb: 8.15 },
-    3: { name: "1B", min: 6.0,  max: 12.0, npb: 9.28 },
-    4: { name: "2B", min: 2.5,  max: 7.5,  npb: 5.17 },
-    5: { name: "3B", min: 1.0,  max: 4.5,  npb: 2.38 },
-    6: { name: "SS", min: 2.5,  max: 7.0,  npb: 4.45 },
-    7: { name: "LF", min: 0.8,  max: 4.0,  npb: 1.84 },
-    8: { name: "CF", min: 1.0,  max: 4.5,  npb: 2.41 },
-    9: { name: "RF", min: 0.8,  max: 4.0,  npb: 1.95 },
+  // NPB参考値（per team per game = 1人分）
+  const fieldingBenchmarks: Record<number, { name: string; npbPO: number; npbA: number; npbTC: number; min: number; max: number }> = {
+    1: { name: "P",  npbPO: 0.3,  npbA: 1.5,  npbTC: 1.87, min: 0.5, max: 3.5 },
+    2: { name: "C",  npbPO: 7.7,  npbA: 0.4,  npbTC: 8.15, min: 5.0, max: 10.5 },
+    3: { name: "1B", npbPO: 8.5,  npbA: 0.7,  npbTC: 9.28, min: 6.0, max: 12.0 },
+    4: { name: "2B", npbPO: 2.0,  npbA: 3.1,  npbTC: 5.17, min: 2.5, max: 7.5 },
+    5: { name: "3B", npbPO: 0.8,  npbA: 1.5,  npbTC: 2.38, min: 1.0, max: 4.5 },
+    6: { name: "SS", npbPO: 1.5,  npbA: 2.9,  npbTC: 4.45, min: 2.5, max: 7.0 },
+    7: { name: "LF", npbPO: 1.7,  npbA: 0.05, npbTC: 1.84, min: 0.8, max: 4.0 },
+    8: { name: "CF", npbPO: 2.3,  npbA: 0.05, npbTC: 2.41, min: 1.0, max: 4.5 },
+    9: { name: "RF", npbPO: 1.8,  npbA: 0.08, npbTC: 1.95, min: 0.8, max: 4.0 },
   };
 
-  console.log("📊 ポジション別TC/G (参考)");
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  // teamGames = 1チーム1試合換算（各試合に2チームいるのでtotalGames×2）
+  const teamGames = totalGames * 2;
+
+  console.log("📊 ポジション別守備指標 (per team per game)");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log("     PO/G    A/G    E/G   TC/G │ NPB  PO    A   TC   許容範囲");
+  console.log("  ─────────────────────────────┼────────────────────────────────");
   for (let p = 1; p <= 9; p++) {
-    const tc = tcByPos[p] ?? 0;
-    const tcg = totalGames > 0 ? tc / totalGames : 0;
-    const bench = tcgBenchmarks[p];
-    const inRange = tcg >= bench.min && tcg <= bench.max;
+    const bench = fieldingBenchmarks[p];
+    const po = (poByPos[p] ?? 0) / teamGames;
+    const a = (aByPos[p] ?? 0) / teamGames;
+    const e = (eByPos[p] ?? 0) / teamGames;
+    const tc = po + a + e;
+    const inRange = tc >= bench.min && tc <= bench.max;
     const indicator = inRange ? "  " : "⚠️";
-    console.log(`  ${indicator} ${bench.name.padEnd(3)} ${tcg.toFixed(2).padStart(5)} TC/G  (NPB: ${bench.npb}, 許容: ${bench.min}-${bench.max})`);
+    console.log(
+      `  ${indicator} ${bench.name.padEnd(3)}` +
+      ` ${po.toFixed(2).padStart(5)}  ${a.toFixed(2).padStart(5)}  ${e.toFixed(2).padStart(5)}  ${tc.toFixed(2).padStart(5)}` +
+      ` │ ${bench.npbPO.toFixed(1).padStart(4)} ${bench.npbA.toFixed(1).padStart(5)} ${bench.npbTC.toFixed(1).padStart(5)}` +
+      `  (${bench.min}-${bench.max})`
+    );
   }
+
+  // 合計PO検証: 全PO/試合 ≈ 27アウト×2チーム = 54
+  const totalPO = Object.values(poByPos).reduce((s, v) => s + v, 0);
+  const totalA = Object.values(aByPos).reduce((s, v) => s + v, 0);
+  const totalE = Object.values(eByPos).reduce((s, v) => s + v, 0);
+  console.log("  ─────────────────────────────┼────────────────────────────────");
+  console.log(
+    `  合計` +
+    ` ${(totalPO / teamGames).toFixed(2).padStart(5)}  ${(totalA / teamGames).toFixed(2).padStart(5)}  ${(totalE / teamGames).toFixed(2).padStart(5)}  ${((totalPO + totalA + totalE) / teamGames).toFixed(2).padStart(5)}` +
+    ` │ 期待PO/team≈27.0`
+  );
   console.log("");
 
   if (!allOk) {
