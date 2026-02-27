@@ -109,6 +109,15 @@ export const CLOSER_PURSUER_INTERCEPT_RATIO = 0.7; // インターセプト時�
 export const CLOSER_PURSUER_CHASE_RATIO = 0.6;     // チェーシング/フライ時（60%以内なら譲る）
 export const PITCHER_GROUND_BALL_MAX_DIST = 30;    // 投手がゴロを追跡する最大着弾距離(m)
 
+// 併殺(DP)成功率
+// DP試行時（2塁送球後ピボット→1塁送球）の成功率
+// NPB準拠: ゴロ併殺は「DP試行の60%」×「ピボット成功65-80%」×「タイミング判定」で30-50%
+export const DP_PIVOT_SUCCESS_BASE = 0.65;          // ピボット送球の基本成功率
+export const DP_PIVOT_SUCCESS_SPEED_FACTOR = 0.15;  // 遅い打者ほどDP成功率上昇(最大+15%)
+// SS/2Bが2塁ベース付近で処理→踏んで投げる場合の成功率
+export const DP_STEP_ON_BASE_SUCCESS = 0.80;        // ベース踏み→1塁送球の基本成功率
+export const DP_STEP_ON_BASE_SPEED_FACTOR = 0.10;   // 遅い打者ほど成功率上昇(最大+10%)
+
 export const BOUNCE_CLOSE_THRESHOLD = 3;     // 近距離(m)
 export const BOUNCE_NEAR_THRESHOLD = 8;      // 中距離(m)
 export const BOUNCE_MID_THRESHOLD = 15;      // 遠距離(m)

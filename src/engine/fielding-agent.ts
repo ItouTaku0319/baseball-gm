@@ -46,6 +46,10 @@ import {
   CLOSER_PURSUER_INTERCEPT_RATIO,
   CLOSER_PURSUER_CHASE_RATIO,
   PITCHER_GROUND_BALL_MAX_DIST,
+  DP_PIVOT_SUCCESS_BASE,
+  DP_PIVOT_SUCCESS_SPEED_FACTOR,
+  DP_STEP_ON_BASE_SUCCESS,
+  DP_STEP_ON_BASE_SPEED_FACTOR,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -1176,7 +1180,7 @@ function resolveGroundOut(
       const distToSecondBase = vec2Distance(catcher.currentPos, BASE_POSITIONS.second);
       if ((catcher.pos === 6 || catcher.pos === 4) && distToSecondBase < 5.0) {
         if (outs < 2) {
-          const dpRate = 0.12 + (1 - batter.batting.speed / 100) * 0.06;
+          const dpRate = DP_STEP_ON_BASE_SUCCESS + (1 - batter.batting.speed / 100) * DP_STEP_ON_BASE_SPEED_FACTOR;
           if (rng() < dpRate) {
             // ピボット送球（2塁を踏んだ後1塁へ）
             const pivotThrowDist = firstCover
@@ -1209,7 +1213,7 @@ function resolveGroundOut(
       if (rng() >= 0.40) {
         // DP判定
         if (outs < 2) {
-          const dpRate = 0.12 + (1 - batter.batting.speed / 100) * 0.06;
+          const dpRate = DP_PIVOT_SUCCESS_BASE + (1 - batter.batting.speed / 100) * DP_PIVOT_SUCCESS_SPEED_FACTOR;
           if (rng() < dpRate) {
             const pivotAgent = secondCover;
             const pivotThrowDist = pivotAgent && firstCover
