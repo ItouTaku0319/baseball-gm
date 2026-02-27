@@ -61,7 +61,9 @@ PMはこのファイルを参照して、ゲームバランスに影響する実
   ↓
 守備AI判定 (evaluateFielders: 9人の到達時間計算)
   ↓
-結果判定 (resolvePlayWithAI: 物理ベースの安打/アウト判定)
+エージェント守備 (resolvePlayWithAgents: 物理ベースの安打/アウト判定)
+  ↓
+守備記録 (recordFieldingFromPlay: ThrowPlayチェーンからPO/A導出)
 ```
 
 ### バント判定フロー
@@ -156,7 +158,7 @@ controlFactor  = pitcher.control / 100
 | 10° ≤ launchAngle < 20° | line_drive |
 | 20° ≤ launchAngle < 50° | fly_ball |
 
-#### 守備AI (fielding-ai.ts)
+#### 守備AI (fielding-ai.ts + fielding-agent.ts)
 
 **座標系**: フィールド上の2D座標 (メートル)
 - x: 左右 (正=1塁側, 負=3塁側)
@@ -189,6 +191,15 @@ controlFactor  = pitcher.control / 100
 - 反応時間にfielding値で補正 (100で最短0.3s、1で最長0.6s)
 - ゴロ捕球成功率にfielding値で補正（97-99.5%の範囲内）
 - フライ捕球成功率にfielding/catching値で補正（90-99%の範囲内）
+
+**守備記録 (ThrowPlayチェーン)**:
+- エージェントが捕球後、`findBaseCoverer()`でベースカバー野手を特定
+- 送球チェーン（ThrowPlay[]）を構築: `{ from: 送球者, to: 受球者, base: 送球先塁 }`
+- recordFieldingFromPlayがThrowPlayを読み、from→Assist、to→PutOutを記録
+- from===to（自己踏み）の場合はPOのみ（無補殺刺殺）
+- 例: 6-3ゴロ→SS(A)+1B(PO)、6-4-3DP→SS(A)+2B(A+PO)+1B(PO)
+- フライ/ライナー: 捕球者のPOのみ（ThrowPlayなし）
+- FC: 走者がいる場合5%で発生、先行走者への送球をThrowPlayで記録
 
 #### 本塁打判定 (飛距離ベース)
 ```
@@ -234,8 +245,9 @@ HR判定 (fly_ball / popup 共通, 2条件):
 **ゴロ**:
 1. 野手がボール経路に到達 → 捕球 (97-99.5%成功)
 2. 捕球後: 確保(0.3-0.6s) + 持ち替え(0.6-1.0s) + 送球 → 走者との競争
-3. 走者が先着 → 内野安打 / 送球が先着 → アウト (併殺/FC判定あり)
-4. 到達不可 → 外野手回収 → ヒット (進塁判定で単打/長打)
+3. findBaseCovererでベースカバー野手を特定 → ThrowPlayチェーン構築
+4. 走者が先着 → 内野安打 / 送球が先着 → アウト (併殺/FC判定あり)
+5. 到達不可 → 外野手回収 → ヒット (進塁判定で単打/長打)
 
 **フライ/ライナー**:
 1. 野手が着地前に到達 → 捕球試行 (85-99%成功, 余裕度依存)

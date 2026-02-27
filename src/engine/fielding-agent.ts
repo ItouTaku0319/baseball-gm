@@ -58,6 +58,7 @@ import type {
   AtBatResult,
   AgentTimelineEntry,
   AgentSnapshot,
+  ThrowPlay,
 } from "./fielding-agent-types";
 import {
   CALLOFF_PRIORITY,
@@ -415,7 +416,18 @@ function resolveCallOffs(agents: FielderAgent[]): void {
       const targetDist = vec2Distance(a.targetPos, b.targetPos);
 
       if (targetDist < CALLOFF_TARGET_THRESHOLD) {
-        if (CALLOFF_PRIORITY[a.pos] >= CALLOFF_PRIORITY[b.pos]) {
+        // 外野手同士(pos>=7): ターゲットに近い方が呼び込む（ゾーン尊重）
+        if (a.pos >= 7 && b.pos >= 7) {
+          const aDist = vec2Distance(a.currentPos, a.targetPos);
+          const bDist = vec2Distance(b.currentPos, b.targetPos);
+          if (aDist <= bDist) {
+            (b as { hasYielded: boolean }).hasYielded = true;
+            (a as { hasCalled: boolean }).hasCalled = true;
+          } else {
+            (a as { hasYielded: boolean }).hasYielded = true;
+            (b as { hasCalled: boolean }).hasCalled = true;
+          }
+        } else if (CALLOFF_PRIORITY[a.pos] >= CALLOFF_PRIORITY[b.pos]) {
           (b as { hasYielded: boolean }).hasYielded = true;
           (a as { hasCalled: boolean }).hasCalled = true;
         } else {
@@ -957,6 +969,22 @@ function checkFlyCatchAtLanding(
 // 結果解決
 // ====================================================================
 
+/** ベースカバーに向かっているエージェントを返す。home は捕手固定 */
+function findBaseCoverer(
+  agents: FielderAgent[],
+  base: keyof typeof BASE_POSITIONS,
+  excludePos: FielderPosition
+): FielderAgent | undefined {
+  if (base === "home") {
+    const c = agents.find(a => a.pos === 2);
+    return c && c.pos !== excludePos ? c : undefined;
+  }
+  const basePos = BASE_POSITIONS[base];
+  return agents
+    .filter(a => a.pos !== excludePos && a.state === "COVERING" && a.action === "cover_base")
+    .sort((a, b) => vec2Distance(a.currentPos, basePos) - vec2Distance(b.currentPos, basePos))[0];
+}
+
 function resolveSuccessfulCatch(
   catcher: FielderAgent,
   ball: BattedBall,
@@ -984,78 +1012,173 @@ function resolveGroundOut(
 ): AgentFieldingResult {
   // 外野手がゴロを回収 → 内野を抜けたヒット（シングル確定）
   if (catcher.pos >= 7) {
-    return {
-      result: "single",
-      fielderPos: catcher.pos,
-      putOutPos: undefined,
-      assistPos: undefined,
-    };
+    return { result: "single", fielderPos: catcher.pos };
   }
 
   const fieldTime = catcher.arrivalTime;
   const secureTime = 0.3 + (1 - catcher.skill.fielding / 100) * 0.2;
   const transferTime = TRANSFER_TIME_BASE + (1 - catcher.skill.arm / 100) * TRANSFER_TIME_ARM_SCALE;
   // NPB内野手の平均送球速度: arm=50で40m/s(144km/h)、arm=100で50m/s(180km/h)
-  // 変更前: base=25 + arm/100*15 (arm=50で32.5m/s=117km/h)
-  // 変更後: base=30 + arm/100*20 (arm=50で40m/s=144km/h)
   const throwSpeed = 30 + (catcher.skill.arm / 100) * 20;
 
-  const throwDist = vec2Distance(catcher.currentPos, BASE_POSITIONS.first);
-  const defenseTime =
-    fieldTime + secureTime + transferTime + throwDist / throwSpeed;
+  // ベースカバー野手を特定
+  const firstCover = findBaseCoverer(agents, "first", catcher.pos);
+  const secondCover = findBaseCoverer(agents, "second", catcher.pos);
+  const thirdCover = findBaseCoverer(agents, "third", catcher.pos);
+  const homeCover = findBaseCoverer(agents, "home", catcher.pos);
+
+  // フォールバック用ポジション（COVERINGエージェントが見つからない場合のデフォルト）
+  const firstCoverPos: FielderPosition = firstCover?.pos ?? 3;
+  const secondCoverPos: FielderPosition = secondCover?.pos ?? (catcher.pos === 6 ? 4 : 6);
+  const thirdCoverPos: FielderPosition = thirdCover?.pos ?? 5;
 
   const runnerSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
   const runnerTo1B = RUNNER_START_DELAY + BASE_LENGTH / runnerSpeed;
 
-  // 内野安打
-  if (runnerTo1B < defenseTime) {
+  // 1塁送球時間（基本）
+  const throwDistFirst = firstCover
+    ? vec2Distance(catcher.currentPos, firstCover.currentPos)
+    : vec2Distance(catcher.currentPos, BASE_POSITIONS.first);
+  const defenseTimeFirst = fieldTime + secureTime + transferTime + throwDistFirst / throwSpeed;
+
+  // 内野安打判定
+  if (runnerTo1B < defenseTimeFirst) {
+    return { result: "infieldHit", fielderPos: catcher.pos };
+  }
+
+  // === 走者1塁時 → 2塁フォースアウト判定 ===
+  if (bases.first) {
+    const throwDistSecond = secondCover
+      ? vec2Distance(catcher.currentPos, secondCover.currentPos)
+      : vec2Distance(catcher.currentPos, BASE_POSITIONS.second);
+    const defenseTimeSecond = fieldTime + secureTime + transferTime + throwDistSecond / throwSpeed;
+    const runnerFirstToSecond = BASE_LENGTH / (6.5 + ((bases.first.batting?.speed ?? 50) / 100) * 2.5);
+
+    if (defenseTimeSecond < runnerFirstToSecond + 0.3) {
+      // 2塁フォースアウト成功
+
+      // SS/2Bが2塁ベース付近で打球処理 → 自分でベースを踏む（5m以内）
+      const distToSecondBase = vec2Distance(catcher.currentPos, BASE_POSITIONS.second);
+      if ((catcher.pos === 6 || catcher.pos === 4) && distToSecondBase < 5.0) {
+        if (outs < 2) {
+          const dpRate = 0.12 + (1 - batter.batting.speed / 100) * 0.06;
+          if (rng() < dpRate) {
+            // ピボット送球（2塁を踏んだ後1塁へ）
+            const pivotThrowDist = firstCover
+              ? vec2Distance(BASE_POSITIONS.second, firstCover.currentPos)
+              : vec2Distance(BASE_POSITIONS.second, BASE_POSITIONS.first);
+            const pivotThrowSpeed = 28 + (catcher.skill.arm / 100) * 18;
+            const pivotTime = defenseTimeSecond + 0.4 + pivotThrowDist / pivotThrowSpeed;
+            if (pivotTime < runnerTo1B + 0.2) {
+              return {
+                result: "doublePlay",
+                fielderPos: catcher.pos,
+                throwPlays: [
+                  { from: catcher.pos, to: catcher.pos, base: "second" },
+                  { from: catcher.pos, to: firstCoverPos, base: "first" },
+                ],
+              };
+            }
+          }
+        }
+        // 2塁フォースのみ（無補殺刺殺）
+        return {
+          result: "groundout",
+          fielderPos: catcher.pos,
+          putOutPos: catcher.pos,
+          throwPlays: [],
+        };
+      }
+
+      // 他の内野手: 2塁フォース可能でも40%は確実な1塁送球を選択（NPB準拠比率）
+      if (rng() >= 0.40) {
+        // DP判定
+        if (outs < 2) {
+          const dpRate = 0.12 + (1 - batter.batting.speed / 100) * 0.06;
+          if (rng() < dpRate) {
+            const pivotAgent = secondCover;
+            const pivotThrowDist = pivotAgent && firstCover
+              ? vec2Distance(pivotAgent.currentPos, firstCover.currentPos)
+              : vec2Distance(BASE_POSITIONS.second, BASE_POSITIONS.first);
+            const pivotThrowSpeed = pivotAgent
+              ? 28 + (pivotAgent.skill.arm / 100) * 18
+              : 36;
+            const pivotTime = defenseTimeSecond + 0.4 + pivotThrowDist / pivotThrowSpeed;
+            if (pivotTime < runnerTo1B + 0.2) {
+              return {
+                result: "doublePlay",
+                fielderPos: catcher.pos,
+                throwPlays: [
+                  { from: catcher.pos, to: secondCoverPos, base: "second" },
+                  { from: secondCoverPos, to: firstCoverPos, base: "first" },
+                ],
+              };
+            }
+          }
+        }
+
+        // FC判定（走者1塁→2塁フォース: 走者アウト、打者1塁へ）
+        if (rng() < 0.05) {
+          return {
+            result: "fieldersChoice",
+            fielderPos: catcher.pos,
+            throwPlays: [{ from: catcher.pos, to: secondCoverPos, base: "second" }],
+          };
+        }
+
+        // 2塁フォースアウトのみ
+        return {
+          result: "groundout",
+          fielderPos: catcher.pos,
+          throwPlays: [{ from: catcher.pos, to: secondCoverPos, base: "second" }],
+        };
+      }
+      // 40% → 下のデフォルト1塁送球に進む
+    }
+  }
+
+  // === FC判定（走者あり、2塁フォース不成立/走者1塁なし） ===
+  if (bases.first || bases.second || bases.third) {
+    if (rng() < 0.05) {
+      const fcThrows: ThrowPlay[] = [];
+      if (bases.third && homeCover) {
+        fcThrows.push({ from: catcher.pos, to: homeCover.pos, base: "home" });
+      } else if (bases.second && thirdCover) {
+        fcThrows.push({ from: catcher.pos, to: thirdCoverPos, base: "third" });
+      } else if (bases.first && secondCover) {
+        fcThrows.push({ from: catcher.pos, to: secondCoverPos, base: "second" });
+      }
+      if (fcThrows.length > 0) {
+        return { result: "fieldersChoice", fielderPos: catcher.pos, throwPlays: fcThrows };
+      }
+    }
+  }
+
+  // === 1塁送球（デフォルト） ===
+  // 1B自己処理または1Bが打球処理→投手等がベースカバー
+  if (catcher.pos === 3) {
+    const pCover = findBaseCoverer(agents, "first", 3);
+    if (pCover) {
+      return {
+        result: "groundout",
+        fielderPos: catcher.pos,
+        throwPlays: [{ from: 3, to: pCover.pos, base: "first" }],
+      };
+    }
+    // 1B自己処理: 3U（無補殺刺殺）
     return {
-      result: "infieldHit",
+      result: "groundout",
       fielderPos: catcher.pos,
-      putOutPos: undefined,
-      assistPos: undefined,
+      putOutPos: 3 as FielderPosition,
+      throwPlays: [],
     };
   }
 
-  // DP判定
-  if (bases.first && outs < 2) {
-    const dpRate = 0.12 + (1 - batter.batting.speed / 100) * 0.06;
-    if (rng() < dpRate) {
-      const coverAgent = agents.find(
-        (a) =>
-          (a.pos === 4 || a.pos === 6) &&
-          a.state === "COVERING" &&
-          a.action === "cover_base"
-      );
-      const assistPositions: FielderPosition[] = coverAgent
-        ? [catcher.pos, coverAgent.pos]
-        : [catcher.pos];
-      return {
-        result: "doublePlay",
-        fielderPos: catcher.pos,
-        putOutPos: 3 as FielderPosition,
-        assistPos: assistPositions,
-      };
-    }
-  }
-
-  // FC判定
-  if (bases.first || bases.second || bases.third) {
-    if (rng() < 0.05) {
-      return {
-        result: "fieldersChoice",
-        fielderPos: catcher.pos,
-        putOutPos: catcher.pos,
-        assistPos: undefined,
-      };
-    }
-  }
-
+  // 他の内野手 → 1B送球
   return {
     result: "groundout",
     fielderPos: catcher.pos,
-    putOutPos: 3 as FielderPosition,
-    assistPos: [catcher.pos],
+    throwPlays: [{ from: catcher.pos, to: firstCoverPos, base: "first" }],
   };
 }
 
@@ -1065,7 +1188,7 @@ function resolveFlyOut(
   batter: Player,
   bases: BaseRunners,
   outs: number,
-  agents: FielderAgent[],
+  _agents: FielderAgent[],
   rng: () => number
 ): AgentFieldingResult {
   const throwSpeed = 25 + (catcher.skill.arm / 100) * 15;
@@ -1082,21 +1205,22 @@ function resolveFlyOut(
           result: "sacrificeFly",
           fielderPos: catcher.pos,
           putOutPos: catcher.pos,
-          assistPos: undefined,
         };
       }
     }
   }
 
-  // 2塁走者→3塁タッグアップ
-  // (resolveFlyOut内で処理)
+  // タグアップ阻止: 走者をアウトにするのではなくタグアップを断念させるだけ
+  // （得点阻止は走塁処理側で反映。守備スタッツへの影響なし）
+
+  // unused parameter lint 回避
+  void batter;
 
   if (ballType === "popup") {
     return {
       result: "popout",
       fielderPos: catcher.pos,
       putOutPos: catcher.pos,
-      assistPos: undefined,
     };
   }
 
@@ -1105,7 +1229,6 @@ function resolveFlyOut(
       result: "flyout",
       fielderPos: catcher.pos,
       putOutPos: catcher.pos,
-      assistPos: undefined,
     };
   }
 
@@ -1113,7 +1236,6 @@ function resolveFlyOut(
     result: "lineout",
     fielderPos: catcher.pos,
     putOutPos: catcher.pos,
-    assistPos: undefined,
   };
 }
 

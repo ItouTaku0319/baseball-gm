@@ -127,7 +127,32 @@ export interface AgentSimOptions {
   random?: () => number;
 }
 
+// --- 塁位置定数 ---
+export const BASE_POSITIONS = {
+  home: { x: 0, y: 0 } as Vec2,
+  first: { x: 19.4, y: 19.4 } as Vec2,
+  second: { x: 0, y: 38.8 } as Vec2,
+  third: { x: -19.4, y: 19.4 } as Vec2,
+} as const;
+
+export const BASE_LENGTH = 27.4; // 塁間距離(m)
+
+/** 塁番号→名前マッピング */
+export const BASE_NAMES: Record<number, keyof typeof BASE_POSITIONS> = {
+  1: "first",
+  2: "second",
+  3: "third",
+  4: "home",
+};
+
 // --- 結果（PO/A/E記録を含む） ---
+
+/** 送球1本分のPO/A記録情報 */
+export interface ThrowPlay {
+  from: FielderPosition;
+  to: FielderPosition;
+  base: keyof typeof BASE_POSITIONS;
+}
 
 /** AtBatResult の再定義（simulation.ts内部型をミラー） */
 export type AtBatResult =
@@ -161,27 +186,11 @@ export interface AgentFieldingResult {
   assistPos?: FielderPosition[];
   /** エラー者 */
   errorPos?: FielderPosition;
+  /** 送球チェーン（空配列=無補殺刺殺、undefined=従来パス） */
+  throwPlays?: ThrowPlay[];
   /** エージェントタイムライン (collectTimeline=true の場合のみ) */
   agentTimeline?: AgentTimelineEntry[];
 }
-
-// --- 塁位置定数 ---
-export const BASE_POSITIONS = {
-  home: { x: 0, y: 0 } as Vec2,
-  first: { x: 19.4, y: 19.4 } as Vec2,
-  second: { x: 0, y: 38.8 } as Vec2,
-  third: { x: -19.4, y: 19.4 } as Vec2,
-} as const;
-
-export const BASE_LENGTH = 27.4; // 塁間距離(m)
-
-/** 塁番号→名前マッピング */
-export const BASE_NAMES: Record<number, keyof typeof BASE_POSITIONS> = {
-  1: "first",
-  2: "second",
-  3: "third",
-  4: "home",
-};
 
 // --- ユーティリティ ---
 export function vec2Distance(a: Vec2, b: Vec2): number {
