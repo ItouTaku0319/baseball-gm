@@ -457,8 +457,8 @@ export function generateBattedBall(batter: Player, pitcher: Player, rng: () => n
   const timing = gaussianRandom(0, timingSigma, rng);
 
   let basePull: number;
-  if (batter.batSide === "R") basePull = 38;
-  else if (batter.batSide === "L") basePull = 52;
+  if (batter.batSide === "R") basePull = 40;
+  else if (batter.batSide === "L") basePull = 50;
   else basePull = 45;
 
   const direction = clamp(
