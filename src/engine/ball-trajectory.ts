@@ -95,10 +95,17 @@ function createGroundBallTrajectory(
     direction,
     ballType,
     groundSpeed: stopTime > 0 ? maxDist / stopTime : 0,
+    pathDirX,
+    pathDirY,
 
-    getPositionAt(t: number): Vec2 {
+    getPositionAt(t: number, out?: Vec2): Vec2 {
       const p = clamp(t / stopTime, 0, 1);
       const dist = maxDist * (2 * p - p * p);
+      if (out) {
+        out.x = dist * pathDirX;
+        out.y = dist * pathDirY;
+        return out;
+      }
       return { x: dist * pathDirX, y: dist * pathDirY };
     },
 
@@ -154,7 +161,7 @@ function createFlyTrajectory(
     direction,
     ballType,
 
-    getPositionAt(t: number): Vec2 {
+    getPositionAt(t: number, out?: Vec2): Vec2 {
       const tc = clamp(t, 0, rawFlight);
       const d = hRate * tc;
       let x = d * pathDirX;
@@ -164,6 +171,11 @@ function createFlyTrajectory(
         const roll = Math.min(5, (t - rawFlight) * 2);
         x += roll * pathDirX;
         y += roll * pathDirY;
+      }
+      if (out) {
+        out.x = x;
+        out.y = y;
+        return out;
       }
       return { x, y };
     },

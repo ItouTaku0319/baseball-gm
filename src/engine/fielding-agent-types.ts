@@ -24,7 +24,12 @@ export interface BallTrajectory {
   readonly direction: number;
   readonly ballType: BallType;
   readonly groundSpeed?: number; // ゴロの平均地上速度(m/s)
-  getPositionAt(t: number): Vec2;
+  /** ゴロ専用: 経路方向X（正規化済み）。キャッシュ済み定数 */
+  readonly pathDirX?: number;
+  /** ゴロ専用: 経路方向Y（正規化済み）。キャッシュ済み定数 */
+  readonly pathDirY?: number;
+  /** outバッファを渡すとGC圧力を削減できる。省略時は新オブジェクトを返す（後方互換） */
+  getPositionAt(t: number, out?: Vec2): Vec2;
   getHeightAt(t: number): number;
   /** ゴロの瞬時速度(m/s)。フライは0を返す */
   getSpeedAt(t: number): number;
@@ -32,6 +37,13 @@ export interface BallTrajectory {
 }
 
 // --- エージェント ---
+
+/** FielderAgentの知覚状態（毎ティック書き換えることでGC圧力を削減） */
+export interface PerceivedLanding {
+  position: Vec2;
+  confidence: number;
+}
+
 export type AgentState =
   | "READY"
   | "REACTING"
@@ -52,7 +64,7 @@ export interface FielderAgent {
   readonly maxSpeed: number;
   reactionRemaining: number;
   readonly baseReactionTime: number;
-  perceivedLanding: { position: Vec2; confidence: number };
+  perceivedLanding: PerceivedLanding;
   hasCalled: boolean;
   hasYielded: boolean;
   action: FielderAction;
@@ -197,6 +209,13 @@ export function vec2Distance(a: Vec2, b: Vec2): number {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
   return Math.sqrt(dx * dx + dy * dy);
+}
+
+/** 距離の二乗を返す（sqrtが不要な比較用途に使用しGC圧力を削減） */
+export function vec2DistanceSq(a: Vec2, b: Vec2): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
 }
 
 export function clamp(value: number, min: number, max: number): number {

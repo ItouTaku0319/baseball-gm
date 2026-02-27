@@ -725,15 +725,16 @@ function simulateAtBat(
     };
   }
 
+  // P1: 打席開始時に1回だけ計算（打席中のスタミナ変化は微小なため問題なし）
+  const effPit = pitcherState
+    ? getEffectivePitcherAbilities(pitcherState)
+    : (() => {
+        const pit = pitcher.pitching!;
+        const vel = pit.velocity <= 100 ? 120 + (pit.velocity / 100) * 45 : pit.velocity;
+        return { velocity: vel, control: pit.control, pitches: pit.pitches, stamina: pit.stamina, mentalToughness: pit.mentalToughness, arm: pit.arm, fielding: pit.fielding, catching: pit.catching };
+      })();
+
   while (true) {
-    // 疲労を考慮した投手能力を取得
-    const effPit = pitcherState
-      ? getEffectivePitcherAbilities(pitcherState)
-      : (() => {
-          const pit = pitcher.pitching!;
-          const vel = pit.velocity <= 100 ? 120 + (pit.velocity / 100) * 45 : pit.velocity;
-          return { velocity: vel, control: pit.control, pitches: pit.pitches, stamina: pit.stamina, mentalToughness: pit.mentalToughness, arm: pit.arm, fielding: pit.fielding, catching: pit.catching };
-        })();
 
     // 死球チェック（ゾーン外投球の低確率）
     if (Math.random() < 0.003) {
