@@ -56,6 +56,7 @@ import {
   GROUND_BALL_GAP_BASE_PROB,
   GROUND_BALL_GAP_SPEED_BONUS,
   GROUND_BALL_GAP_MIN_EV,
+  SF_CATCH_TO_THROW_OVERHEAD,
   DP_PIVOT_SUCCESS_BASE,
   DP_PIVOT_SUCCESS_SPEED_FACTOR,
   DP_STEP_ON_BASE_SUCCESS,
@@ -1388,7 +1389,7 @@ function resolveFlyOut(
     const throwTime = throwDist / throwSpeed;
     const runnerSpeed = 6.5 + (bases.third.batting.speed / 100) * 2.5;
     const tagUpTime = BASE_LENGTH / runnerSpeed;
-    if (tagUpTime < throwTime + 0.3) {
+    if (tagUpTime < throwTime + SF_CATCH_TO_THROW_OVERHEAD) {
       if (rng() < 0.6) {
         return {
           result: "sacrificeFly",

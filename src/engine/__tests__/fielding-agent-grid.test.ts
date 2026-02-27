@@ -413,9 +413,8 @@ for (const pos of [1, 2, 3, 4, 5, 6, 7, 8, 9] as FielderPosition[]) {
 // 犠飛テスト用フライパターン（低arm野手でSF条件成立するフライ）
 // D50走者 tagUpTime = 27.4/(6.5+0.5*2.5) = 3.54s
 // arm=15: throwSpeed = 25+0.15*15 = 27.25 m/s
-// 必要な throwDist = 27.25 * (3.54 - 0.3) = 88.3m 以上
-// exitVelocity=160, launchAngle=28: distance≈90.3m → throwTime=3.31s+0.3=3.61s > tagUpTime=3.54s → SF発生
-// exitVelocity=160, launchAngle=25: dirにより若干距離変化するが同条件
+// SF_CATCH_TO_THROW_OVERHEAD = 1.2s（外野手捕球→送球体勢+捕手タッグ）
+// exitVelocity=160, launchAngle=28: distance≈90m → throwTime=3.30+1.2=4.50s > tagUpTime=3.54s → SF発生
 const SF_FLY_PATTERNS = [
   { name: "犠飛距離フライCF", direction: 45, exitVelocity: 160, launchAngle: 28 },
   { name: "犠飛距離フライLF", direction: 20, exitVelocity: 160, launchAngle: 28 },

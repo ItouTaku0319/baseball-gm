@@ -129,6 +129,10 @@ export const GROUND_BALL_GAP_BASE_PROB = 0.50;       // ギャップ中心での
 export const GROUND_BALL_GAP_SPEED_BONUS = 0.10;     // 高速ゴロ(130km/h+)追加抜け確率
 export const GROUND_BALL_GAP_MIN_EV = 90;            // この打球速度(km/h)未満はギャップ抜けなし
 
+// 犠飛(SF)タイミング判定
+// 外野手の捕球→送球体勢(0.8-1.0s) + 捕手のタッグ(0.3s) のオーバーヘッド
+export const SF_CATCH_TO_THROW_OVERHEAD = 1.5;     // 外野手捕球→送球→捕手タッグのオーバーヘッド(s)
+
 export const DP_PIVOT_SUCCESS_BASE = 0.65;          // ピボット送球の基本成功率
 export const DP_PIVOT_SUCCESS_SPEED_FACTOR = 0.15;  // 遅い打者ほどDP成功率上昇(最大+15%)
 // SS/2Bが2塁ベース付近で処理→踏んで投げる場合の成功率
