@@ -112,6 +112,23 @@ export const PITCHER_GROUND_BALL_MAX_DIST = 30;    // 投手がゴロを追跡�
 // 併殺(DP)成功率
 // DP試行時（2塁送球後ピボット→1塁送球）の成功率
 // NPB準拠: ゴロ併殺は「DP試行の60%」×「ピボット成功65-80%」×「タイミング判定」で30-50%
+// 内野安打確率（マージンベース）
+// NPB準拠: ゴロヒット率23-25%のうち、約3-5%が内野安打
+// 防御時間マージンが小さいほど内野安打の確率が上がる
+export const INFIELD_HIT_PROB = 0.20;               // マージン0時の内野安打基本確率
+export const INFIELD_HIT_MARGIN_SCALE = 0.65;       // この秒数マージンで確率0に漸減
+export const INFIELD_HIT_SPEED_BONUS = 0.10;        // speed=100で+10%のボーナス（marginFactorでスケール）
+// ゴロ捕球失敗 → ヒット判定の閾値（強い打球は捕れなくてもヒット扱い）
+export const GROUND_BALL_HARD_HIT_SPEED = 20;       // この速度(m/s)以上の捕球失敗はヒット扱い
+// ゴロ捕球率の調整
+export const GROUND_BALL_CATCH_SPEED_PENALTY = 0.007; // ボール速度(>20m/s)による捕球率低下係数
+export const GROUND_BALL_CATCH_FLOOR = 0.85;          // 捕球率の下限
+export const GROUND_BALL_REACH_PENALTY = 0.08;        // リーチ端での捕球率低下（最大8%）
+// ゴロ「ギャップ抜け」確率（内野手の間を抜ける打球）
+export const GROUND_BALL_GAP_BASE_PROB = 0.50;       // ギャップ中心での基本抜け確率
+export const GROUND_BALL_GAP_SPEED_BONUS = 0.10;     // 高速ゴロ(130km/h+)追加抜け確率
+export const GROUND_BALL_GAP_MIN_EV = 90;            // この打球速度(km/h)未満はギャップ抜けなし
+
 export const DP_PIVOT_SUCCESS_BASE = 0.65;          // ピボット送球の基本成功率
 export const DP_PIVOT_SUCCESS_SPEED_FACTOR = 0.15;  // 遅い打者ほどDP成功率上昇(最大+15%)
 // SS/2Bが2塁ベース付近で処理→踏んで投げる場合の成功率

@@ -46,6 +46,16 @@ import {
   CLOSER_PURSUER_INTERCEPT_RATIO,
   CLOSER_PURSUER_CHASE_RATIO,
   PITCHER_GROUND_BALL_MAX_DIST,
+  INFIELD_HIT_PROB,
+  INFIELD_HIT_MARGIN_SCALE,
+  INFIELD_HIT_SPEED_BONUS,
+  GROUND_BALL_HARD_HIT_SPEED,
+  GROUND_BALL_CATCH_SPEED_PENALTY,
+  GROUND_BALL_CATCH_FLOOR,
+  GROUND_BALL_REACH_PENALTY,
+  GROUND_BALL_GAP_BASE_PROB,
+  GROUND_BALL_GAP_SPEED_BONUS,
+  GROUND_BALL_GAP_MIN_EV,
   DP_PIVOT_SUCCESS_BASE,
   DP_PIVOT_SUCCESS_SPEED_FACTOR,
   DP_STEP_ON_BASE_SUCCESS,
@@ -96,6 +106,44 @@ interface BaseRunners {
 }
 
 // ====================================================================
+// ギャップ抜け判定
+// ====================================================================
+
+/**
+ * 内野手のデフォルト守備位置から計算した方向角度。
+ * 打球がこれらの角度に近いほど野手の正面 → 抜けにくい。
+ * 角度が遠いほどギャップ → 抜けやすい。
+ */
+const FIELDER_DIRECTION_ANGLES = [0, 10, 27, 59, 76, 90]; // ファウルライン + 3B, SS, 2B, 1B
+
+/**
+ * ゴロのギャップ抜け確率を計算。
+ * 打球方向が野手の正面から離れるほど（ギャップに近いほど）確率が上がる。
+ */
+function calcGroundBallGapProb(direction: number, exitVelocity: number): number {
+  if (exitVelocity < GROUND_BALL_GAP_MIN_EV) return 0;
+
+  // 最も近い野手位置からの距離を計算
+  let minDistFromFielder = 90;
+  for (const angle of FIELDER_DIRECTION_ANGLES) {
+    const dist = Math.abs(direction - angle);
+    if (dist < minDistFromFielder) minDistFromFielder = dist;
+  }
+
+  // 野手近く（<8°）→ 抜けない
+  if (minDistFromFielder < 8) return 0;
+
+  // 野手から離れるほど抜けやすい（8°から線形に増加、最大16°で飽和）
+  const gapFactor = clamp((minDistFromFielder - 8) / 8, 0, 1);
+
+  // 打球速度ボーナス（130km/h以上で加算）
+  const speedFactor = clamp((exitVelocity - 130) / 40, 0, 1);
+  const speedBonus = speedFactor * GROUND_BALL_GAP_SPEED_BONUS;
+
+  return GROUND_BALL_GAP_BASE_PROB * gapFactor + speedBonus;
+}
+
+// ====================================================================
 // エントリポイント
 // ====================================================================
 
@@ -111,6 +159,14 @@ export function resolvePlayWithAgents(
   const rng = options?.random ?? Math.random;
   const noiseScale = options?.perceptionNoise ?? 1.0;
   const collectTimeline = options?.collectTimeline ?? false;
+
+  // === Phase -1: ゴロのギャップ抜けチェック ===
+  if (ball.launchAngle < 10 && ball.exitVelocity >= GROUND_BALL_GAP_MIN_EV) {
+    const gapProb = calcGroundBallGapProb(ball.direction, ball.exitVelocity);
+    if (gapProb > 0 && rng() < gapProb) {
+      return { result: "single", fielderPos: 6 }; // ギャップ抜けシングル
+    }
+  }
 
   // === Phase 0: 初期化 ===
   const trajectory = createBallTrajectory(
@@ -920,10 +976,13 @@ function checkGroundBallIntercept(
       const fieldingRate =
         (agent.skill.fielding * 0.6 + agent.skill.catching * 0.4) / 100;
       const ballSpeed = trajectory.getSpeedAt(t);
-      const speedPenalty = Math.max(0, (ballSpeed - 20) * 0.005);
+      const speedPenalty = Math.max(0, (ballSpeed - 20) * GROUND_BALL_CATCH_SPEED_PENALTY);
+      // リーチ端での捕球難易度上昇（距離比が1に近いほど難しい）
+      const reachRatio = distSq / (interceptReach * interceptReach);
+      const reachPenalty = reachRatio * GROUND_BALL_REACH_PENALTY;
       const catchRate = clamp(
-        0.97 + fieldingRate * 0.02 - speedPenalty,
-        0.92,
+        0.97 + fieldingRate * 0.04 - speedPenalty - reachPenalty,
+        GROUND_BALL_CATCH_FLOOR,
         0.995
       );
       const success = rng() < catchRate;
@@ -1160,9 +1219,20 @@ function resolveGroundOut(
     : vec2Distance(catcher.currentPos, BASE_POSITIONS.first);
   const defenseTimeFirst = fieldTime + secureTime + transferTime + throwDistFirst / throwSpeed;
 
-  // 内野安打判定
-  if (runnerTo1B < defenseTimeFirst) {
+  // 内野安打判定（マージンベース）
+  // ihMargin: 正=防御が速い(アウト側), 負=ランナーが速い(安打側)
+  const ihMargin = runnerTo1B - defenseTimeFirst;
+  if (ihMargin < 0) {
+    // ランナーが送球より速い → 確定内野安打
     return { result: "infieldHit", fielderPos: catcher.pos };
+  }
+  // マージンが小さい場合、確率的に内野安打（悪送球・バウンド送球・ベース踏み外し等）
+  if (ihMargin < INFIELD_HIT_MARGIN_SCALE) {
+    const marginFactor = 1 - ihMargin / INFIELD_HIT_MARGIN_SCALE;
+    const hitProb = (INFIELD_HIT_PROB + (batter.batting.speed / 100) * INFIELD_HIT_SPEED_BONUS) * marginFactor;
+    if (rng() < hitProb) {
+      return { result: "infieldHit", fielderPos: catcher.pos };
+    }
   }
 
   // === 走者1塁時 → 2塁フォースアウト判定 ===
@@ -1371,6 +1441,14 @@ function resolveFieldingError(
   simEndTime: number
 ): AgentFieldingResult {
   if (trajectory.isGroundBall) {
+    // 強い打球の捕球失敗はヒット扱い（エラーではない）
+    const ballSpeedAtCatch = trajectory.getSpeedAt(catcher.arrivalTime);
+    if (ballSpeedAtCatch >= GROUND_BALL_HARD_HIT_SPEED) {
+      return {
+        result: "single",
+        fielderPos: catcher.pos,
+      };
+    }
     return {
       result: "error",
       fielderPos: catcher.pos,
