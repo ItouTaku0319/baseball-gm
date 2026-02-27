@@ -37,6 +37,7 @@ import {
   RUNNER_START_DELAY,
   CATCH_REACH_BASE_IF,
   CATCH_REACH_GROUND_BONUS,
+  CATCH_REACH_BASE_P_GROUND,
   CATCH_REACH_BASE_OF,
   CATCH_REACH_BASE_C,
   CATCH_REACH_SKILL_FACTOR,
@@ -44,6 +45,7 @@ import {
   CALLOFF_TARGET_THRESHOLD,
   CLOSER_PURSUER_INTERCEPT_RATIO,
   CLOSER_PURSUER_CHASE_RATIO,
+  PITCHER_GROUND_BALL_MAX_DIST,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -327,7 +329,7 @@ function createAgents(
     else if (pos === 2) baseReaction = AGENT_CATCHER_REACTION;
     else if (pos >= 7) baseReaction = AGENT_BASE_REACTION_OF;
     else baseReaction = AGENT_BASE_REACTION_IF;
-    if (trajectory.isGroundBall && pos >= 3 && pos <= 6) {
+    if (trajectory.isGroundBall && (pos === 1 || (pos >= 3 && pos <= 6))) {
       baseReaction *= 0.60;
     }
     // ライナーは弾道が低く速いため初動判断が遅れる
@@ -428,6 +430,11 @@ function resolveCallOffs(agents: FielderAgent[], trajectory: BallTrajectory): vo
   }
   if (pursuers.length < 2) return;
 
+  // 投手がゴロインターセプトモード（interceptPointあり）の場合、
+  // コールオフの対象から除外（弱ゴロ追跡時は他の内野手と競合させる）
+  const pitcherIntercepting = trajectory.isGroundBall &&
+    pursuers.some(a => a.pos === 1 && a.interceptPoint != null);
+
   for (let i = 0; i < pursuers.length - 1; i++) {
     for (let j = i + 1; j < pursuers.length; j++) {
       const a = pursuers[i];
@@ -436,6 +443,10 @@ function resolveCallOffs(agents: FielderAgent[], trajectory: BallTrajectory): vo
       const targetDistSq = vec2DistanceSq(a.targetPos, b.targetPos);
 
       if (targetDistSq < CALLOFF_TARGET_THRESHOLD * CALLOFF_TARGET_THRESHOLD) {
+        // 投手がゴロインターセプト中なら、投手を含むペアのコールオフをスキップ
+        // （投手と内野手が同じゴロを追う場合、先にインターセプトした方が処理する）
+        if (pitcherIntercepting && (a.pos === 1 || b.pos === 1)) continue;
+
         // 外野手同士(pos>=7): ゾーン持ちが優先、同条件ならターゲットに近い方が呼び込む
         if (a.pos >= 7 && b.pos >= 7) {
           const ballAngle = getBallZoneAngle(trajectory);
@@ -503,7 +514,10 @@ function calcReachableDistance(agent: FielderAgent, tRemaining: number): number 
 
 function getCatchReach(agent: FielderAgent, forGroundBall = false, launchAngle?: number): number {
   let base: number;
-  if (agent.pos === 2) {
+  if (agent.pos === 1 && forGroundBall) {
+    // 投手: マウンド上でゴロを捕球（横方向に伸ばせる範囲が広い）
+    base = CATCH_REACH_BASE_P_GROUND;
+  } else if (agent.pos === 2) {
     // 捕手: ゴロはIF同等
     // ポップフライ(launchAngle>=50°)のみ専門訓練で広いリーチ
     // ライナー・通常フライは前方に飛ぶため捕れない → IF並み
@@ -564,6 +578,20 @@ function updateDecision(
   const timeRemaining = Math.max(0, trajectory.flightTime - t);
 
   if (trajectory.isGroundBall) {
+    // 投手専用ゴロ処理: 弱いゴロ(着弾距離<=30m)のみインターセプトを試行
+    // 投手はゾーンなし(PRIMARY_ZONE=null)だが、弱ゴロでは自発的に追跡
+    if (agent.pos === 1 && trajectory.landingDistance <= PITCHER_GROUND_BALL_MAX_DIST) {
+      const intercept = calcPathIntercept(agent, trajectory, t);
+      if (intercept && intercept.canReach) {
+        agent.state = "PURSUING";
+        agent.action = "charge";
+        agent.targetPos = intercept.point;
+        agent.interceptPoint = intercept.point;
+        agent.interceptBallTime = intercept.ballTime;
+        return;
+      }
+    }
+
     // ゴロ: 統一ロジック — インターセプト点を物理計算で求める
     const intercept = calcPathIntercept(agent, trajectory, t);
     const ballAngle = getBallZoneAngle(trajectory);

@@ -313,54 +313,42 @@ describe("ゴールデンテスト: ゴロ", () => {
 
 // ====================================================================
 // フライテスト (F01-F10)
-// 現状値 (2026-02-27計測):
-//   F01: LF=78%, 3B=22%, アウト率=49%   ← 【修正ポイント】定位置フライで50%未満アウト
-//   F02: CF=68%, SS=32%, アウト率=36%   ← 【修正ポイント】CF定位置フライで36%アウト
-//   F03: RF=75%, 2B=25%, アウト率=46%   ← 【修正ポイント】RF定位置フライで46%アウト
-//   F04: LF=100%, アウト率=92%
-//   F05: CF=100%, アウト率=93%
-//   F06: RF=100%, アウト率=93%
-//   F07: LF=76%, CF=24%, アウト率=32%   ← 【修正ポイント】LF-CF間フライで32%アウト
-//   F08: RF=72%, CF=28%, アウト率=47%
-//   F09: SS=100%, CF=0%, アウト率=54%   ← 【修正ポイント】CFフライをSSが処理している
-//   F10: LF=100%, アウト率=90%
+// パラメータ設計: 物理モデル(DRAG_FACTOR=0.63, FLIGHT_TIME_FACTOR=0.85)に基づき
+// 各外野手の定位置に実際に到達する打球速度を算出
+// LF(-28,75): dir=25,angle=30,velo=147 → (-27.4,75.2) 0.7m
+// CF(0,84):  dir=45,angle=30,velo=151 → (0,84.4) 0.4m
+// RF(28,75): dir=65,angle=30,velo=147 → (27.4,75.2) 0.7m
 // ====================================================================
 
 describe("ゴールデンテスト: フライ", () => {
-  // 定位置フライ(F01-F03): 現状アウト率が低い問題
-  // 原因の仮説: 外野手の飛行時間内到達判定が厳しすぎる or フライのリーチ計算に問題
-  // 期待: 定位置フライは95%以上アウト → 現状は36-49%で大幅不足
+  // 定位置フライ(F01-F03): 外野手の真正面に飛ぶフライ
+  // 期待: 95%以上アウト（ルーティンフライ）
 
-  test("F01: LF定位置フライ → 7番(LF)がアウト 【現状値記録】", () => {
-    // 現状: LF=78%, 3B=22%, アウト率=49%
-    const stats = runCase(15, 30, 110, noRunners, 0);
+  test("F01: LF定位置フライ → 7番(LF)がアウト", () => {
+    // dir=25,angle=30,velo=147 → 着弾(-27.4,75.2) LFから0.7m
+    const stats = runCase(25, 30, 147, noRunners, 0);
     logStats("F01", stats);
     const pos7Rate = stats.fielderDistribution[7] ?? 0;
-    console.log(`F01現状値: LF処理率=${(pos7Rate * 100).toFixed(1)}%, アウト率=${(stats.outRate * 100).toFixed(1)}% (期待: LF>=95%, アウト>=95%)`);
-    // 現状: LFが主処理野手であることは確認
-    expect(pos7Rate).toBeGreaterThan(0.6); // 最低60%はLFが処理
-    // アウト率の現状記録（目標95%だが現状49%）
-    console.log(`F01: アウト率改善が必要 (現状${(stats.outRate * 100).toFixed(0)}% → 目標95%+)`);
+    expect(pos7Rate).toBeGreaterThan(0.9);
+    expect(stats.outRate).toBeGreaterThan(0.9);
   });
 
-  test("F02: CF定位置フライ → 8番(CF)がアウト 【現状値記録】", () => {
-    // 現状: CF=68%, SS=32%, アウト率=36%
-    const stats = runCase(45, 30, 110, noRunners, 0);
+  test("F02: CF定位置フライ → 8番(CF)がアウト", () => {
+    // dir=45,angle=30,velo=151 → 着弾(0,84.4) CFから0.4m
+    const stats = runCase(45, 30, 151, noRunners, 0);
     logStats("F02", stats);
     const pos8Rate = stats.fielderDistribution[8] ?? 0;
-    console.log(`F02現状値: CF処理率=${(pos8Rate * 100).toFixed(1)}%, アウト率=${(stats.outRate * 100).toFixed(1)}% (期待: CF>=95%, アウト>=95%)`);
-    expect(pos8Rate).toBeGreaterThan(0.5);
-    console.log(`F02: アウト率改善が必要 (現状${(stats.outRate * 100).toFixed(0)}% → 目標95%+)`);
+    expect(pos8Rate).toBeGreaterThan(0.9);
+    expect(stats.outRate).toBeGreaterThan(0.9);
   });
 
-  test("F03: RF定位置フライ → 9番(RF)がアウト 【現状値記録】", () => {
-    // 現状: RF=75%, 2B=25%, アウト率=46%
-    const stats = runCase(75, 30, 110, noRunners, 0);
+  test("F03: RF定位置フライ → 9番(RF)がアウト", () => {
+    // dir=65,angle=30,velo=147 → 着弾(27.4,75.2) RFから0.7m
+    const stats = runCase(65, 30, 147, noRunners, 0);
     logStats("F03", stats);
     const pos9Rate = stats.fielderDistribution[9] ?? 0;
-    console.log(`F03現状値: RF処理率=${(pos9Rate * 100).toFixed(1)}%, アウト率=${(stats.outRate * 100).toFixed(1)}% (期待: RF>=95%, アウト>=95%)`);
-    expect(pos9Rate).toBeGreaterThan(0.6);
-    console.log(`F03: アウト率改善が必要 (現状${(stats.outRate * 100).toFixed(0)}% → 目標95%+)`);
+    expect(pos9Rate).toBeGreaterThan(0.9);
+    expect(stats.outRate).toBeGreaterThan(0.9);
   });
 
   test("F04: LF深いフライ → 7番(LF)がアウト", () => {
@@ -390,39 +378,36 @@ describe("ゴールデンテスト: フライ", () => {
     expect(stats.outRate).toBeGreaterThan(0.85);
   });
 
-  test("F07: LF-CF間フライ → LF or CFがアウト 【現状値記録】", () => {
-    // 現状: LF=76%, CF=24%, アウト率=32%
-    const stats = runCase(30, 30, 115, noRunners, 0);
+  test("F07: LF-CF間フライ → LF or CFがアウト", () => {
+    // dir=35,angle=30,velo=140 → 着弾(-12.6,71.6) LFから15.8m, CFから17.7m
+    const stats = runCase(35, 30, 140, noRunners, 0);
     logStats("F07", stats);
     const pos7Rate = stats.fielderDistribution[7] ?? 0;
     const pos8Rate = stats.fielderDistribution[8] ?? 0;
-    console.log(`F07現状値: LF=${(pos7Rate * 100).toFixed(1)}%, CF=${(pos8Rate * 100).toFixed(1)}%, アウト率=${(stats.outRate * 100).toFixed(1)}% (期待: LF+CF>=90%, アウト>=90%)`);
-    // LFまたはCFが主処理野手であることは確認
     expect(pos7Rate + pos8Rate).toBeGreaterThan(0.85);
-    console.log(`F07: アウト率改善が必要 (現状${(stats.outRate * 100).toFixed(0)}% → 目標90%+)`);
+    expect(stats.outRate).toBeGreaterThan(0.8);
   });
 
   test("F08: CF-RF間フライ → CF or RFがアウト", () => {
-    // 現状: RF=72%, CF=28%, アウト率=47%
-    const stats = runCase(60, 30, 115, noRunners, 0);
+    // dir=55,angle=30,velo=140 → 着弾(12.6,71.6) RFから15.8m, CFから17.7m
+    const stats = runCase(55, 30, 140, noRunners, 0);
     logStats("F08", stats);
     const pos8Rate = stats.fielderDistribution[8] ?? 0;
     const pos9Rate = stats.fielderDistribution[9] ?? 0;
     expect(pos8Rate + pos9Rate).toBeGreaterThan(0.85);
-    // アウト率の現状記録
-    console.log(`F08現状値: アウト率=${(stats.outRate * 100).toFixed(1)}% (期待: >=90%)`);
+    expect(stats.outRate).toBeGreaterThan(0.8);
   });
 
-  test("F09: 浅めのCFフライ → 内野手かCFがアウト 【現状値記録】", () => {
-    // 現状: SS=100%, CF=0%, アウト率=54%
-    // 浅いフライ(angle=25, velo=100)でSSが着地点付近にいるため処理している
+  test("F09: 浅いセンターフライ → SS/2Bが処理（着弾33.6m=内野守備範囲）", () => {
+    // dir=45,angle=25,velo=100 → 着弾(0, 33.6) SSから12m — 内野守備範囲の浅いフライ
     const stats = runCase(45, 25, 100, noRunners, 0);
     logStats("F09", stats);
     const pos8Rate = stats.fielderDistribution[8] ?? 0;
     const pos6Rate = stats.fielderDistribution[6] ?? 0;
     const pos4Rate = stats.fielderDistribution[4] ?? 0;
-    console.log(`F09現状値: CF=${(pos8Rate * 100).toFixed(1)}%, SS=${(pos6Rate * 100).toFixed(1)}%, 2B=${(pos4Rate * 100).toFixed(1)}% アウト率=${(stats.outRate * 100).toFixed(1)}%`);
-    // 浅いフライなので内野手(SS含む)かCFが処理するのは許容
+    console.log(`F09: CF=${(pos8Rate * 100).toFixed(1)}%, SS=${(pos6Rate * 100).toFixed(1)}%, 2B=${(pos4Rate * 100).toFixed(1)}%`);
+    // SSが処理するのが物理的に正しい
+    expect(pos6Rate + pos4Rate + pos8Rate).toBeGreaterThan(0.9);
     expect(stats.outRate).toBeGreaterThan(0.4);
   });
 
@@ -485,18 +470,17 @@ describe("ゴールデンテスト: ライナー", () => {
     expect(stats.outRate).toBeGreaterThan(0.3);
   });
 
-  test("L04: CF正面中速ライナー → CFがアウト 【現状値記録】", () => {
-    // 現状: SS=100%, CF=0%, アウト率=37%
-    // 問題: CFフライのF09と同様、着地点がSS付近なのでSSが処理している
+  test("L04: センター方向浅いライナー → SS or 2Bが処理", () => {
+    // dir=45,angle=18,velo=110 → 着弾(0, 31.8) SSから12.1m — 内野守備範囲
     const stats = runCase(45, 18, 110, noRunners, 0);
     logStats("L04", stats);
-    const pos8Rate = stats.fielderDistribution[8] ?? 0;
     const pos6Rate = stats.fielderDistribution[6] ?? 0;
-    console.log(`L04現状値: CF=${(pos8Rate * 100).toFixed(1)}%, SS=${(pos6Rate * 100).toFixed(1)}%, アウト率=${(stats.outRate * 100).toFixed(1)}% (CF期待: >=50%)`);
-    // 現状はSSが処理しているが、これがライナーとして妥当かは確認が必要
-    // 最低限アウトになればOK（改善目標としてCF処理率>=50%を記録）
+    const pos4Rate = stats.fielderDistribution[4] ?? 0;
+    const pos8Rate = stats.fielderDistribution[8] ?? 0;
+    console.log(`L04: SS=${(pos6Rate * 100).toFixed(1)}%, 2B=${(pos4Rate * 100).toFixed(1)}%, CF=${(pos8Rate * 100).toFixed(1)}%`);
+    // 内野手が処理するのが物理的に正しい（着弾31.8m = 内野守備範囲）
+    expect(pos6Rate + pos4Rate + pos8Rate).toBeGreaterThan(0.8);
     expect(stats.outRate).toBeGreaterThan(0.3);
-    console.log(`L04: CF処理率改善が必要 (現状${(pos8Rate * 100).toFixed(0)}% → 目標50%+)`);
   });
 
   test("L05: レフト前ライナー → LF or 3Bがアウト or 安打", () => {

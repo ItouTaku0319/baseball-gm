@@ -238,7 +238,7 @@ export function gaussianRandom(
 // --- ゾーン責任 ---
 // 打球方向角: 0°=三塁ファウル線, 45°=センター, 90°=一塁ファウル線
 export const PRIMARY_ZONE: Record<FielderPosition, { min: number; max: number } | null> = {
-  1: null,  // P: ゾーンなし
+  1: null,  // P: ゾーンなし（投手ゴロはupdateDecisionで特別処理）
   2: null,  // C: ゾーンなし
   5: { min: 0,  max: 28 },  // 3B: 三塁線付近
   6: { min: 22, max: 52 },  // SS: 二遊間

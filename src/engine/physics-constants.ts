@@ -85,6 +85,7 @@ export const RUNNER_START_DELAY = 0.65;      // 打者走者のスタート遅�
 // 変更後: 守備力依存の動的リーチ（base + fielding/100 * factor）
 export const CATCH_REACH_BASE_IF = 0.5;        // 内野手の基本捕球リーチ(m)
 export const CATCH_REACH_GROUND_BONUS = 0.5;   // ゴロ捕球時の追加リーチ(m)：伸身・ダイブ・逆シングル
+export const CATCH_REACH_BASE_P_GROUND = 2.0;  // 投手のゴロ捕球基本リーチ(m、マウンド上で横に伸ばせる)
 export const CATCH_REACH_BASE_OF = 1.5;        // 外野手の基本捕球リーチ(m)
 export const CATCH_REACH_BASE_C = 4.0;         // 捕手の基本捕球リーチ(m、ポップフライ専門訓練)
 export const CATCH_REACH_SKILL_FACTOR = 1.5;   // fielding/100 あたりの追加リーチ(m)
@@ -102,6 +103,7 @@ export const CALLOFF_TARGET_THRESHOLD = 15;    // コールオフ判定ターゲ
 // 自分より十分近い野手が追跡中なら、カバーに回る判定の比率
 export const CLOSER_PURSUER_INTERCEPT_RATIO = 0.7; // インターセプト時（70%以内なら譲る）
 export const CLOSER_PURSUER_CHASE_RATIO = 0.6;     // チェーシング/フライ時（60%以内なら譲る）
+export const PITCHER_GROUND_BALL_MAX_DIST = 30;    // 投手がゴロを追跡する最大着弾距離(m)
 
 export const BOUNCE_CLOSE_THRESHOLD = 3;     // 近距離(m)
 export const BOUNCE_NEAR_THRESHOLD = 8;      // 中距離(m)
