@@ -415,7 +415,7 @@ function main() {
   printFoulMetrics(allLogs, stats.totalGames);
 
   // 守備分布チェック
-  const fieldingPassed = printFieldingDistribution(allLogs, stats.totalGames);
+  const fieldingPassed = printFieldingDistribution(allLogs, stats.totalGames, results);
 
   // 品質ゲート: exit codeで合否を返す
   if (!passed || !fieldingPassed) {
@@ -463,7 +463,7 @@ function printBattedBallBreakdown(logs: AtBatLog[]) {
 }
 
 /** 回収野手分布 + ポジション別TC/Gの表示とチェック */
-function printFieldingDistribution(logs: AtBatLog[], totalGames: number): boolean {
+function printFieldingDistribution(logs: AtBatLog[], totalGames: number, results: GameResult[]): boolean {
   // 回収野手分布: ヒット打球の fielderPosition を集計
   const HIT_RESULTS = new Set(["single", "double", "triple", "infieldHit"]);
   const retrieverDist: Record<number, number> = {};
@@ -509,12 +509,14 @@ function printFieldingDistribution(logs: AtBatLog[], totalGames: number): boolea
   console.log(`  ${mark(pOk)} P回収率 (1):      ${pPct.toFixed(1)}%  (< 3%)`);
   console.log("");
 
-  // ポジション別TC/G (参考指標 — 警告のみ)
+  // ポジション別TC/G: PlayerGameStats の PO+A+E をポジション別に集計（NPB準拠）
   const tcByPos: Record<number, number> = {};
-  for (const log of logs) {
-    const pos = log.fielderPosition;
-    if (pos && pos >= 1 && pos <= 9) {
-      tcByPos[pos] = (tcByPos[pos] ?? 0) + 1;
+  for (const result of results) {
+    for (const ps of result.playerStats) {
+      const pos = ps.fieldingPosition;
+      if (!pos || pos < 1 || pos > 9) continue;
+      const tc = (ps.putOuts ?? 0) + (ps.assists ?? 0) + (ps.errors ?? 0);
+      tcByPos[pos] = (tcByPos[pos] ?? 0) + tc;
     }
   }
 

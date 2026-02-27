@@ -884,6 +884,7 @@ function recordFielding(
   const fielder = fielderMap.get(pos);
   if (!fielder || fielder.id === "dummy") return;
   const stats = getOrCreateBatterStats(statsMap, fielder.id);
+  stats.fieldingPosition = pos;
   if (type === "putOut") stats.putOuts = (stats.putOuts ?? 0) + 1;
   else if (type === "assist") stats.assists = (stats.assists ?? 0) + 1;
   else stats.errors = (stats.errors ?? 0) + 1;

@@ -62,6 +62,7 @@ export interface PlayerGameStats {
   putOuts?: number;          // 刺殺
   assists?: number;          // 補殺
   errors?: number;           // 失策
+  fieldingPosition?: number; // その試合での守備ポジション (1-9)
 }
 
 /** 投手の1試合の成績 */
