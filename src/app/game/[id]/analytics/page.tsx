@@ -11,6 +11,7 @@ import type { Player } from "@/models/player";
 import { POSITION_NAMES } from "@/models/player";
 import { PlayerAbilityCard } from "@/components/player-ability-card";
 import { BattedBallPopup } from "@/components/batted-ball-trajectory";
+import { ScenarioTester } from "@/components/scenario-tester";
 
 // ---- 共有定数・ユーティリティ ----
 
@@ -1501,7 +1502,7 @@ export default function AnalyticsPage() {
   const params = useParams();
   const id = params.id as string;
 
-  const [tab, setTab] = useState<"season" | "diagnostic" | "runexp">("season");
+  const [tab, setTab] = useState<"season" | "diagnostic" | "runexp" | "scenario">("season");
 
   useEffect(() => {
     if (!game && params.id) loadGame(params.id as string);
@@ -1561,12 +1562,23 @@ export default function AnalyticsPage() {
           >
             得点期待値
           </button>
+          <button
+            onClick={() => setTab("scenario")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+              tab === "scenario"
+                ? "bg-blue-600 text-white"
+                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+            }`}
+          >
+            シナリオテスト
+          </button>
         </div>
 
         {/* タブ内容 */}
         {tab === "season" && <SeasonDataTab />}
         {tab === "diagnostic" && <DiagnosticTab />}
         {tab === "runexp" && <RunExpectancySection game={game} />}
+        {tab === "scenario" && <ScenarioTester />}
       </div>
     </div>
   );
