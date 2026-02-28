@@ -50,9 +50,6 @@ import {
   GROUND_BALL_CATCH_SPEED_PENALTY,
   GROUND_BALL_CATCH_FLOOR,
   GROUND_BALL_REACH_PENALTY,
-  GROUND_BALL_GAP_BASE_PROB,
-  GROUND_BALL_GAP_SPEED_BONUS,
-  GROUND_BALL_GAP_MIN_EV,
   SF_CATCH_TO_THROW_OVERHEAD,
   DP_PIVOT_SUCCESS_BASE,
   DP_PIVOT_SUCCESS_SPEED_FACTOR,
@@ -103,44 +100,6 @@ interface BaseRunners {
 }
 
 // ====================================================================
-// ギャップ抜け判定
-// ====================================================================
-
-/**
- * 内野手のデフォルト守備位置から計算した方向角度。
- * 打球がこれらの角度に近いほど野手の正面 → 抜けにくい。
- * 角度が遠いほどギャップ → 抜けやすい。
- */
-const FIELDER_DIRECTION_ANGLES = [0, 10, 27, 59, 76, 90]; // ファウルライン + 3B, SS, 2B, 1B
-
-/**
- * ゴロのギャップ抜け確率を計算。
- * 打球方向が野手の正面から離れるほど（ギャップに近いほど）確率が上がる。
- */
-function calcGroundBallGapProb(direction: number, exitVelocity: number): number {
-  if (exitVelocity < GROUND_BALL_GAP_MIN_EV) return 0;
-
-  // 最も近い野手位置からの距離を計算
-  let minDistFromFielder = 90;
-  for (const angle of FIELDER_DIRECTION_ANGLES) {
-    const dist = Math.abs(direction - angle);
-    if (dist < minDistFromFielder) minDistFromFielder = dist;
-  }
-
-  // 野手近く（<7°）→ 抜けない
-  if (minDistFromFielder < 7) return 0;
-
-  // 野手から離れるほど抜けやすい（7°から線形に増加、最大15°で飽和）
-  const gapFactor = clamp((minDistFromFielder - 7) / 8, 0, 1);
-
-  // 打球速度ボーナス（130km/h以上で加算）
-  const speedFactor = clamp((exitVelocity - 130) / 40, 0, 1);
-  const speedBonus = speedFactor * GROUND_BALL_GAP_SPEED_BONUS;
-
-  return GROUND_BALL_GAP_BASE_PROB * gapFactor + speedBonus;
-}
-
-// ====================================================================
 // エントリポイント
 // ====================================================================
 
@@ -156,17 +115,6 @@ export function resolvePlayWithAgents(
   const rng = options?.random ?? Math.random;
   const noiseScale = options?.perceptionNoise ?? 1.0;
   const collectTimeline = options?.collectTimeline ?? false;
-
-  // === Phase -1: ゴロのギャップ抜けチェック ===
-  if (ball.launchAngle < 10 && ball.exitVelocity >= GROUND_BALL_GAP_MIN_EV) {
-    const gapProb = calcGroundBallGapProb(ball.direction, ball.exitVelocity);
-    if (gapProb > 0 && rng() < gapProb) {
-      // 打球方向から回収する外野手を判定（LF:0-30°, CF:30-60°, RF:60-90°）
-      const ofPos: FielderPosition =
-        ball.direction < 30 ? 7 : ball.direction < 60 ? 8 : 9;
-      return { result: "single", fielderPos: ofPos };
-    }
-  }
 
   // === Phase 0: 初期化 ===
   const trajectory = createBallTrajectory(
@@ -692,7 +640,7 @@ function checkGroundBallIntercept(
     const distSq =
       (px - nearestX) * (px - nearestX) + (py - nearestY) * (py - nearestY);
 
-    const interceptReach = getCatchReach(agent, true) * 0.7; // ゴロ用リーチ
+    const interceptReach = getCatchReach(agent, true) * 1.0; // ゴロ用リーチ（伸身・逆シングル含む）
     if (distSq < interceptReach * interceptReach) {
       agent.state = "FIELDING";
       agent.arrivalTime = t;

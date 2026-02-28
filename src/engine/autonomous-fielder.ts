@@ -93,10 +93,10 @@ const BACKUP_THROW_MARGIN = 0.5;
 
 /**
  * ゴロインターセプト時の捕球リーチ係数。
- * fielding-agent.ts の checkGroundBallIntercept で使用される 0.7 と一致させる。
- * 移動中のゴロを捕球する難易度を反映（静止球より短いリーチ）。
+ * fielding-agent.ts の checkGroundBallIntercept と一致させること。
+ * 移動中のゴロ捕球: 伸身・逆シングル・飛びつきを含む実効リーチ。
  */
-const GROUND_INTERCEPT_REACH_FACTOR = 0.7;
+const GROUND_INTERCEPT_REACH_FACTOR = 1.0;
 
 /** チェーシング（停止球を追う）のarrivalMargin上限。インターセプトより低く抑える */
 const CHASE_ARRIVAL_MARGIN_CAP = 0.3;
@@ -220,14 +220,19 @@ export function autonomousDecide(
   let myPursuitScore = agent.pursuitScore ?? -1;
   const myPursuitTarget = agent.pursuitTarget ?? agent.perceivedLanding.position;
 
-  // コーディネーション: 自分より高い raw pursuit score を持つ他エージェントがいたら引く
+  // コーディネーション: ゴロはトップ2が追跡可能、フライはトップ1のみ
   if (myPursuitScore > 0) {
+    const maxConcurrentPursuers = trajectory.isGroundBall ? 2 : 1;
+    let betterCount = 0;
     for (const other of allAgents) {
       if (other === agent) continue;
       const otherScore = other.pursuitScore ?? -1;
       if (otherScore > myPursuitScore) {
-        myPursuitScore = -1;
-        break;
+        betterCount++;
+        if (betterCount >= maxConcurrentPursuers) {
+          myPursuitScore = -1;
+          break;
+        }
       }
     }
   }
