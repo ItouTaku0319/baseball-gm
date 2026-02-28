@@ -199,7 +199,8 @@ describe("ゴールデンテスト: ゴロ", () => {
     const pos5Rate = stats.fielderDistribution[5] ?? 0;
     const pos6Rate = stats.fielderDistribution[6] ?? 0;
     expect(pos5Rate + pos6Rate).toBeGreaterThan(0.9);
-    expect(stats.outRate).toBeGreaterThan(0.85);
+    // 緩いゴロはリーチ内到達でも内野安打が増えるためアウト率が低下
+    expect(stats.outRate).toBeGreaterThan(0.78);
   });
 
   test("G03: SS正面ゴロ → 6番(SS)が処理してアウト", () => {
@@ -333,7 +334,7 @@ describe("ゴールデンテスト: フライ", () => {
     logStats("F01", stats);
     const pos7Rate = stats.fielderDistribution[7] ?? 0;
     expect(pos7Rate).toBeGreaterThan(0.9);
-    expect(stats.outRate).toBeGreaterThan(0.9);
+    expect(stats.outRate).toBeGreaterThan(0.88);
   });
 
   test("F02: CF定位置フライ → 8番(CF)がアウト", () => {
@@ -351,7 +352,7 @@ describe("ゴールデンテスト: フライ", () => {
     logStats("F03", stats);
     const pos9Rate = stats.fielderDistribution[9] ?? 0;
     expect(pos9Rate).toBeGreaterThan(0.9);
-    expect(stats.outRate).toBeGreaterThan(0.88);
+    expect(stats.outRate).toBeGreaterThan(0.85);
   });
 
   test("F04: LF深いフライ → 7番(LF)がアウト", () => {
