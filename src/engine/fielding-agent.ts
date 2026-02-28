@@ -29,30 +29,30 @@ import {
   AGENT_ACCELERATION_TIME,
   AGENT_SPEED_SKILL_FACTOR,
   AGENT_BASE_SPEED,
-  TRANSFER_TIME_BASE,
-  TRANSFER_TIME_ARM_SCALE,
-  RUNNER_START_DELAY,
   CATCH_REACH_BASE,
   CATCH_REACH_SKILL_FACTOR,
-  INFIELD_HIT_PROB,
-  INFIELD_HIT_MARGIN_SCALE,
-  INFIELD_HIT_SPEED_BONUS,
   GROUND_BALL_HARD_HIT_SPEED,
   GROUND_BALL_CATCH_SPEED_PENALTY,
   GROUND_BALL_CATCH_FLOOR,
   GROUND_BALL_REACH_PENALTY,
   SF_CATCH_TO_THROW_OVERHEAD,
-  DP_PIVOT_SUCCESS_BASE,
-  DP_PIVOT_SUCCESS_SPEED_FACTOR,
-  DP_STEP_ON_BASE_SUCCESS,
-  DP_STEP_ON_BASE_SPEED_FACTOR,
   OUTFIELD_DEPTH_THRESHOLD,
-  FIRST_BASE_PROXIMITY,
+  PHASE2_DT,
+  MAX_PHASE2_TIME,
+  SECURING_TIME_BASE,
+  SECURING_TIME_SKILL_SCALE,
+  PIVOT_TIME,
+  THROW_SPEED_BASE,
+  THROW_SPEED_ARM_SCALE,
+  RUNNER_SPEED_BASE,
+  RUNNER_SPEED_SCALE,
+  BATTER_START_DELAY,
+  TAGUP_DELAY,
+  BASE_TAG_TIME,
 } from "./physics-constants";
 import type {
   Vec2,
   BallTrajectory,
-  BallType,
   FielderPosition,
   FielderAgent,
   AgentState,
@@ -63,6 +63,11 @@ import type {
   AgentTimelineEntry,
   AgentSnapshot,
   ThrowPlay,
+  RunnerAgent,
+  RunnerState,
+  ThrowBallState,
+  RunnerSnapshot,
+  ThrowBallSnapshot,
 } from "./fielding-agent-types";
 import {
   BASE_POSITIONS,
@@ -255,66 +260,63 @@ export function resolvePlayWithAgents(
     finalT = t;
   }
 
-  // === Phase 2: 結果解決 ===
-  const collectedTimeline = collectTimeline ? timeline : undefined;
+  // === Phase 2: 捕球後ティックベースシミュレーション ===
 
-  // ケース1: 捕球成功
-  if (catchResult && catchResult.success && catcherAgent) {
-    const res = resolveSuccessfulCatch(
-      catcherAgent,
-      ball,
-      trajectory,
-      batter,
-      bases,
-      outs,
-      agents,
-      timeline,
-      rng
-    );
-    return { ...res, agentTimeline: collectedTimeline };
-  }
-
-  // ケース2: 捕球失敗
+  // 捕球失敗時のエラー判定（Phase 2 に渡す前に判定）
   if (catchResult && !catchResult.success && catcherAgent) {
-    const res = resolveFieldingError(
-      catcherAgent,
-      ball,
-      landing,
-      trajectory,
-      batter,
-      bases,
-      agents,
-      timeline,
-      rng,
-      finalT
-    );
-    return { ...res, agentTimeline: collectedTimeline };
+    // ゴロの強い打球は捕球失敗でもヒット扱い
+    if (trajectory.isGroundBall) {
+      const ballSpeedAtCatch = trajectory.getSpeedAt(catcherAgent.arrivalTime);
+      if (ballSpeedAtCatch >= GROUND_BALL_HARD_HIT_SPEED) {
+        const collectedTimeline = collectTimeline ? timeline : undefined;
+        return {
+          result: "single",
+          fielderPos: catcherAgent.pos,
+          agentTimeline: collectedTimeline,
+        };
+      }
+      // 捕球可能球の捕球失敗 → エラー
+      const collectedTimeline = collectTimeline ? timeline : undefined;
+      return {
+        result: "error",
+        fielderPos: catcherAgent.pos,
+        errorPos: catcherAgent.pos,
+        agentTimeline: collectedTimeline,
+      };
+    }
   }
 
-  // ケース3: 誰も到達できなかった → ボール転がり位置で回収者を判定
-  const restPos = estimateRestPosition(trajectory);
-  const retriever = findNearestAgent(agents, restPos);
-  if (!retriever) {
+  // 捕球成功 / 捕球失敗(フライ落球) / 未到達 → Phase 2 ティックループ
+  const catchSuccess = !!(catchResult && catchResult.success && catcherAgent);
+  const effectiveCatcher = catchSuccess ? catcherAgent : (
+    // 未到達時: 最近傍野手を回収者として設定
+    findNearestAgent(agents, catcherAgent?.currentPos ?? estimateRestPosition(trajectory))
+  );
+
+  if (!effectiveCatcher) {
+    const collectedTimeline = collectTimeline ? timeline : undefined;
     return {
       result: "single",
       fielderPos: 8 as FielderPosition,
       agentTimeline: collectedTimeline,
     };
   }
-  const res = resolveHitWithRetriever(
-    retriever,
+
+  const phase2Result = resolvePhase2WithTicks(
+    effectiveCatcher,
+    catchSuccess,
     ball,
-    landing,
     trajectory,
     batter,
     bases,
+    outs,
     agents,
-    timeline,
+    catchTime,
     rng,
-    restPos,
-    finalT
+    collectTimeline,
+    timeline
   );
-  return { ...res, agentTimeline: collectedTimeline };
+  return { ...phase2Result, agentTimeline: collectTimeline ? timeline : undefined };
 }
 
 // ====================================================================
@@ -400,22 +402,21 @@ function updatePerception(
     return;
   }
 
+  // 打球の物理特性(maxHeight/exitVelocity)から連続的にノイズ計算
+  // heightM < 1.0  → 低ノイズ（ゴロ相当: 予測しやすい）
+  // heightM 5-10m  → 高ノイズ（ライナー相当: 読みにくい）
+  // heightM 20m+   → 中ノイズ（フライ相当: 放物線から予測可能）
+  const progressRatio = clamp(t / trajectory.flightTime, 0, 0.95);
+  const skillFactor = 1 - agent.skill.fielding / 200;
+  const heightM = trajectory.maxHeight;
+
   let sigma: number;
-  if (trajectory.isGroundBall) {
-    // ゴロ: 地面を転がる予測可能な弾道 → ノイズ小
-    const gbProgress = clamp(t / trajectory.flightTime, 0, 0.95);
-    sigma =
-      3.0 *
-      (1 - agent.skill.fielding / 200) *
-      Math.sqrt(1 - gbProgress) *
-      noiseScale;
+  if (heightM < 1.0) {
+    // 地面近くの打球: 予測しやすい（ゴロ相当）
+    sigma = 3.0 * skillFactor * Math.sqrt(1 - progressRatio) * noiseScale;
   } else {
-    // フライ系: launchAngle と exitVelocity から連続計算
-    const progressRatio = clamp(t / trajectory.flightTime, 0, 0.95);
-    const skillFactor = 1 - agent.skill.fielding / 200;
-    // 角度ファクター: 低角度(ライナー)=読みにくい、高角度(ポップ)=読みやすい
-    const angleFactor = clamp(trajectory.launchAngle, 10, 70);
-    const heightNoise = 2.0 * Math.exp(-PERCEPTION_ANGLE_DECAY_RATE * (angleFactor - 10));
+    // 高さファクター: 低い(ライナー)=読みにくい、高い(ポップ/フライ)=放物線で予測可能
+    const heightNoise = 2.0 * Math.exp(-PERCEPTION_ANGLE_DECAY_RATE * clamp(heightM - 1.0, 0, 60));
     // 速度ファクター: 速い=読みにくい
     const speedNoise = 0.7 + 0.3 * clamp(trajectory.exitVelocity / 170, 0, 1);
     const baseSigma = AGENT_PERCEPTION_BASE_NOISE * heightNoise * speedNoise;
@@ -467,7 +468,9 @@ function moveAgent(agent: FielderAgent, dt: number): void {
     agent.state === "READY" ||
     agent.state === "HOLDING" ||
     agent.state === "FIELDING" ||
-    agent.state === "THROWING"
+    agent.state === "THROWING" ||
+    agent.state === "SECURING" ||
+    agent.state === "RECEIVING"
   ) {
     (agent as { currentSpeed: number }).currentSpeed = 0;
     return;
@@ -779,493 +782,11 @@ function checkFlyCatchAtLanding(
 }
 
 // ====================================================================
-// 結果解決
+// 旧結果解決（Phase 2 ティックベースシミュレーションで完全置換済み）
+// resolveSuccessfulCatch / resolveGroundOut / resolveFlyOut /
+// resolveFieldingError / resolveHitWithRetriever は削除済み
 // ====================================================================
 
-/** ベースカバーに向かっているエージェントを返す */
-function findBaseCoverer(
-  agents: FielderAgent[],
-  base: keyof typeof BASE_POSITIONS,
-  excludePos: FielderPosition
-): FielderAgent | undefined {
-  const basePos = BASE_POSITIONS[base];
-  const candidates = base === "home"
-    ? agents.filter(a => a.pos !== excludePos && (a.state === "COVERING" || a.state === "HOLDING"))
-    : agents.filter(a => a.pos !== excludePos && a.state === "COVERING" && a.action === "cover_base");
-  return candidates.sort((a, b) => vec2Distance(a.currentPos, basePos) - vec2Distance(b.currentPos, basePos))[0];
-}
-
-function resolveSuccessfulCatch(
-  catcher: FielderAgent,
-  ball: BattedBall,
-  trajectory: BallTrajectory,
-  batter: Player,
-  bases: BaseRunners,
-  outs: number,
-  agents: FielderAgent[],
-  _timeline: AgentTimelineEntry[],
-  rng: () => number
-): AgentFieldingResult {
-  if (trajectory.isGroundBall) {
-    return resolveGroundOut(catcher, batter, bases, outs, agents, rng);
-  }
-  return resolveFlyOut(catcher, trajectory.ballType, batter, bases, outs, agents, rng);
-}
-
-function findClosestFielderToBase(
-  agents: FielderAgent[],
-  base: keyof typeof BASE_POSITIONS,
-  excludePos: FielderPosition
-): FielderPosition {
-  const basePos = BASE_POSITIONS[base];
-  let best: FielderAgent | null = null;
-  let bestDist = Infinity;
-  for (const a of agents) {
-    if (a.pos === excludePos) continue;
-    const d = vec2Distance(a.currentPos, basePos);
-    if (d < bestDist) { bestDist = d; best = a; }
-  }
-  return best?.pos ?? (6 as FielderPosition);
-}
-
-function resolveGroundOut(
-  catcher: FielderAgent,
-  batter: Player,
-  bases: BaseRunners,
-  outs: number,
-  agents: FielderAgent[],
-  rng: () => number
-): AgentFieldingResult {
-  // 外野域でゴロを回収 → 内野を抜けたヒット（シングル確定）+ 内野への送球
-  const catcherDistFromHome = Math.sqrt(catcher.currentPos.x ** 2 + catcher.currentPos.y ** 2);
-  if (catcherDistFromHome > OUTFIELD_DEPTH_THRESHOLD) {
-    const throwTarget = findBestThrowTarget(catcher, agents, "second");
-    return {
-      result: "single",
-      fielderPos: catcher.pos,
-      throwPlays: throwTarget ? [throwTarget] : undefined,
-    };
-  }
-
-  const fieldTime = catcher.arrivalTime;
-  const secureTime = 0.3 + (1 - catcher.skill.fielding / 100) * 0.2;
-  const transferTime = TRANSFER_TIME_BASE + (1 - catcher.skill.arm / 100) * TRANSFER_TIME_ARM_SCALE;
-  // NPB内野手の平均送球速度: arm=50で40m/s(144km/h)、arm=100で50m/s(180km/h)
-  const throwSpeed = 30 + (catcher.skill.arm / 100) * 20;
-
-  // ベースカバー野手を特定
-  const firstCover = findBaseCoverer(agents, "first", catcher.pos);
-  const secondCover = findBaseCoverer(agents, "second", catcher.pos);
-  const thirdCover = findBaseCoverer(agents, "third", catcher.pos);
-  const homeCover = findBaseCoverer(agents, "home", catcher.pos);
-
-  // フォールバック用ポジション（COVERINGエージェントが見つからない場合のデフォルト）
-  const firstCoverPos: FielderPosition = firstCover?.pos ?? 3;
-  const secondCoverPos: FielderPosition = secondCover?.pos ?? findClosestFielderToBase(agents, "second", catcher.pos);
-  const thirdCoverPos: FielderPosition = thirdCover?.pos ?? 5;
-
-  const runnerSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
-  const runnerTo1B = RUNNER_START_DELAY + BASE_LENGTH / runnerSpeed;
-
-  // 1塁送球時間（基本）
-  const throwDistFirst = firstCover
-    ? vec2Distance(catcher.currentPos, firstCover.currentPos)
-    : vec2Distance(catcher.currentPos, BASE_POSITIONS.first);
-  const defenseTimeFirst = fieldTime + secureTime + transferTime + throwDistFirst / throwSpeed;
-
-  // 内野安打判定（マージンベース）
-  // ihMargin: 正=防御が速い(アウト側), 負=ランナーが速い(安打側)
-  const ihMargin = runnerTo1B - defenseTimeFirst;
-  if (ihMargin < 0) {
-    // ランナーが送球より速い → 確定内野安打
-    return { result: "infieldHit", fielderPos: catcher.pos };
-  }
-  // マージンが小さい場合、確率的に内野安打（悪送球・バウンド送球・ベース踏み外し等）
-  if (ihMargin < INFIELD_HIT_MARGIN_SCALE) {
-    const marginFactor = 1 - ihMargin / INFIELD_HIT_MARGIN_SCALE;
-    const hitProb = (INFIELD_HIT_PROB + (batter.batting.speed / 100) * INFIELD_HIT_SPEED_BONUS) * marginFactor;
-    if (rng() < hitProb) {
-      return { result: "infieldHit", fielderPos: catcher.pos };
-    }
-  }
-
-  // === 走者1塁時 → 2塁フォースアウト判定 ===
-  if (bases.first) {
-    const throwDistSecond = secondCover
-      ? vec2Distance(catcher.currentPos, secondCover.currentPos)
-      : vec2Distance(catcher.currentPos, BASE_POSITIONS.second);
-    const defenseTimeSecond = fieldTime + secureTime + transferTime + throwDistSecond / throwSpeed;
-    const runnerFirstToSecond = BASE_LENGTH / (6.5 + ((bases.first.batting?.speed ?? 50) / 100) * 2.5);
-
-    if (defenseTimeSecond < runnerFirstToSecond + 0.3) {
-      // 2塁フォースアウト成功
-
-      // 2塁ベース付近で打球処理 → 自分でベースを踏む（5m以内）
-      const distToSecondBase = vec2Distance(catcher.currentPos, BASE_POSITIONS.second);
-      if (distToSecondBase < 5.0) {
-        if (outs < 2) {
-          const dpRate = DP_STEP_ON_BASE_SUCCESS + (1 - batter.batting.speed / 100) * DP_STEP_ON_BASE_SPEED_FACTOR;
-          if (rng() < dpRate) {
-            // ピボット送球（2塁を踏んだ後1塁へ）
-            const pivotThrowDist = firstCover
-              ? vec2Distance(BASE_POSITIONS.second, firstCover.currentPos)
-              : vec2Distance(BASE_POSITIONS.second, BASE_POSITIONS.first);
-            const pivotThrowSpeed = 28 + (catcher.skill.arm / 100) * 18;
-            const pivotTime = defenseTimeSecond + 0.4 + pivotThrowDist / pivotThrowSpeed;
-            if (pivotTime < runnerTo1B + 0.2) {
-              return {
-                result: "doublePlay",
-                fielderPos: catcher.pos,
-                throwPlays: [
-                  { from: catcher.pos, to: catcher.pos, base: "second" },
-                  { from: catcher.pos, to: firstCoverPos, base: "first" },
-                ],
-              };
-            }
-          }
-        }
-        // 2塁フォースのみ（無補殺刺殺）
-        return {
-          result: "groundout",
-          fielderPos: catcher.pos,
-          putOutPos: catcher.pos,
-          throwPlays: [],
-        };
-      }
-
-      // 他の内野手: 2塁フォース可能でも40%は確実な1塁送球を選択（NPB準拠比率）
-      if (rng() >= 0.40) {
-        // DP判定
-        if (outs < 2) {
-          const dpRate = DP_PIVOT_SUCCESS_BASE + (1 - batter.batting.speed / 100) * DP_PIVOT_SUCCESS_SPEED_FACTOR;
-          if (rng() < dpRate) {
-            const pivotAgent = secondCover;
-            const pivotThrowDist = pivotAgent && firstCover
-              ? vec2Distance(pivotAgent.currentPos, firstCover.currentPos)
-              : vec2Distance(BASE_POSITIONS.second, BASE_POSITIONS.first);
-            const pivotThrowSpeed = pivotAgent
-              ? 28 + (pivotAgent.skill.arm / 100) * 18
-              : 36;
-            const pivotTime = defenseTimeSecond + 0.4 + pivotThrowDist / pivotThrowSpeed;
-            if (pivotTime < runnerTo1B + 0.2) {
-              return {
-                result: "doublePlay",
-                fielderPos: catcher.pos,
-                throwPlays: [
-                  { from: catcher.pos, to: secondCoverPos, base: "second" },
-                  { from: secondCoverPos, to: firstCoverPos, base: "first" },
-                ],
-              };
-            }
-          }
-        }
-
-        // FC判定（走者1塁→2塁フォース: 走者アウト、打者1塁へ）
-        if (rng() < 0.05) {
-          return {
-            result: "fieldersChoice",
-            fielderPos: catcher.pos,
-            throwPlays: [{ from: catcher.pos, to: secondCoverPos, base: "second" }],
-          };
-        }
-
-        // 2塁フォースアウトのみ
-        return {
-          result: "groundout",
-          fielderPos: catcher.pos,
-          throwPlays: [{ from: catcher.pos, to: secondCoverPos, base: "second" }],
-        };
-      }
-      // 40% → 下のデフォルト1塁送球に進む
-    }
-  }
-
-  // === FC判定（走者あり、2塁フォース不成立/走者1塁なし） ===
-  if (bases.first || bases.second || bases.third) {
-    if (rng() < 0.05) {
-      const fcThrows: ThrowPlay[] = [];
-      if (bases.third && homeCover) {
-        fcThrows.push({ from: catcher.pos, to: homeCover.pos, base: "home" });
-      } else if (bases.second && thirdCover) {
-        fcThrows.push({ from: catcher.pos, to: thirdCoverPos, base: "third" });
-      } else if (bases.first && secondCover) {
-        fcThrows.push({ from: catcher.pos, to: secondCoverPos, base: "second" });
-      }
-      if (fcThrows.length > 0) {
-        return { result: "fieldersChoice", fielderPos: catcher.pos, throwPlays: fcThrows };
-      }
-    }
-  }
-
-  // === 1塁送球（デフォルト） ===
-  // 1塁ベース付近で処理 → 自己処理またはカバー者に送球
-  const distToFirst = vec2Distance(catcher.currentPos, BASE_POSITIONS.first);
-  if (distToFirst < FIRST_BASE_PROXIMITY) {
-    const pCover = findBaseCoverer(agents, "first", catcher.pos);
-    if (pCover) {
-      return {
-        result: "groundout",
-        fielderPos: catcher.pos,
-        throwPlays: [{ from: catcher.pos, to: pCover.pos, base: "first" }],
-      };
-    }
-    // 自己処理（無補殺刺殺）
-    return {
-      result: "groundout",
-      fielderPos: catcher.pos,
-      putOutPos: catcher.pos,
-      throwPlays: [],
-    };
-  }
-
-  // 他の内野手 → 1B送球
-  return {
-    result: "groundout",
-    fielderPos: catcher.pos,
-    throwPlays: [{ from: catcher.pos, to: firstCoverPos, base: "first" }],
-  };
-}
-
-function resolveFlyOut(
-  catcher: FielderAgent,
-  ballType: BallType,
-  batter: Player,
-  bases: BaseRunners,
-  outs: number,
-  _agents: FielderAgent[],
-  rng: () => number
-): AgentFieldingResult {
-  const throwSpeed = 25 + (catcher.skill.arm / 100) * 15;
-
-  // 犠牲フライ判定: 3塁走者あり + 2アウト未満 + フライ(ライナー除く)
-  if (bases.third && outs < 2 && ballType === "fly_ball") {
-    const throwDist = vec2Distance(catcher.currentPos, BASE_POSITIONS.home);
-    const throwTime = throwDist / throwSpeed;
-    const runnerSpeed = 6.5 + (bases.third.batting.speed / 100) * 2.5;
-    const tagUpTime = BASE_LENGTH / runnerSpeed;
-    if (tagUpTime < throwTime + SF_CATCH_TO_THROW_OVERHEAD) {
-      if (rng() < 0.6) {
-        return {
-          result: "sacrificeFly",
-          fielderPos: catcher.pos,
-          putOutPos: catcher.pos,
-        };
-      }
-    }
-  }
-
-  // タグアップ阻止: 走者をアウトにするのではなくタグアップを断念させるだけ
-  // （得点阻止は走塁処理側で反映。守備スタッツへの影響なし）
-
-  // unused parameter lint 回避
-  void batter;
-
-  if (ballType === "popup") {
-    return {
-      result: "popout",
-      fielderPos: catcher.pos,
-      putOutPos: catcher.pos,
-    };
-  }
-
-  if (ballType === "fly_ball") {
-    return {
-      result: "flyout",
-      fielderPos: catcher.pos,
-      putOutPos: catcher.pos,
-    };
-  }
-
-  return {
-    result: "lineout",
-    fielderPos: catcher.pos,
-    putOutPos: catcher.pos,
-  };
-}
-
-function resolveFieldingError(
-  catcher: FielderAgent,
-  ball: BattedBall,
-  landing: BallLanding,
-  trajectory: BallTrajectory,
-  batter: Player,
-  bases: BaseRunners,
-  agents: FielderAgent[],
-  timeline: AgentTimelineEntry[],
-  rng: () => number,
-  simEndTime: number
-): AgentFieldingResult {
-  if (trajectory.isGroundBall) {
-    // 強い打球の捕球失敗はヒット扱い（エラーではない）
-    const ballSpeedAtCatch = trajectory.getSpeedAt(catcher.arrivalTime);
-    if (ballSpeedAtCatch >= GROUND_BALL_HARD_HIT_SPEED) {
-      return {
-        result: "single",
-        fielderPos: catcher.pos,
-      };
-    }
-    return {
-      result: "error",
-      fielderPos: catcher.pos,
-      errorPos: catcher.pos,
-      putOutPos: undefined,
-      assistPos: undefined,
-    };
-  }
-  // フライ落球 → ボール転がり位置で回収者を判定
-  const restPos = estimateRestPosition(trajectory);
-  const retriever = findNearestAgent(agents, restPos);
-  if (!retriever) {
-    return {
-      result: "error",
-      fielderPos: catcher.pos,
-      errorPos: catcher.pos,
-    };
-  }
-  return resolveHitWithRetriever(
-    retriever,
-    ball,
-    landing,
-    trajectory,
-    batter,
-    bases,
-    agents,
-    timeline,
-    rng,
-    restPos,
-    simEndTime
-  );
-}
-
-function resolveHitWithRetriever(
-  retriever: FielderAgent,
-  ball: BattedBall,
-  landing: BallLanding,
-  trajectory: BallTrajectory,
-  batter: Player,
-  bases: BaseRunners,
-  agents: FielderAgent[],
-  _timeline: AgentTimelineEntry[],
-  rng: () => number,
-  _restPos: Vec2,
-  simEndTime: number
-): AgentFieldingResult {
-  // 回収者選定はrestPos（転がり先）で行うが、タイミング計算はlandingPos（着地点）を使用
-  // restPosで距離計算するとrollout分が加算され三塁打が過大になるため
-  const distToLanding = vec2Distance(
-    retriever.currentPos,
-    trajectory.landingPos
-  );
-  const pickupTime =
-    0.3 + (1 - retriever.skill.catching / 100) * 0.4;
-  let bouncePenalty: number;
-  if (landing.isGroundBall) {
-    bouncePenalty = 0.5 + rng() * 0.5;
-  } else {
-    bouncePenalty =
-      0.3 + clamp((landing.distance - 50) / 50, 0, 1) * 0.5 + rng() * 0.4;
-  }
-  const fenceDist = getFenceDistance(ball.direction);
-  if (landing.distance >= fenceDist * 0.9) {
-    bouncePenalty += 0.6 + rng() * 0.6;
-  }
-
-  // catchTime: シミュレーション終了時点 + 残走行時間 + バウンス + 拾い上げ
-  const remainingTravel = distToLanding / retriever.maxSpeed;
-  const catchTime =
-    simEndTime + remainingTravel + bouncePenalty + pickupTime;
-
-  // 打者の到達塁を先に計算
-  const batSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
-  const batTimeTo2B = 0.3 + (BASE_LENGTH * 2) / batSpeed;
-  const batTimeTo3B = 0.3 + (BASE_LENGTH * 3) / batSpeed;
-  const defenseTo2B =
-    catchTime + calcThrowTime(retriever, "second", agents);
-  const defenseTo3B =
-    catchTime + calcThrowTime(retriever, "third", agents);
-
-  let basesReached = 1;
-  if (batTimeTo2B < defenseTo2B - 0.3) basesReached = 2;
-  if (basesReached >= 2 && batTimeTo3B < defenseTo3B - 0.3) basesReached = 3;
-  if (landing.isGroundBall) basesReached = 1;
-  if (landing.distance < 25) basesReached = 1;
-  // 深いフライ（85m以上）は最低2塁打保証
-  if (!landing.isGroundBall && landing.distance >= 85) {
-    basesReached = Math.max(basesReached, 2);
-  }
-
-  const resultStr: AtBatResult =
-    basesReached >= 3 ? "triple" : basesReached >= 2 ? "double" : "single";
-
-  // 送球先を打者の到達塁に基づいて決定
-  const throwBase: keyof typeof BASE_POSITIONS = basesReached >= 2 ? "third" : "second";
-  const throwTarget = findBestThrowTarget(retriever, agents, throwBase);
-
-  return {
-    result: resultStr,
-    fielderPos: retriever.pos,
-    putOutPos: undefined,
-    assistPos: undefined,
-    throwPlays: throwTarget ? [throwTarget] : undefined,
-  };
-}
-
-// ====================================================================
-// 送球時間計算
-// ====================================================================
-
-function calcThrowTime(
-  retriever: FielderAgent,
-  targetBase: keyof typeof BASE_POSITIONS,
-  agents: FielderAgent[]
-): number {
-  const throwDist = vec2Distance(
-    retriever.currentPos,
-    BASE_POSITIONS[targetBase]
-  );
-  const throwSpeed = 25 + (retriever.skill.arm / 100) * 15;
-
-  if (throwDist > 60) {
-    const relayAgent = agents.find(
-      (a) => a.state === "COVERING" && a.action === "relay"
-    );
-    if (relayAgent) {
-      const d1 = vec2Distance(retriever.currentPos, relayAgent.currentPos);
-      const d2 = vec2Distance(
-        relayAgent.currentPos,
-        BASE_POSITIONS[targetBase]
-      );
-      const relayThrowSpeed = 25 + (relayAgent.skill.arm / 100) * 15;
-      return d1 / throwSpeed + 0.3 + d2 / relayThrowSpeed;
-    }
-  }
-
-  return throwDist / throwSpeed;
-}
-
-// ====================================================================
-// ヒット時の送球先決定
-// ====================================================================
-
-function findBestThrowTarget(
-  thrower: FielderAgent,
-  agents: FielderAgent[],
-  targetBase: keyof typeof BASE_POSITIONS
-): ThrowPlay | null {
-  // リレーマン（relay状態のCOVERING野手）がいれば中継
-  const relayAgent = agents.find(
-    a => a.state === "COVERING" && a.action === "relay" && a.pos !== thrower.pos
-  );
-  if (relayAgent) {
-    return { from: thrower.pos, to: relayAgent.pos, base: targetBase };
-  }
-  // ベースカバー者へ直接送球
-  const cover = findBaseCoverer(agents, targetBase, thrower.pos);
-  if (cover) {
-    return { from: thrower.pos, to: cover.pos, base: targetBase };
-  }
-  return null;
-}
 
 // ====================================================================
 // ヘルパー関数
@@ -1466,4 +987,784 @@ function snapshotAll(
 /** 浮動小数点丸め (0.1刻みの累積誤差防止) */
 function round(v: number): number {
   return Math.round(v * 1000) / 1000;
+}
+
+// ====================================================================
+// Phase 2: 捕球後ティックベースシミュレーション
+// ====================================================================
+
+/** 塁番号 → 座標 */
+function getBasePosition(baseNum: number): Vec2 {
+  const name = BASE_NAMES[baseNum];
+  if (name) return BASE_POSITIONS[name];
+  return BASE_POSITIONS.home;
+}
+
+/** 塁間の線形補間 */
+function interpolateBasepath(fromBase: number, toBase: number, progress: number): Vec2 {
+  const from = getBasePosition(fromBase);
+  const to = getBasePosition(toBase);
+  return {
+    x: from.x + (to.x - from.x) * progress,
+    y: from.y + (to.y - from.y) * progress,
+  };
+}
+
+/** プレイヤーの走速を計算 */
+function calcRunnerSpeed(player: Player): number {
+  return RUNNER_SPEED_BASE + (player.batting.speed / 100) * RUNNER_SPEED_SCALE;
+}
+
+/** 野手の送球速度を計算（位置に応じて内野/外野を自動判定） */
+function calcThrowSpeed(agent: FielderAgent): number {
+  const distFromHome = Math.sqrt(agent.currentPos.x ** 2 + agent.currentPos.y ** 2);
+  if (distFromHome > OUTFIELD_DEPTH_THRESHOLD) {
+    // 外野: 長距離送球は制御重視で速度が落ちる (旧resolveFlyOut準拠)
+    return 25 + (agent.skill.arm / 100) * 15;
+  }
+  // 内野: 短距離クイックスロー (旧resolveGroundOut準拠)
+  return THROW_SPEED_BASE + (agent.skill.arm / 100) * THROW_SPEED_ARM_SCALE;
+}
+
+/** 捕球→送球準備の所要時間を計算 */
+function calcSecuringTime(agent: FielderAgent): number {
+  return SECURING_TIME_BASE + (1 - agent.skill.fielding / 100) * SECURING_TIME_SKILL_SCALE;
+}
+
+// --- ランナー初期化 ---
+
+function initRunners(
+  batter: Player,
+  bases: BaseRunners,
+  trajectory: BallTrajectory,
+  catchSuccess: boolean
+): RunnerAgent[] {
+  const runners: RunnerAgent[] = [];
+
+  if (catchSuccess && trajectory.isGroundBall) {
+    // ゴロ捕球: 打者→1塁走塁、フォース走者は強制走塁
+    runners.push({
+      player: batter,
+      state: "RUNNING",
+      currentPos: { ...BASE_POSITIONS.home },
+      fromBase: 0,
+      targetBase: 1,
+      speed: calcRunnerSpeed(batter),
+      progress: 0,
+      isBatter: true,
+      isForced: true,
+    });
+
+    // フォース連鎖: 1塁→2塁, 2塁→3塁, 3塁→本塁
+    if (bases.first) {
+      runners.push({
+        player: bases.first,
+        state: "RUNNING",
+        currentPos: { ...BASE_POSITIONS.first },
+        fromBase: 1,
+        targetBase: 2,
+        speed: calcRunnerSpeed(bases.first),
+        progress: 0,
+        isBatter: false,
+        isForced: true,
+      });
+      if (bases.second) {
+        runners.push({
+          player: bases.second,
+          state: "RUNNING",
+          currentPos: { ...BASE_POSITIONS.second },
+          fromBase: 2,
+          targetBase: 3,
+          speed: calcRunnerSpeed(bases.second),
+          progress: 0,
+          isBatter: false,
+          isForced: true,
+        });
+        if (bases.third) {
+          runners.push({
+            player: bases.third,
+            state: "RUNNING",
+            currentPos: { ...BASE_POSITIONS.third },
+            fromBase: 3,
+            targetBase: 4,
+            speed: calcRunnerSpeed(bases.third),
+            progress: 0,
+            isBatter: false,
+            isForced: true,
+          });
+        }
+      }
+    }
+    // 非フォース走者はホールド
+    if (!bases.first && bases.second) {
+      runners.push({
+        player: bases.second,
+        state: "HOLDING",
+        currentPos: { ...BASE_POSITIONS.second },
+        fromBase: 2,
+        targetBase: 2,
+        speed: calcRunnerSpeed(bases.second),
+        progress: 0,
+        isBatter: false,
+        isForced: false,
+      });
+    }
+    if (!bases.first && bases.third) {
+      runners.push({
+        player: bases.third,
+        state: "HOLDING",
+        currentPos: { ...BASE_POSITIONS.third },
+        fromBase: 3,
+        targetBase: 3,
+        speed: calcRunnerSpeed(bases.third),
+        progress: 0,
+        isBatter: false,
+        isForced: false,
+      });
+    }
+    if (bases.first && !bases.second && bases.third) {
+      runners.push({
+        player: bases.third,
+        state: "HOLDING",
+        currentPos: { ...BASE_POSITIONS.third },
+        fromBase: 3,
+        targetBase: 3,
+        speed: calcRunnerSpeed(bases.third),
+        progress: 0,
+        isBatter: false,
+        isForced: false,
+      });
+    }
+  } else if (catchSuccess && !trajectory.isGroundBall) {
+    // フライ捕球: 打者はアウト、走者はタッチアップ待ち
+    // 打者は含めない（フライアウト確定）
+    if (bases.first) {
+      runners.push({
+        player: bases.first,
+        state: "WAITING_TAG",
+        currentPos: { ...BASE_POSITIONS.first },
+        fromBase: 1,
+        targetBase: 2,
+        speed: calcRunnerSpeed(bases.first),
+        progress: 0,
+        isBatter: false,
+        isForced: false,
+      });
+    }
+    if (bases.second) {
+      runners.push({
+        player: bases.second,
+        state: "WAITING_TAG",
+        currentPos: { ...BASE_POSITIONS.second },
+        fromBase: 2,
+        targetBase: 3,
+        speed: calcRunnerSpeed(bases.second),
+        progress: 0,
+        isBatter: false,
+        isForced: false,
+      });
+    }
+    if (bases.third) {
+      runners.push({
+        player: bases.third,
+        state: "WAITING_TAG",
+        currentPos: { ...BASE_POSITIONS.third },
+        fromBase: 3,
+        targetBase: 4,
+        speed: calcRunnerSpeed(bases.third),
+        progress: 0,
+        isBatter: false,
+        isForced: false,
+      });
+    }
+  } else {
+    // 捕球失敗 / 未到達ヒット: 全員走塁
+    runners.push({
+      player: batter,
+      state: "RUNNING",
+      currentPos: { ...BASE_POSITIONS.home },
+      fromBase: 0,
+      targetBase: 1,
+      speed: calcRunnerSpeed(batter),
+      progress: 0,
+      isBatter: true,
+      isForced: true,
+    });
+    if (bases.first) {
+      runners.push({
+        player: bases.first,
+        state: "RUNNING",
+        currentPos: { ...BASE_POSITIONS.first },
+        fromBase: 1,
+        targetBase: 2,
+        speed: calcRunnerSpeed(bases.first),
+        progress: 0,
+        isBatter: false,
+        isForced: true,
+      });
+    }
+    if (bases.second) {
+      runners.push({
+        player: bases.second,
+        state: "RUNNING",
+        currentPos: { ...BASE_POSITIONS.second },
+        fromBase: 2,
+        targetBase: 3,
+        speed: calcRunnerSpeed(bases.second),
+        progress: 0,
+        isBatter: false,
+        isForced: true,
+      });
+    }
+    if (bases.third) {
+      runners.push({
+        player: bases.third,
+        state: "RUNNING",
+        currentPos: { ...BASE_POSITIONS.third },
+        fromBase: 3,
+        targetBase: 4,
+        speed: calcRunnerSpeed(bases.third),
+        progress: 0,
+        isBatter: false,
+        isForced: true,
+      });
+    }
+  }
+
+  return runners;
+}
+
+// --- ランナー移動 ---
+
+function moveRunner(runner: RunnerAgent, dt: number): void {
+  if (runner.state !== "RUNNING" && runner.state !== "TAGGED_UP") return;
+  runner.progress += (runner.speed * dt) / BASE_LENGTH;
+  if (runner.progress >= 1.0) {
+    runner.progress = 1.0;
+    runner.currentPos = getBasePosition(runner.targetBase);
+    // 塁に到達 → 暫定セーフ（フォースプレーで後からOUTに変わりうる）
+    runner.state = "SAFE";
+  } else {
+    const pos = interpolateBasepath(runner.fromBase, runner.targetBase, runner.progress);
+    runner.currentPos.x = pos.x;
+    runner.currentPos.y = pos.y;
+  }
+}
+
+// --- 送球先決定 ---
+
+interface ThrowTarget {
+  baseNum: number;
+  receiverAgent: FielderAgent;
+  throwDist: number;
+}
+
+function decideThrowTarget(
+  holder: FielderAgent,
+  runners: RunnerAgent[],
+  agents: FielderAgent[],
+  currentOuts: number,
+  rng: () => number
+): ThrowTarget | null {
+  // 送球不要（走者なし or 全員解決済み）
+  const activeRunners = runners.filter(
+    r => r.state === "RUNNING" || r.state === "TAGGED_UP"
+  );
+  if (activeRunners.length === 0) return null;
+
+  const throwSpeed = calcThrowSpeed(holder);
+
+  // フォースプレー候補を優先度順に評価
+  const forceCandidates: { runner: RunnerAgent; baseNum: number; margin: number }[] = [];
+  for (const runner of activeRunners) {
+    if (!runner.isForced) continue;
+    const targetBase = runner.targetBase;
+    const basePos = getBasePosition(targetBase);
+    const throwDist = vec2Distance(holder.currentPos, basePos);
+    const throwTime = throwDist / throwSpeed;
+    const remainingProgress = 1.0 - runner.progress;
+    const runnerTimeToBase = (remainingProgress * BASE_LENGTH) / runner.speed;
+    const margin = runnerTimeToBase - throwTime;
+    forceCandidates.push({ runner, baseNum: targetBase, margin });
+  }
+
+  // マージンが大きい（アウトにしやすい）順にソート
+  forceCandidates.sort((a, b) => b.margin - a.margin);
+
+  // DP狙い: 2アウト未満 & フォース走者が2人以上 → 先頭の塁（2塁）から処理
+  if (currentOuts < 2 && forceCandidates.length >= 2) {
+    // 2塁フォースから処理してDP狙い
+    const dpTarget = forceCandidates.find(c => c.baseNum === 2 && c.margin > 0);
+    if (dpTarget) {
+      const receiver = findReceiverForBase(dpTarget.baseNum, agents, holder.pos);
+      if (receiver) {
+        return { baseNum: dpTarget.baseNum, receiverAgent: receiver, throwDist: vec2Distance(holder.currentPos, getBasePosition(dpTarget.baseNum)) };
+      }
+    }
+  }
+
+  // 最もアウトにしやすいフォース塁を選択
+  for (const cand of forceCandidates) {
+    if (cand.margin > -0.1) { // 若干間に合わなくても投げる
+      const receiver = findReceiverForBase(cand.baseNum, agents, holder.pos);
+      if (receiver) {
+        return { baseNum: cand.baseNum, receiverAgent: receiver, throwDist: vec2Distance(holder.currentPos, getBasePosition(cand.baseNum)) };
+      }
+    }
+  }
+
+  // フォースなし → タッチアップ走者を刺す（犠飛防止）
+  const tagRunners = activeRunners.filter(r => !r.isForced);
+  for (const runner of tagRunners) {
+    const basePos = getBasePosition(runner.targetBase);
+    const throwDist = vec2Distance(holder.currentPos, basePos);
+    const receiver = findReceiverForBase(runner.targetBase, agents, holder.pos);
+    if (receiver) {
+      return { baseNum: runner.targetBase, receiverAgent: receiver, throwDist };
+    }
+  }
+
+  // デフォルト: 打者走者が走っていれば1塁へ
+  const batterRunner = runners.find(r => r.isBatter && (r.state === "RUNNING" || r.state === "TAGGED_UP"));
+  if (batterRunner) {
+    const receiver = findReceiverForBase(1, agents, holder.pos);
+    if (receiver) {
+      return { baseNum: 1, receiverAgent: receiver, throwDist: vec2Distance(holder.currentPos, getBasePosition(1)) };
+    }
+  }
+
+  return null;
+}
+
+/** 指定ベースで送球を受ける野手を探す */
+function findReceiverForBase(
+  baseNum: number,
+  agents: FielderAgent[],
+  excludePos: FielderPosition
+): FielderAgent | null {
+  const baseName = BASE_NAMES[baseNum];
+  if (!baseName) return null;
+  const basePos = BASE_POSITIONS[baseName];
+
+  let best: FielderAgent | null = null;
+  let bestDist = Infinity;
+  for (const a of agents) {
+    if (a.pos === excludePos) continue;
+    // COVERING/RECEIVING/HOLDING の野手を候補にする
+    if (a.state !== "COVERING" && a.state !== "RECEIVING" && a.state !== "HOLDING") continue;
+    const d = vec2Distance(a.currentPos, basePos);
+    if (d < bestDist) {
+      bestDist = d;
+      best = a;
+    }
+  }
+  return best;
+}
+
+// --- 送球生成 ---
+
+function createThrow(
+  holder: FielderAgent,
+  target: ThrowTarget,
+  currentTime: number
+): ThrowBallState {
+  const fromPos = { ...holder.currentPos };
+  const toPos = getBasePosition(target.baseNum);
+  const speed = calcThrowSpeed(holder);
+  const dist = vec2Distance(fromPos, toPos);
+  const flightTime = dist / speed;
+
+  return {
+    fromPos,
+    toPos,
+    targetBase: target.baseNum,
+    speed,
+    startTime: currentTime,
+    arrivalTime: currentTime + flightTime,
+    throwerPos: holder.pos,
+    receiverPos: target.receiverAgent.pos,
+  };
+}
+
+// --- ベースプレー判定 ---
+
+function resolveBasePlay(
+  throwBall: ThrowBallState,
+  runners: RunnerAgent[],
+  _rng: () => number
+): { isOut: boolean; runner: RunnerAgent | null } {
+  // この塁を目標にしている走者を探す
+  const targetRunner = runners.find(
+    r => r.targetBase === throwBall.targetBase &&
+         (r.state === "RUNNING" || r.state === "TAGGED_UP")
+  );
+
+  if (!targetRunner) {
+    // 該当走者なし — 到達済み(SAFE)の走者かもしれないのでチェック
+    const safeRunner = runners.find(
+      r => r.targetBase === throwBall.targetBase && r.state === "SAFE"
+    );
+    if (safeRunner && safeRunner.isForced) {
+      // 走者が先に到着 → セーフ確定
+      return { isOut: false, runner: safeRunner };
+    }
+    return { isOut: false, runner: null };
+  }
+
+  // フォースプレー: 走者がベースに到達済みか？
+  if (targetRunner.progress >= 1.0) {
+    targetRunner.state = "SAFE";
+    return { isOut: false, runner: targetRunner };
+  } else {
+    targetRunner.state = "OUT";
+    return { isOut: true, runner: targetRunner };
+  }
+}
+
+// --- Phase 2 メインループ ---
+
+function resolvePhase2WithTicks(
+  catcherAgent: FielderAgent | null,
+  catchSuccess: boolean,
+  ball: BattedBall,
+  trajectory: BallTrajectory,
+  batter: Player,
+  bases: BaseRunners,
+  outs: number,
+  agents: FielderAgent[],
+  catchTime: number,
+  rng: () => number,
+  collectTimeline: boolean,
+  existingTimeline: AgentTimelineEntry[]
+): AgentFieldingResult {
+  const dt = PHASE2_DT;
+
+  // 1. ランナー初期化
+  const runners = initRunners(batter, bases, trajectory, catchSuccess);
+
+  let ballHolder: FielderAgent | null = catchSuccess && catcherAgent ? catcherAgent : null;
+  let throwBall: ThrowBallState | null = null;
+  const throwPlays: ThrowPlay[] = [];
+  let outsAdded = 0;
+  let securingTimer = 0;
+
+  // 打者走者のスタート遅延を進捗に反映
+  const batterRunner = runners.find(r => r.isBatter);
+  let batterStartTimer = catchSuccess && trajectory.isGroundBall ? BATTER_START_DELAY : 0;
+
+  // 捕球成功時: 野手を SECURING 状態に
+  if (ballHolder) {
+    ballHolder.state = "SECURING";
+    securingTimer = calcSecuringTime(ballHolder);
+    // 外野フライ捕球: ランニングキャッチ→体勢を整える追加オーバーヘッド
+    if (!trajectory.isGroundBall) {
+      const distFromHome = Math.sqrt(ballHolder.currentPos.x ** 2 + ballHolder.currentPos.y ** 2);
+      if (distFromHome > OUTFIELD_DEPTH_THRESHOLD) {
+        securingTimer += SF_CATCH_TO_THROW_OVERHEAD;
+      }
+    }
+  }
+
+  // フライ捕球: タッチアップ遅延管理
+  let tagupTimer = catchSuccess && !trajectory.isGroundBall ? TAGUP_DELAY : 0;
+
+  // ベースカバー野手を RECEIVING 状態に設定
+  for (const a of agents) {
+    if (a.state === "COVERING" && a.action === "cover_base") {
+      a.state = "RECEIVING";
+    }
+  }
+
+  // 2. ティックループ
+  for (let t = catchTime; t <= catchTime + MAX_PHASE2_TIME; t = round(t + dt)) {
+
+    // 2a. 打者走者のスタート遅延
+    if (batterStartTimer > 0) {
+      batterStartTimer -= dt;
+      if (batterStartTimer <= 0 && batterRunner && batterRunner.state === "RUNNING") {
+        // スタート遅延解除 — 走塁開始（progress は遅延分を差し引き済み）
+      }
+    }
+
+    // 2b. タッチアップ遅延
+    if (tagupTimer > 0) {
+      tagupTimer -= dt;
+      if (tagupTimer <= 0) {
+        for (const runner of runners) {
+          if (runner.state === "WAITING_TAG") {
+            runner.state = "TAGGED_UP";
+          }
+        }
+      }
+    }
+
+    // 2c. ランナー更新
+    for (const runner of runners) {
+      if (runner.state === "RUNNING" || runner.state === "TAGGED_UP") {
+        // 打者走者はスタート遅延中は動かない
+        if (runner.isBatter && batterStartTimer > 0) continue;
+        moveRunner(runner, dt);
+      }
+    }
+
+    // 2d. ボール保持野手の更新（SECURING → 送球）
+    if (ballHolder && ballHolder.state === "SECURING") {
+      securingTimer -= dt;
+      if (securingTimer <= 0) {
+        const target = decideThrowTarget(ballHolder, runners, agents, outs + outsAdded, rng);
+        if (target) {
+          throwBall = createThrow(ballHolder, target, t);
+          const baseName = BASE_NAMES[target.baseNum] ?? "first";
+          throwPlays.push({
+            from: ballHolder.pos,
+            to: target.receiverAgent.pos,
+            base: baseName as keyof typeof BASE_POSITIONS,
+          });
+          target.receiverAgent.state = "RECEIVING";
+          ballHolder.state = "THROWING";
+          ballHolder = null;
+        } else {
+          // 送球先なし → プレー終了
+          ballHolder.state = "HOLDING";
+          ballHolder = null;
+        }
+      }
+    }
+
+    // 2e. 送球ボール更新
+    if (throwBall && t >= throwBall.arrivalTime) {
+      const receiverPos = throwBall.receiverPos;
+      const receiver = receiverPos ? agents.find(a => a.pos === receiverPos) : null;
+
+      const { isOut, runner: playRunner } = resolveBasePlay(throwBall, runners, rng);
+
+      if (isOut) {
+        outsAdded++;
+        // DP継続判定: まだアウトにできる走者がいるか？
+        const canContinue = outsAdded < 3 && (outs + outsAdded) < 3 &&
+          runners.some(r => r.isForced && (r.state === "RUNNING" || r.state === "TAGGED_UP"));
+        if (canContinue && receiver) {
+          ballHolder = receiver;
+          receiver.state = "SECURING";
+          securingTimer = PIVOT_TIME; // DP ピボット
+          throwBall = null;
+        } else {
+          throwBall = null;
+        }
+      } else {
+        // セーフ — プレー終了
+        throwBall = null;
+      }
+    }
+
+    // 2f. 野手カバー移動（RECEIVING 野手がベースに近づく）
+    for (const agent of agents) {
+      if (agent.state === "RECEIVING" || agent.state === "COVERING") {
+        moveAgent(agent, dt);
+      }
+    }
+
+    // 2g. タイムラインにランナー情報を追加
+    if (collectTimeline) {
+      const ballPos = throwBall
+        ? interpolateThrowBall(throwBall, t)
+        : (ballHolder ? ballHolder.currentPos : getBasePosition(1));
+      const entry: AgentTimelineEntry = {
+        t,
+        ballPos: { ...ballPos },
+        ballHeight: throwBall ? 2.0 : 0.5, // 送球中は少し高め
+        agents: agents.map(a => ({
+          pos: a.pos,
+          state: a.state,
+          x: a.currentPos.x,
+          y: a.currentPos.y,
+          targetX: a.targetPos.x,
+          targetY: a.targetPos.y,
+          speed: a.currentSpeed,
+          action: a.action,
+        })),
+        runners: runners.map(r => ({
+          fromBase: r.fromBase,
+          targetBase: r.targetBase,
+          x: r.currentPos.x,
+          y: r.currentPos.y,
+          state: r.state,
+        })),
+        throwBall: throwBall ? {
+          fromX: throwBall.fromPos.x,
+          fromY: throwBall.fromPos.y,
+          toX: throwBall.toPos.x,
+          toY: throwBall.toPos.y,
+          targetBase: throwBall.targetBase,
+          progress: clamp((t - throwBall.startTime) / (throwBall.arrivalTime - throwBall.startTime), 0, 1),
+        } : undefined,
+      };
+      existingTimeline.push(entry);
+    }
+
+    // 2h. 終了判定
+    if (isPhase2Complete(runners, throwBall, ballHolder)) break;
+  }
+
+  // 3. 結果構築
+  return buildPhase2Result(
+    catcherAgent,
+    catchSuccess,
+    trajectory,
+    runners,
+    throwPlays,
+    outsAdded,
+    outs,
+    agents,
+    rng
+  );
+}
+
+/** 送球ボールの現在位置を線形補間 */
+function interpolateThrowBall(throwBall: ThrowBallState, t: number): Vec2 {
+  const progress = clamp(
+    (t - throwBall.startTime) / (throwBall.arrivalTime - throwBall.startTime),
+    0, 1
+  );
+  return {
+    x: throwBall.fromPos.x + (throwBall.toPos.x - throwBall.fromPos.x) * progress,
+    y: throwBall.fromPos.y + (throwBall.toPos.y - throwBall.fromPos.y) * progress,
+  };
+}
+
+/** Phase 2 の全プレーが解決済みか判定 */
+function isPhase2Complete(
+  runners: RunnerAgent[],
+  throwBall: ThrowBallState | null,
+  ballHolder: FielderAgent | null
+): boolean {
+  if (throwBall) return false;
+  if (ballHolder && ballHolder.state === "SECURING") return false;
+
+  // 全走者がSAFE/OUT/HOLDINGなら完了
+  for (const r of runners) {
+    if (r.state === "RUNNING" || r.state === "TAGGED_UP" || r.state === "WAITING_TAG") {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Phase 2 結果を AgentFieldingResult に変換 */
+function buildPhase2Result(
+  catcherAgent: FielderAgent | null,
+  catchSuccess: boolean,
+  trajectory: BallTrajectory,
+  runners: RunnerAgent[],
+  throwPlays: ThrowPlay[],
+  outsAdded: number,
+  originalOuts: number,
+  agents: FielderAgent[],
+  rng: () => number
+): AgentFieldingResult {
+  const fielderPos = catcherAgent?.pos ?? (8 as FielderPosition);
+
+  // --- ゴロ捕球成功 ---
+  if (catchSuccess && trajectory.isGroundBall) {
+    // DP判定: 2アウト以上追加
+    if (outsAdded >= 2) {
+      return {
+        result: "doublePlay",
+        fielderPos,
+        throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
+        putOutPos: throwPlays.length > 0 ? throwPlays[throwPlays.length - 1].to : fielderPos,
+        assistPos: throwPlays.map(tp => tp.from),
+      };
+    }
+
+    // 打者走者がアウトになったか？
+    const batterRunner = runners.find(r => r.isBatter);
+
+    // FC判定: 打者走者はセーフだが他の走者がアウト
+    if (outsAdded > 0 && batterRunner && batterRunner.state === "SAFE") {
+      return {
+        result: "fieldersChoice",
+        fielderPos,
+        throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
+      };
+    }
+
+    // 通常アウト
+    if (outsAdded > 0) {
+      return {
+        result: "groundout",
+        fielderPos,
+        throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
+        putOutPos: throwPlays.length > 0 ? throwPlays[throwPlays.length - 1].to : fielderPos,
+        assistPos: throwPlays.length > 0 ? throwPlays.map(tp => tp.from) : undefined,
+      };
+    }
+
+    // 誰もアウトにできなかった → 内野安打
+    return {
+      result: "infieldHit",
+      fielderPos,
+      throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
+    };
+  }
+
+  // --- フライ捕球成功 ---
+  if (catchSuccess && !trajectory.isGroundBall) {
+    // 犠牲フライ判定: 3塁走者がホームに到達 + 2アウト未満
+    const thirdRunner = runners.find(r => r.fromBase === 3);
+    if (thirdRunner && thirdRunner.state === "SAFE" && thirdRunner.targetBase === 4 && originalOuts < 2) {
+      return {
+        result: "sacrificeFly",
+        fielderPos,
+        putOutPos: fielderPos,
+        throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
+      };
+    }
+
+    // タッチアップでアウト
+    if (outsAdded > 0) {
+      // フライアウト + タッチアップアウト（DP相当だが結果はflyout）
+      const baseResult = trajectory.ballType === "popup" ? "popout"
+        : trajectory.ballType === "line_drive" ? "lineout"
+        : "flyout";
+      return {
+        result: baseResult,
+        fielderPos,
+        putOutPos: fielderPos,
+        throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
+      };
+    }
+
+    // 通常フライアウト
+    const baseResult: AtBatResult = trajectory.ballType === "popup" ? "popout"
+      : trajectory.ballType === "line_drive" ? "lineout"
+      : "flyout";
+    return {
+      result: baseResult,
+      fielderPos,
+      putOutPos: fielderPos,
+    };
+  }
+
+  // --- 捕球失敗 / 未到達ヒット ---
+  // 走者の到達塁から結果を判定
+  const batterRunner = runners.find(r => r.isBatter);
+  const batterReachedBase = batterRunner
+    ? (batterRunner.state === "SAFE" ? batterRunner.targetBase : 1)
+    : 1;
+
+  let result: AtBatResult;
+  if (batterReachedBase >= 3) {
+    result = "triple";
+  } else if (batterReachedBase >= 2) {
+    result = "double";
+  } else {
+    result = "single";
+  }
+
+  return {
+    result,
+    fielderPos,
+    throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
+  };
 }

@@ -54,7 +54,9 @@ export type AgentState =
   | "BACKING_UP"
   | "HOLDING"
   | "FIELDING"
-  | "THROWING";
+  | "THROWING"
+  | "SECURING"    // 捕球→送球準備中（transfer time）
+  | "RECEIVING";  // ベースで送球を待っている
 
 export interface FielderAgent {
   readonly pos: FielderPosition;
@@ -127,6 +129,62 @@ export interface AgentTimelineEntry {
   ballPos: Vec2;
   ballHeight: number;
   agents: AgentSnapshot[];
+  runners?: RunnerSnapshot[];
+  throwBall?: ThrowBallSnapshot;
+}
+
+// --- Phase 2: ランナーエージェント ---
+
+export type RunnerState =
+  | "HOLDING"      // 塁上で待機
+  | "RUNNING"      // 走塁中
+  | "WAITING_TAG"  // フライ捕球待ち（タッチアップ準備）
+  | "TAGGED_UP"    // タッチアップ開始
+  | "SAFE"         // セーフ（塁到達）
+  | "OUT";         // アウト
+
+export interface RunnerAgent {
+  player: Player;
+  state: RunnerState;
+  currentPos: Vec2;
+  fromBase: number;         // 出発塁 (0=home, 1=first, 2=second, 3=third)
+  targetBase: number;       // 目標塁 (1-4, 4=home)
+  speed: number;            // 走速 (m/s)
+  progress: number;         // 塁間の進捗 (0.0 ~ 1.0)
+  isBatter: boolean;
+  isForced: boolean;        // フォースプレー対象か
+}
+
+// --- Phase 2: 送球ボール ---
+
+export interface ThrowBallState {
+  fromPos: Vec2;
+  toPos: Vec2;              // 送球先位置（ベース位置）
+  targetBase: number;       // 対象ベース (1-4)
+  speed: number;            // 送球速度 (m/s)
+  startTime: number;
+  arrivalTime: number;
+  throwerPos: FielderPosition;
+  receiverPos?: FielderPosition;
+}
+
+// --- Phase 2: タイムライン用スナップショット ---
+
+export interface RunnerSnapshot {
+  fromBase: number;
+  targetBase: number;
+  x: number;
+  y: number;
+  state: RunnerState;
+}
+
+export interface ThrowBallSnapshot {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  targetBase: number;
+  progress: number;         // 0.0~1.0（飛行進捗）
 }
 
 // --- シミュレーションオプション ---

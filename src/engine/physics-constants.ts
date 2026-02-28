@@ -210,10 +210,31 @@ export const AGENT_ACCELERATION_TIME = 0.3;      // 0→最高速に達するま
 export const AGENT_BASE_SPEED = 6.75;            // 全ポジション共通基本走速(m/s)
 export const AGENT_SPEED_SKILL_FACTOR = 2.5;     // speed/100 あたりの走速追加(m/s)
 export const BACKUP_DRIFT_THRESHOLD = 40;        // バックアップ判定距離(m) — これ以上は「遠い」
-export const DRIFT_RATIO_MIN = 0.10;             // 遠方OFドリフト最小割合 (fielding=0)
-export const DRIFT_RATIO_MAX = 0.25;             // 遠方OFドリフト最大割合 (fielding=100)
+export const DRIFT_RATIO_MIN = 0.10;             // 遠方ドリフト最小割合 (fielding=0)
+export const DRIFT_RATIO_MAX = 0.25;             // 遠方ドリフト最大割合 (fielding=100)
 
-// Phase 5: 結果解決フェーズ用
+// 打球高さベースの行動分岐閾値（isGroundBall/ballType分岐の物理置換）
+export const HIGH_BALL_THRESHOLD = 3.0;          // この高さ以上の打球はフライ系の挙動(m)
+export const CONCURRENT_PURSUIT_HEIGHT = 5.0;    // この高さ未満は2人追跡可、以上は1人(m)
+
+// Phase 5: 結果解決フェーズ用（レガシー: Phase 2 ティックループ移行後に削除予定）
 export const OUTFIELD_DEPTH_THRESHOLD = 45;     // 外野域判定の距離閾値(m)
 export const SECOND_BASE_PROXIMITY = 5.0;        // 2塁ベース踏み判定距離(m)
 export const FIRST_BASE_PROXIMITY = 8.0;         // 1塁自己処理判定距離(m)
+
+// ============================================================
+// Phase 2 ティックループ用定数（捕球後の送球・走塁シミュレーション）
+// ============================================================
+
+export const PHASE2_DT = 0.05;                   // Phase 2 タイムステップ(秒) — 送球判定の精度のため細かめ
+export const MAX_PHASE2_TIME = 8.0;              // Phase 2 最大シミュレーション時間(秒)
+export const SECURING_TIME_BASE = 0.25;          // 捕球→送球準備の基本時間(秒)
+export const SECURING_TIME_SKILL_SCALE = 0.15;   // fielding/100 あたりの準備時間短縮(秒)
+export const PIVOT_TIME = 0.35;                  // DP ピボット時の追加準備時間(秒)
+export const THROW_SPEED_BASE = 30;              // 送球速度の基本値(m/s)
+export const THROW_SPEED_ARM_SCALE = 20;         // arm/100 あたりの送球速度追加(m/s)
+export const RUNNER_SPEED_BASE = 6.5;            // 走者の基本走速(m/s)
+export const RUNNER_SPEED_SCALE = 2.5;           // speed/100 あたりの走速追加(m/s)
+export const BATTER_START_DELAY = 0.65;          // 打者走者のスタート遅延(秒)
+export const TAGUP_DELAY = 0.3;                  // タッチアップ反応遅延(秒)
+export const BASE_TAG_TIME = 0.15;               // ベースタッチ所要時間(秒)

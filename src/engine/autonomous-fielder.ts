@@ -25,6 +25,8 @@ import {
   BACKUP_DRIFT_THRESHOLD,
   DRIFT_RATIO_MIN,
   DRIFT_RATIO_MAX,
+  HIGH_BALL_THRESHOLD,
+  CONCURRENT_PURSUIT_HEIGHT,
 } from "./physics-constants";
 
 // ====================================================================
@@ -155,8 +157,8 @@ export function calcAndStorePursuitScore(
     return;
   }
 
-  // フライ時、遠方でBACKING_UP → pursuit しない（近距離は再評価可能）
-  if (agent.state === "BACKING_UP" && !trajectory.isGroundBall) {
+  // 高い打球で遠方のBACKING_UP → pursuit しない（近距離は再評価可能）
+  if (agent.state === "BACKING_UP" && trajectory.maxHeight > HIGH_BALL_THRESHOLD) {
     const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
     if (distToLanding > BACKUP_DRIFT_THRESHOLD) {
       agentMut.pursuitScore = -1;
@@ -164,8 +166,8 @@ export function calcAndStorePursuitScore(
     }
   }
 
-  // フライで既にPURSUING → 現在のスコアを維持
-  if (agent.state === "PURSUING" && !trajectory.isGroundBall) {
+  // 高い打球で既にPURSUING → 現在のスコアを維持
+  if (agent.state === "PURSUING" && trajectory.maxHeight > HIGH_BALL_THRESHOLD) {
     return;
   }
 
@@ -190,16 +192,16 @@ export function autonomousDecide(
       agent.state === "FIELDING" || agent.state === "THROWING" ||
       agent.hasYielded) return;
 
-  // フライ時、遠方でBACKING_UP → 目標を維持（近距離は再評価可能）
-  if (agent.state === "BACKING_UP" && !trajectory.isGroundBall) {
+  // 高い打球で遠方のBACKING_UP → 目標を維持（近距離は再評価可能）
+  if (agent.state === "BACKING_UP" && trajectory.maxHeight > HIGH_BALL_THRESHOLD) {
     const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
     if (distToLanding > BACKUP_DRIFT_THRESHOLD) {
       return;
     }
   }
 
-  // フライで既にPURSUING → 知覚更新のみ
-  if (agent.state === "PURSUING" && !trajectory.isGroundBall) {
+  // 高い打球で既にPURSUING → 知覚更新のみ
+  if (agent.state === "PURSUING" && trajectory.maxHeight > HIGH_BALL_THRESHOLD) {
     agent.targetPos = agent.perceivedLanding.position;
     return;
   }
@@ -208,9 +210,9 @@ export function autonomousDecide(
   let myPursuitScore = agent.pursuitScore ?? -1;
   const myPursuitTarget = agent.pursuitTarget ?? agent.perceivedLanding.position;
 
-  // コーディネーション: ゴロはトップ2が追跡可能、フライはトップ1のみ
+  // コーディネーション: 低い打球は2人追跡可能、高い打球は1人のみ
   if (myPursuitScore > 0) {
-    const maxConcurrentPursuers = trajectory.isGroundBall ? 2 : 1;
+    const maxConcurrentPursuers = trajectory.maxHeight < CONCURRENT_PURSUIT_HEIGHT ? 2 : 1;
     let betterCount = 0;
     for (const other of allAgents) {
       if (other === agent) continue;
@@ -230,9 +232,11 @@ export function autonomousDecide(
   const scores: ActionScore[] = [];
   scores.push({ action: "pursuit", score: myPursuitScore, target: myPursuitTarget });
   const coverScores = calcCoverScores(agent, observation, trajectory, bases, outs);
-  // カバー減衰: 着弾距離ベース（近い=追跡優先、遠い=カバー重要）
-  // ポップフライ(20m)→0.25, 通常フライ(60m)→0.7, 深いフライ(90m)→0.7
-  const coverDamping = trajectory.isGroundBall
+  // カバー減衰: 打球高さ+着弾距離の連続関数
+  // 低い打球(ゴロ/低ライナー): 追跡優先でカバー弱め(0.5)
+  // 近距離フライ(ポップ20m): 追跡優先(0.25)
+  // 遠距離フライ(60m+): カバー重要(0.7)
+  const coverDamping = trajectory.maxHeight < HIGH_BALL_THRESHOLD
     ? GROUND_BALL_COVER_DAMPING
     : clamp(trajectory.landingDistance / 80, 0.15, 0.7);
   for (const s of coverScores) {
@@ -420,8 +424,8 @@ function calcCoverScores(
 ): ActionScore[] {
   const results: ActionScore[] = [];
 
-  // リレー判定: フライで着弾距離が長い場合
-  if (!trajectory.isGroundBall && trajectory.landingDistance >= RELAY_DISTANCE_THRESHOLD) {
+  // リレー判定: 高い打球で着弾距離が長い場合
+  if (trajectory.maxHeight > HIGH_BALL_THRESHOLD && trajectory.landingDistance >= RELAY_DISTANCE_THRESHOLD) {
     const relayResult = calcRelayScore(agent, observation, trajectory);
     if (relayResult) results.push(relayResult);
   }
