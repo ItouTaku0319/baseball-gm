@@ -678,6 +678,12 @@ function updateDecision(
     return;
   }
 
+  // フライ時、OFが既にBACKING_UP → 目標を維持（ドリフト目標の毎ティック再計算防止）
+  // ゴロの場合はOFも再判定が必要（知覚更新で追跡に切り替わる可能性あり）
+  if (agent.state === "BACKING_UP" && agent.pos >= 7 && !trajectory.isGroundBall) {
+    return;
+  }
+
   const perceived = agent.perceivedLanding.position;
   // GC圧力削減: 距離二乗で比較できる箇所はDistanceSqを使用
   const distToTargetSq = vec2DistanceSq(agent.currentPos, perceived);
