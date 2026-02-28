@@ -131,11 +131,11 @@ function calcGroundBallGapProb(direction: number, exitVelocity: number): number 
     if (dist < minDistFromFielder) minDistFromFielder = dist;
   }
 
-  // 野手近く（<8°）→ 抜けない
-  if (minDistFromFielder < 8) return 0;
+  // 野手近く（<7°）→ 抜けない
+  if (minDistFromFielder < 7) return 0;
 
-  // 野手から離れるほど抜けやすい（8°から線形に増加、最大16°で飽和）
-  const gapFactor = clamp((minDistFromFielder - 8) / 8, 0, 1);
+  // 野手から離れるほど抜けやすい（7°から線形に増加、最大15°で飽和）
+  const gapFactor = clamp((minDistFromFielder - 7) / 8, 0, 1);
 
   // 打球速度ボーナス（130km/h以上で加算）
   const speedFactor = clamp((exitVelocity - 130) / 40, 0, 1);
@@ -165,7 +165,10 @@ export function resolvePlayWithAgents(
   if (ball.launchAngle < 10 && ball.exitVelocity >= GROUND_BALL_GAP_MIN_EV) {
     const gapProb = calcGroundBallGapProb(ball.direction, ball.exitVelocity);
     if (gapProb > 0 && rng() < gapProb) {
-      return { result: "single", fielderPos: 6 }; // ギャップ抜けシングル
+      // 打球方向から回収する外野手を判定（LF:0-30°, CF:30-60°, RF:60-90°）
+      const ofPos: FielderPosition =
+        ball.direction < 30 ? 7 : ball.direction < 60 ? 8 : 9;
+      return { result: "single", fielderPos: ofPos };
     }
   }
 
@@ -333,8 +336,9 @@ export function resolvePlayWithAgents(
     return { ...res, agentTimeline: collectedTimeline };
   }
 
-  // ケース3: 誰も到達できなかった
-  const retriever = findNearestAgent(agents, trajectory.landingPos);
+  // ケース3: 誰も到達できなかった → ボール転がり位置で回収者を判定
+  const restPos = estimateRestPosition(trajectory);
+  const retriever = findNearestAgent(agents, restPos);
   if (!retriever) {
     return {
       result: "single",
@@ -352,6 +356,7 @@ export function resolvePlayWithAgents(
     agents,
     timeline,
     rng,
+    restPos,
     finalT
   );
   return { ...res, agentTimeline: collectedTimeline };
@@ -395,7 +400,7 @@ function createAgents(
     }
     // ライナーは弾道が低く速いため初動判断が遅れる
     if (trajectory.ballType === "line_drive") {
-      baseReaction *= 2.5;
+      baseReaction *= 3.0;
     }
 
     // 走速
@@ -1458,8 +1463,9 @@ function resolveFieldingError(
       assistPos: undefined,
     };
   }
-  // フライ落球 → 最寄り野手が回収
-  const retriever = findNearestAgent(agents, trajectory.landingPos);
+  // フライ落球 → ボール転がり位置で回収者を判定
+  const restPos = estimateRestPosition(trajectory);
+  const retriever = findNearestAgent(agents, restPos);
   if (!retriever) {
     return {
       result: "error",
@@ -1477,6 +1483,7 @@ function resolveFieldingError(
     agents,
     timeline,
     rng,
+    restPos,
     simEndTime
   );
 }
@@ -1491,8 +1498,11 @@ function resolveHitWithRetriever(
   agents: FielderAgent[],
   _timeline: AgentTimelineEntry[],
   rng: () => number,
+  _restPos: Vec2,
   simEndTime: number
 ): AgentFieldingResult {
+  // 回収者選定はrestPos（転がり先）で行うが、タイミング計算はlandingPos（着地点）を使用
+  // restPosで距離計算するとrollout分が加算され三塁打が過大になるため
   const distToLanding = vec2Distance(
     retriever.currentPos,
     trajectory.landingPos
@@ -1709,34 +1719,55 @@ function calcCutoffPos(
 }
 
 
+/**
+ * 着地後のボール転がり位置を推定する。
+ * ライナー/フライは着地後にバウンドして外野方向に転がる。
+ * ゴロは既にシミュレーション中に経路が計算されるため着地位置をそのまま返す。
+ */
+function estimateRestPosition(trajectory: BallTrajectory): Vec2 {
+  if (trajectory.isGroundBall) return trajectory.landingPos;
+
+  const lp = trajectory.landingPos;
+  const dist = trajectory.landingDistance;
+  if (dist < 1) return lp;
+
+  // 着地時の平均水平速度を推定
+  const avgHorizontalSpeed = dist / Math.max(trajectory.flightTime, 0.5);
+  // バウンド後の速度（草地で大きく減衰）
+  const BOUNCE_FACTOR = 0.30; // 草地のバウンド係数
+  const GRASS_FRICTION = 2.5; // 芝生の摩擦減速度(m/s²)
+  const postBounceSpeed = avgHorizontalSpeed * BOUNCE_FACTOR;
+  // ロールアウト距離 = v²/(2a)
+  const rollout = (postBounceSpeed * postBounceSpeed) / (2 * GRASS_FRICTION);
+  if (rollout < 1) return lp;
+
+  // ホームから着地点方向にロールアウト分延長
+  const dirX = lp.x / dist;
+  const dirY = lp.y / dist;
+  return {
+    x: lp.x + dirX * rollout,
+    y: lp.y + dirY * rollout,
+  };
+}
+
 function findNearestAgent(
   agents: FielderAgent[],
   pos: Vec2
 ): FielderAgent | null {
-  // 優先度順にプールを構成:
-  // 1. PURSUING状態の野手（実際に追跡していた）
-  // 2. 内野手・外野手（P/Cを除外）
-  // 3. 全員（最終フォールバック）
-  const pursuers = agents.filter((a) => a.state === "PURSUING");
-  if (pursuers.length > 0) {
-    let nearest: FielderAgent | null = null;
-    let minDist = Infinity;
-    for (const a of pursuers) {
-      const d = vec2Distance(a.currentPos, pos);
-      if (d < minDist) { minDist = d; nearest = a; }
-    }
-    return nearest;
-  }
+  // 推定到達時間ベースで回収野手を決定。
   // P/Cは回収者にならない（バックアップ/カバー担当）
-  const fieldPlayers = agents.filter((a) => a.pos >= 3);
-  const pool = fieldPlayers.length > 0 ? fieldPlayers : agents;
-  let nearest: FielderAgent | null = null;
-  let minDist = Infinity;
-  for (const a of pool) {
-    const d = vec2Distance(a.currentPos, pos);
-    if (d < minDist) { minDist = d; nearest = a; }
+  let best: FielderAgent | null = null;
+  let bestTime = Infinity;
+  for (const a of agents) {
+    if (a.pos <= 2) continue;
+    const dist = vec2Distance(a.currentPos, pos);
+    const arrivalTime = a.maxSpeed > 0 ? dist / a.maxSpeed : Infinity;
+    if (arrivalTime < bestTime) {
+      bestTime = arrivalTime;
+      best = a;
+    }
   }
-  return nearest;
+  return best;
 }
 
 function getFenceDistance(directionDeg: number): number {

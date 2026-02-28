@@ -62,7 +62,7 @@ export const DEFAULT_FIELDER_POSITIONS: ReadonlyMap<FielderPosition, FieldPositi
   [5, { x: -19, y: 27   }], // 3B（守備範囲拡大のため3m後退）
   [6, { x: -12, y: 33   }], // SS
   [7, { x: -28, y: 75   }], // LF (フェンス95m × 79%)
-  [8, { x: 0,   y: 84   }], // CF (フェンス118m × 71%)
+  [8, { x: 0,   y: 80   }], // CF (フェンス118m × 68%、やや浅めで回収率改善)
   [9, { x: 28,  y: 75   }], // RF (フェンス95m × 79%)
 ]);
 

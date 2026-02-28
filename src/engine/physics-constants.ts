@@ -125,7 +125,7 @@ export const GROUND_BALL_CATCH_SPEED_PENALTY = 0.007; // ボール速度(>20m/s)
 export const GROUND_BALL_CATCH_FLOOR = 0.85;          // 捕球率の下限
 export const GROUND_BALL_REACH_PENALTY = 0.08;        // リーチ端での捕球率低下（最大8%）
 // ゴロ「ギャップ抜け」確率（内野手の間を抜ける打球）
-export const GROUND_BALL_GAP_BASE_PROB = 0.50;       // ギャップ中心での基本抜け確率
+export const GROUND_BALL_GAP_BASE_PROB = 0.82;       // ギャップ中心での基本抜け確率
 export const GROUND_BALL_GAP_SPEED_BONUS = 0.10;     // 高速ゴロ(130km/h+)追加抜け確率
 export const GROUND_BALL_GAP_MIN_EV = 90;            // この打球速度(km/h)未満はギャップ抜けなし
 
