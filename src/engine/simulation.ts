@@ -626,7 +626,7 @@ function resolveSafetyBunt(batter: Player, bases: BaseRunners): { result: AtBatR
 }
 
 /** HR/フェンス直撃チェック（fly_ball / popup 対象） */
-function checkHomeRun(
+export function checkHomeRun(
   ball: BattedBall,
   landing: BallLanding,
   batter: Player

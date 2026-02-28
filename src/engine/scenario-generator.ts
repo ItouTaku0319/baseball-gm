@@ -8,7 +8,7 @@ import type { Player, Position } from "../models/player";
 import type { AtBatLog } from "../models/league";
 import { calcBallLanding } from "./fielding-ai";
 import { resolvePlayWithAgents } from "./fielding-agent";
-import { classifyBattedBallType } from "./simulation";
+import { classifyBattedBallType, checkHomeRun } from "./simulation";
 import type { FielderPosition, AgentFieldingResult } from "./fielding-agent-types";
 
 const POSITION_MAP: Record<FielderPosition, Position> = {
@@ -68,6 +68,10 @@ export function generateScenarioLog(params: ScenarioParams): AtBatLog {
 
   const ball = { direction, launchAngle, exitVelocity, type: ballType };
 
+  // HR/フェンス直撃チェック（本番simulation.tsと同じロジックで事前判定）
+  const hrCheck = checkHomeRun(ball, landing, d50Batter);
+
+  // エージェントは常に実行（守備側の反応アニメーション表示のため）
   const agentResult: AgentFieldingResult = resolvePlayWithAgents(
     ball, landing, fielderMap, d50Batter, emptyBases, 0,
     {
@@ -77,17 +81,21 @@ export function generateScenarioLog(params: ScenarioParams): AtBatLog {
     },
   );
 
+  // HRまたはフェンス直撃の場合はエージェント結果を上書き
+  const finalResult = hrCheck ? hrCheck.result : agentResult.result;
+  const finalFielderPos = hrCheck ? hrCheck.fielderPos : agentResult.fielderPos;
+
   return {
     inning: 1,
     halfInning: "top",
     batterId: d50Batter.id,
     pitcherId: "d50-P",
-    result: agentResult.result,
+    result: finalResult,
     battedBallType: ballType,
     direction,
     launchAngle,
     exitVelocity,
-    fielderPosition: agentResult.fielderPos,
+    fielderPosition: finalFielderPos,
     estimatedDistance: Math.round(landing.distance * 10) / 10,
     basesBeforePlay: [false, false, false],
     outsBeforePlay: 0,
