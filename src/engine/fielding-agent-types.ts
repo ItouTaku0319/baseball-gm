@@ -236,6 +236,7 @@ export function gaussianRandom(
 }
 
 // --- ゾーン責任 ---
+// このアプローチの方法良くない気がする
 // 打球方向角: 0°=三塁ファウル線, 45°=センター, 90°=一塁ファウル線
 export const PRIMARY_ZONE: Record<FielderPosition, { min: number; max: number } | null> = {
   1: null,  // P: ゾーンなし（投手ゴロはupdateDecisionで特別処理）

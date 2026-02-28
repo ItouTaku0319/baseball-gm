@@ -62,6 +62,9 @@ import {
   DP_PIVOT_SUCCESS_SPEED_FACTOR,
   DP_STEP_ON_BASE_SUCCESS,
   DP_STEP_ON_BASE_SPEED_FACTOR,
+  OF_BACKUP_MAX_DIST,
+  OF_DRIFT_MIN,
+  OF_DRIFT_MAX,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -219,7 +222,7 @@ export function resolvePlayWithAgents(
     if (!trajectory.isGroundBall && trajectory.landingDistance >= 50 && ball.launchAngle >= 20) {
       for (const agent of agents) {
         if (agent.pos >= 3 && agent.pos <= 6 && agent.state === "REACTING") {
-          assignNonPursuitRole(agent, trajectory, bases, outs);
+          assignNonPursuitRole(agent, trajectory, bases, outs, agents);
         }
       }
     }
@@ -654,6 +657,21 @@ function updateDecision(
   launchAngle?: number
 ): void {
   if (agent.hasYielded) {
+    if (agent.pos >= 7) {
+      const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
+      if (distToLanding >= OF_BACKUP_MAX_DIST) {
+        // 遠方OF → ドリフト
+        const driftRatio = OF_DRIFT_MIN + (agent.skill.fielding / 100) * (OF_DRIFT_MAX - OF_DRIFT_MIN);
+        const backupPos = calcBackupPosition(trajectory);
+        agent.state = "BACKING_UP";
+        agent.action = "backup";
+        agent.targetPos = {
+          x: agent.currentPos.x + (backupPos.x - agent.currentPos.x) * driftRatio,
+          y: agent.currentPos.y + (backupPos.y - agent.currentPos.y) * driftRatio,
+        };
+        return;
+      }
+    }
     agent.state = "BACKING_UP";
     agent.action = "backup";
     agent.targetPos = calcBackupPosition(trajectory);
@@ -690,7 +708,7 @@ function updateDecision(
       if (agent.pos >= 3 && agent.pos <= 6) {
         const ipDist = Math.sqrt(intercept.point.x ** 2 + intercept.point.y ** 2);
         if (ipDist > INFIELDER_GROUND_PURSUIT_LIMIT) {
-          assignNonPursuitRole(agent, trajectory, bases, outs);
+          assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
           return;
         }
       }
@@ -706,7 +724,7 @@ function updateDecision(
         return true;
       });
       if (closerPursuer) {
-        assignNonPursuitRole(agent, trajectory, bases, outs);
+        assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
         return;
       }
       agent.state = "PURSUING";
@@ -719,7 +737,7 @@ function updateDecision(
 
     // 内野手は深い停止球を追わない（外野手に任せる）
     if (agent.pos >= 3 && agent.pos <= 6 && trajectory.landingDistance > INFIELDER_GROUND_PURSUIT_LIMIT) {
-      assignNonPursuitRole(agent, trajectory, bases, outs);
+      assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
       return;
     }
 
@@ -738,7 +756,7 @@ function updateDecision(
         return true;
       });
       if (closerChaser) {
-        assignNonPursuitRole(agent, trajectory, bases, outs);
+        assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
         return;
       }
       agent.state = "PURSUING";
@@ -747,7 +765,7 @@ function updateDecision(
       return;
     }
 
-    assignNonPursuitRole(agent, trajectory, bases, outs);
+    assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
     return;
   }
 
@@ -765,7 +783,7 @@ function updateDecision(
   const canReachFly = distToTarget <= flyRange;
 
   if (!canReachFly) {
-    assignNonPursuitRole(agent, trajectory, bases, outs);
+    assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
     return;
   }
 
@@ -780,7 +798,7 @@ function updateDecision(
       return ofDist <= ofRange;
     });
     if (ofCanReach) {
-      assignNonPursuitRole(agent, trajectory, bases, outs);
+      assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
       return;
     }
   }
@@ -799,7 +817,7 @@ function updateDecision(
     return true;
   });
   if (closerFlyPursuer) {
-    assignNonPursuitRole(agent, trajectory, bases, outs);
+    assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
     return;
   }
 
@@ -818,7 +836,8 @@ function assignNonPursuitRole(
   agent: FielderAgent,
   trajectory: BallTrajectory,
   _bases: BaseRunners,
-  _outs: number
+  _outs: number,
+  allAgents: FielderAgent[] = []
 ): void {
   const pos = agent.pos;
   switch (pos) {
@@ -843,11 +862,19 @@ function assignNonPursuitRole(
       agent.action = "cover_base";
       agent.targetPos = { ...BASE_POSITIONS.first };
       break;
-    case 4: // 2B
+    case 4: // 2B — 深いフライの中継判断（独立判断+周囲観察）
       if (!trajectory.isGroundBall && trajectory.landingDistance >= 60) {
-        agent.state = "COVERING";
-        agent.action = "relay";
-        agent.targetPos = calcCutoffPos(trajectory, "right");
+        const isBallSide4 = trajectory.direction > 45;  // 2Bは右側担当
+        const someoneRelaying4 = allAgents.some(a => a !== agent && a.action === "relay");
+        if (isBallSide4 && !someoneRelaying4) {
+          agent.state = "COVERING";
+          agent.action = "relay";
+          agent.targetPos = calcCutoffPos(trajectory);
+        } else {
+          agent.state = "COVERING";
+          agent.action = "cover_base";
+          agent.targetPos = { ...BASE_POSITIONS.second };
+        }
       } else {
         agent.state = "COVERING";
         agent.action = "cover_base";
@@ -859,22 +886,45 @@ function assignNonPursuitRole(
       agent.action = "cover_base";
       agent.targetPos = { ...BASE_POSITIONS.third };
       break;
-    case 6: // SS
+    case 6: // SS — 深いフライの中継判断（独立判断+周囲観察）
       if (!trajectory.isGroundBall && trajectory.landingDistance >= 60) {
-        agent.state = "COVERING";
-        agent.action = "relay";
-        agent.targetPos = calcCutoffPos(trajectory, "left");
+        const isBallSide6 = trajectory.direction <= 45;  // SSは左側担当
+        const someoneRelaying6 = allAgents.some(a => a !== agent && a.action === "relay");
+        if (isBallSide6 && !someoneRelaying6) {
+          agent.state = "COVERING";
+          agent.action = "relay";
+          agent.targetPos = calcCutoffPos(trajectory);
+        } else {
+          agent.state = "COVERING";
+          agent.action = "cover_base";
+          agent.targetPos = { ...BASE_POSITIONS.second };
+        }
       } else {
         agent.state = "COVERING";
         agent.action = "cover_base";
         agent.targetPos = { ...BASE_POSITIONS.second };
       }
       break;
-    default: // 7, 8, 9 (OF)
-      agent.state = "BACKING_UP";
-      agent.action = "backup";
-      agent.targetPos = calcBackupPosition(trajectory);
+    default: { // 7, 8, 9 (OF) — 距離に応じたバックアップ/ドリフト
+      const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
+      if (distToLanding < OF_BACKUP_MAX_DIST) {
+        // 近い(隣接OF) → 通常バックアップ
+        agent.state = "BACKING_UP";
+        agent.action = "backup";
+        agent.targetPos = calcBackupPosition(trajectory);
+      } else {
+        // 遠い(反対側OF) → 軽くドリフト
+        const driftRatio = OF_DRIFT_MIN + (agent.skill.fielding / 100) * (OF_DRIFT_MAX - OF_DRIFT_MIN);
+        const backupPos = calcBackupPosition(trajectory);
+        agent.state = "BACKING_UP";
+        agent.action = "backup";
+        agent.targetPos = {
+          x: agent.currentPos.x + (backupPos.x - agent.currentPos.x) * driftRatio,
+          y: agent.currentPos.y + (backupPos.y - agent.currentPos.y) * driftRatio,
+        };
+      }
       break;
+    }
   }
 }
 
@@ -1779,8 +1829,7 @@ function calcBackupPosition(trajectory: BallTrajectory): Vec2 {
 }
 
 function calcCutoffPos(
-  trajectory: BallTrajectory,
-  _side: "left" | "right"
+  trajectory: BallTrajectory
 ): Vec2 {
   const landing = trajectory.landingPos;
   return {

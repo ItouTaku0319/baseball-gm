@@ -227,3 +227,6 @@ export const AGENT_ACCELERATION_TIME = 0.3;      // 0→最高速に達するま
 export const AGENT_BASE_SPEED_IF = 6.5;          // 内野手基本走速(m/s)
 export const AGENT_BASE_SPEED_OF = 7.0;          // 外野手基本走速(m/s)
 export const AGENT_SPEED_SKILL_FACTOR = 2.5;     // speed/100 あたりの走速追加(m/s)
+export const OF_BACKUP_MAX_DIST = 40;  // OFバックアップ判定距離(m) — これ以上は「遠い」
+export const OF_DRIFT_MIN = 0.10;      // 遠方OFドリフト最小割合 (fielding=0)
+export const OF_DRIFT_MAX = 0.25;      // 遠方OFドリフト最大割合 (fielding=100)
