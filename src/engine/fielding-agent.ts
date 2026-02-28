@@ -976,6 +976,26 @@ function moveAgent(agent: FielderAgent, dt: number): void {
     agent.currentPos.x += (dx / dist) * moveDist;
     agent.currentPos.y += (dy / dist) * moveDist;
   }
+
+  // フェンス境界クランプ: 野手がフェンスを超えないようにする
+  if (agent.currentPos.y > 0) {
+    const distFromHome = Math.sqrt(
+      agent.currentPos.x ** 2 + agent.currentPos.y ** 2
+    );
+    if (distFromHome > 0) {
+      // atan2(x, y) で角度を得て 0-90° スケール（0°=三塁線, 45°=センター, 90°=一塁線）に変換
+      const dirDeg = Math.atan2(agent.currentPos.x, agent.currentPos.y) * (180 / Math.PI) + 45;
+      const clampedDir = Math.max(0, Math.min(90, dirDeg));
+      const fenceDist = FENCE_BASE + FENCE_CENTER_EXTRA * Math.sin((clampedDir * 2 * Math.PI) / 180);
+      // フェンスの1m手前を限界とする
+      const maxDist = fenceDist - 1.0;
+      if (distFromHome > maxDist) {
+        const scale = maxDist / distFromHome;
+        agent.currentPos.x *= scale;
+        agent.currentPos.y *= scale;
+      }
+    }
+  }
 }
 
 // ====================================================================
