@@ -108,6 +108,7 @@ export const CALLOFF_TARGET_THRESHOLD = 15;    // コールオフ判定ターゲ
 export const CLOSER_PURSUER_INTERCEPT_RATIO = 0.7; // インターセプト時（70%以内なら譲る）
 export const CLOSER_PURSUER_CHASE_RATIO = 0.6;     // チェーシング/フライ時（60%以内なら譲る）
 export const PITCHER_GROUND_BALL_MAX_DIST = 30;    // 投手がゴロを追跡する最大着弾距離(m)
+export const INFIELDER_GROUND_PURSUIT_LIMIT = 38;  // 内野手がゴロを追跡する最大深度(m)
 
 // 併殺(DP)成功率
 // DP試行時（2塁送球後ピボット→1塁送球）の成功率

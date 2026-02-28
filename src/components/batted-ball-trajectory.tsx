@@ -5,6 +5,8 @@ import type { AtBatLog } from "@/models/league";
 import { getFenceDistance, estimateDistance } from "@/engine/simulation";
 import { GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR, GROUND_BALL_AVG_SPEED_RATIO, FENCE_HEIGHT } from "@/engine/physics-constants";
 import { DEFAULT_FIELDER_POSITIONS } from "@/engine/fielding-ai";
+import type { AgentTimelineEntry, AgentState, ThrowPlay } from "@/engine/fielding-agent-types";
+import { BASE_POSITIONS } from "@/engine/fielding-agent-types";
 
 // ---- ユーティリティ ----
 
@@ -614,9 +616,126 @@ interface AnimatedFieldViewProps {
   totalTime: number;
   trailPoints: { x: number; y: number }[];
   distScale: number;
+  agentTimeline?: AgentTimelineEntry[];
 }
 
-function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale }: AnimatedFieldViewProps) {
+const AGENT_STATE_COLOR: Record<AgentState, string> = {
+  READY: "rgba(100,180,255,0.55)",
+  REACTING: "#facc15",
+  PURSUING: "#f97316",
+  FIELDING: "#22c55e",
+  THROWING: "#ef4444",
+  COVERING: "#a855f7",
+  BACKING_UP: "#a855f7",
+  HOLDING: "rgba(100,180,255,0.55)",
+};
+
+// 最終フレーム以降: COVERING/BACKING_UP/PURSUING野手を目標に向かって外挿
+const POST_CATCH_SPEED = 7.0; // 捕球後の野手移動速度(m/s)
+
+function extrapolateAgent(ag: AgentTimelineEntry["agents"][0], dt: number): AgentTimelineEntry["agents"][0] {
+  // 動くべき状態のみ外挿（FIELDING/THROWING/READY/HOLDING は動かない）
+  if (ag.state !== "COVERING" && ag.state !== "BACKING_UP" && ag.state !== "PURSUING") return ag;
+  const dx = ag.targetX - ag.x;
+  const dy = ag.targetY - ag.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist < 0.3) return { ...ag, x: ag.targetX, y: ag.targetY }; // 到着済み
+  const move = Math.min(POST_CATCH_SPEED * dt, dist);
+  return { ...ag, x: ag.x + (dx / dist) * move, y: ag.y + (dy / dist) * move };
+}
+
+function getAgentFrameAtTime(timeline: AgentTimelineEntry[], t: number) {
+  if (timeline.length === 0) return null;
+  if (t <= timeline[0].t) return timeline[0];
+  if (t >= timeline[timeline.length - 1].t) {
+    // 最終フレーム以降: 野手を目標に向かって外挿し続ける
+    const last = timeline[timeline.length - 1];
+    const elapsed = t - last.t;
+    if (elapsed <= 0) return last;
+    return {
+      ...last,
+      t,
+      agents: last.agents.map(ag => extrapolateAgent(ag, elapsed)),
+    };
+  }
+  for (let i = 0; i < timeline.length - 1; i++) {
+    if (timeline[i].t <= t && t < timeline[i + 1].t) {
+      const ratio = (t - timeline[i].t) / (timeline[i + 1].t - timeline[i].t);
+      const a = timeline[i];
+      const b = timeline[i + 1];
+      return {
+        t,
+        ballPos: { x: a.ballPos.x + (b.ballPos.x - a.ballPos.x) * ratio, y: a.ballPos.y + (b.ballPos.y - a.ballPos.y) * ratio },
+        ballHeight: a.ballHeight + (b.ballHeight - a.ballHeight) * ratio,
+        agents: b.agents.map((ag, j) => ({
+          ...ag,
+          x: a.agents[j] ? a.agents[j].x + (ag.x - a.agents[j].x) * ratio : ag.x,
+          y: a.agents[j] ? a.agents[j].y + (ag.y - a.agents[j].y) * ratio : ag.y,
+        })),
+      };
+    }
+  }
+  return timeline[timeline.length - 1];
+}
+
+// 送球フェーズの各セグメント（from位置→base位置）の時刻計算
+const THROW_TRANSFER_TIME = 0.35; // 持ち替え時間(秒)
+const THROW_SPEED = 38; // 平均送球速度(m/s, ~137km/h)
+
+interface ThrowSegment {
+  fromSvg: { x: number; y: number };
+  toSvg: { x: number; y: number };
+  startTime: number;
+  endTime: number;
+  base: string;
+}
+
+function buildThrowTimeline(
+  throwPlays: ThrowPlay[],
+  agentTimeline: AgentTimelineEntry[],
+): ThrowSegment[] {
+  if (throwPlays.length === 0 || agentTimeline.length === 0) return [];
+  const lastFrame = agentTimeline[agentTimeline.length - 1];
+  const segments: ThrowSegment[] = [];
+  let currentT = lastFrame.t + THROW_TRANSFER_TIME;
+
+  for (const play of throwPlays) {
+    // from位置: 最終フレームのエージェント位置 or 直前の送球先
+    let fromFieldPos: { x: number; y: number };
+    if (segments.length > 0) {
+      // 中継: 前の送球先がこの送球元
+      const baseName = throwPlays[segments.length - 1].base;
+      const bp = BASE_POSITIONS[baseName];
+      fromFieldPos = bp ? { x: bp.x, y: bp.y } : { x: 0, y: 0 };
+      currentT += THROW_TRANSFER_TIME; // 中継の持ち替え
+    } else {
+      // 最初の送球: fromエージェントの位置
+      const fromAgent = lastFrame.agents.find(a => a.pos === play.from);
+      fromFieldPos = fromAgent ? { x: fromAgent.x, y: fromAgent.y } : { x: 0, y: 0 };
+    }
+
+    // to位置: base の塁座標
+    const basePos = BASE_POSITIONS[play.base];
+    const toFieldPos = basePos ? { x: basePos.x, y: basePos.y } : { x: 0, y: 0 };
+
+    const dx = toFieldPos.x - fromFieldPos.x;
+    const dy = toFieldPos.y - fromFieldPos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const throwTime = dist / THROW_SPEED;
+
+    segments.push({
+      fromSvg: fieldXYtoSvg(fromFieldPos.x, fromFieldPos.y),
+      toSvg: fieldXYtoSvg(toFieldPos.x, toFieldPos.y),
+      startTime: currentT,
+      endTime: currentT + throwTime,
+      base: play.base,
+    });
+    currentT += throwTime;
+  }
+  return segments;
+}
+
+function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale, agentTimeline }: AnimatedFieldViewProps) {
   const fencePoints = Array.from({ length: 19 }, (_, i) => {
     const deg = i * 5;
     const dist = getFenceDistance(deg);
@@ -629,6 +748,12 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
   const second = SECOND_COORD;
   const third = THIRD_COORD;
   const diamondPath = `M ${home.x} ${home.y} L ${first.x.toFixed(1)} ${first.y.toFixed(1)} L ${second.x.toFixed(1)} ${second.y.toFixed(1)} L ${third.x.toFixed(1)} ${third.y.toFixed(1)} Z`;
+
+  // 送球タイムライン
+  const throwSegments = useMemo(() => {
+    if (!log.throwPlays || !agentTimeline || agentTimeline.length === 0) return [];
+    return buildThrowTimeline(log.throwPlays, agentTimeline);
+  }, [log.throwPlays, agentTimeline]);
 
   const isAnimating = currentTime >= 0;
 
@@ -669,6 +794,26 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
   }, [hasFieldData, isGrounder, isHomerun, isCaughtFly, isFenceHit, estimatedDist, displayDist, direction, exitVelocity, launchAngle, fenceDistForDir]);
   const dot = finalPos;
 
+  // 捕球時刻: agentTimelineから最初にFIELDINGになったフレームの時刻を検出
+  const catchTime = useMemo(() => {
+    if (!agentTimeline || agentTimeline.length === 0) return Infinity;
+    for (const frame of agentTimeline) {
+      if (frame.agents.some(a => a.state === "FIELDING")) return frame.t;
+    }
+    // ヒット時: FIELDINGフレームがないためタイムライン終了時点を回収時刻として使用
+    return agentTimeline[agentTimeline.length - 1].t;
+  }, [agentTimeline]);
+
+  // 捕球した野手の位置（捕球時のSVG座標）
+  const catcherSvgPos = useMemo(() => {
+    if (!agentTimeline || catchTime === Infinity) return null;
+    const frame = agentTimeline.find(f => f.t >= catchTime);
+    if (!frame) return null;
+    const fielder = frame.agents.find(a => a.state === "FIELDING");
+    if (!fielder) return null;
+    return fieldXYtoSvg(fielder.x, fielder.y);
+  }, [agentTimeline, catchTime]);
+
   // アニメーション中のボール状態
   let ballGroundPos: { x: number; y: number } | null = null;
   let ballHeight = 0;
@@ -678,9 +823,12 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
   let bounceOnGround = false;
   let bounceFenceHitTime = -1; // バウンド中にフェンスに到達した時刻（-1=到達しない）
 
+  // 捕球後は打球軌道のボール描画をスキップ（送球フェーズで別途描画）
+  const ballCaught = agentTimeline && agentTimeline.length > 0 && currentTime >= catchTime;
+
   const flightTime = isGrounder ? totalTime : getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
 
-  if (isAnimating && hasFieldData && currentTime <= totalTime) {
+  if (isAnimating && hasFieldData && currentTime <= totalTime && !ballCaught) {
     if (isGrounder) {
       isBouncePhase = true;
       const state = getGroundBallStateAtTime(exitVelocity, launchAngle, direction, estimatedDist, currentTime);
@@ -751,8 +899,10 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
   const flightTrailRatio = isGrounder ? 0 : (totalTime > 0 ? effectiveFlightTime / totalTime : 1);
   const flightTrailEndIdx = Math.floor(flightTrailRatio * trailPoints.length);
 
+  // 捕球後はボール軌跡の進行を捕球時点で停止
+  const effectiveBallTime = ballCaught ? catchTime : currentTime;
   const trailEnd = isAnimating && totalTime > 0
-    ? Math.floor((clampNum(currentTime / totalTime, 0, 1)) * trailPoints.length)
+    ? Math.floor((clampNum(effectiveBallTime / totalTime, 0, 1)) * trailPoints.length)
     : (isAnimating ? trailPoints.length : 0);
 
   // フライフェーズの軌跡（実線）
@@ -800,10 +950,10 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
 
   const outsBeforePlay = log.outsBeforePlay ?? null;
 
-  // 静的表示（アニメーション非再生）の落下地点マーカー
-  const showStaticDot = dot && !isAnimating;
-  // アニメーション完了後の落下地点マーカー
-  const showLandingDot = dot && isAnimating && currentTime >= totalTime;
+  // 落下地点マーカー（agentTimelineがある場合は非表示 — ボールは野手が取る）
+  const hasTimeline = agentTimeline && agentTimeline.length > 0;
+  const showStaticDot = dot && !isAnimating && !hasTimeline;
+  const showLandingDot = dot && isAnimating && currentTime >= totalTime && !hasTimeline;
 
   // フェンス直撃エフェクト表示判定（直撃 or バウンド経由）
   const fenceHitEffectTime = isFenceHit ? (() => {
@@ -829,16 +979,56 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
         return <circle key={baseIdx} cx={p.x} cy={p.y} r={3.5} fill="#22c55e" stroke="white" strokeWidth="0.8" />;
       })}
 
-      {/* 野手デフォルト位置 */}
-      {Array.from(DEFAULT_FIELDER_POSITIONS.entries()).map(([pos, coord]) => {
-        const p = fieldXYtoSvg(coord.x, coord.y);
-        return (
-          <g key={pos}>
-            <circle cx={p.x} cy={p.y} r={4.5} fill="rgba(100,180,255,0.55)" stroke="rgba(100,180,255,0.9)" strokeWidth="0.8" />
-            <text x={p.x} y={p.y + 3} textAnchor="middle" fill="rgba(200,230,255,0.9)" fontSize="6" fontWeight="bold">{pos}</text>
-          </g>
-        );
-      })}
+      {/* 野手位置（エージェントタイムラインがあれば動的、なければデフォルト位置） */}
+      {(() => {
+        const isAnim = currentTime >= 0;
+        const frame = agentTimeline && agentTimeline.length > 0
+          ? getAgentFrameAtTime(agentTimeline, isAnim ? currentTime : agentTimeline[agentTimeline.length - 1].t)
+          : null;
+        if (frame) {
+          return frame.agents.map((ag) => {
+            let drawX = ag.x;
+            let drawY = ag.y;
+            // REACTING: 打球方向に少し身構える（知覚位置への微小移動で「反応中」を表現）
+            if (ag.state === "REACTING" && ag.perceivedX != null && ag.perceivedY != null) {
+              const pdx = ag.perceivedX - ag.x;
+              const pdy = ag.perceivedY - ag.y;
+              const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+              if (pdist > 0.1) {
+                const lean = Math.min(1.5, pdist * 0.03); // 最大1.5mの身構え
+                drawX += (pdx / pdist) * lean;
+                drawY += (pdy / pdist) * lean;
+              }
+            }
+            const p = fieldXYtoSvg(drawX, drawY);
+            const color = AGENT_STATE_COLOR[ag.state] ?? "rgba(100,180,255,0.55)";
+            return (
+              <g key={ag.pos}>
+                {/* PURSUING/COVERING時: 目標位置への矢印線 */}
+                {(ag.state === "PURSUING" || ag.state === "COVERING") && ag.targetX != null && ag.targetY != null && (
+                  <line
+                    x1={p.x} y1={p.y}
+                    x2={fieldXYtoSvg(ag.targetX, ag.targetY).x}
+                    y2={fieldXYtoSvg(ag.targetX, ag.targetY).y}
+                    stroke={color} strokeWidth="0.6" strokeDasharray="2,2" opacity="0.3"
+                  />
+                )}
+                <circle cx={p.x} cy={p.y} r={4.5} fill={color} stroke="white" strokeWidth="0.8" opacity="0.85" />
+                <text x={p.x} y={p.y + 3} textAnchor="middle" fill="white" fontSize="6" fontWeight="bold">{ag.pos}</text>
+              </g>
+            );
+          });
+        }
+        return Array.from(DEFAULT_FIELDER_POSITIONS.entries()).map(([pos, coord]) => {
+          const p = fieldXYtoSvg(coord.x, coord.y);
+          return (
+            <g key={pos}>
+              <circle cx={p.x} cy={p.y} r={4.5} fill="rgba(100,180,255,0.55)" stroke="rgba(100,180,255,0.9)" strokeWidth="0.8" />
+              <text x={p.x} y={p.y + 3} textAnchor="middle" fill="rgba(200,230,255,0.9)" fontSize="6" fontWeight="bold">{pos}</text>
+            </g>
+          );
+        });
+      })()}
 
       {/* 静的落下地点（アニメーション非再生時） */}
       {showStaticDot && (
@@ -993,6 +1183,80 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
           <circle cx={dot.x} cy={dot.y} r="5" fill="none" stroke="white" strokeWidth="0.8" opacity="0.5" />
         </>
       )}
+
+      {/* 捕球後: 野手がボールを持っている状態 + 送球アニメーション */}
+      {isAnimating && ballCaught && (() => {
+        const elements: React.ReactNode[] = [];
+        const firstThrowStart = throwSegments.length > 0 ? throwSegments[0].startTime : Infinity;
+        const lastThrowEnd = throwSegments.length > 0 ? throwSegments[throwSegments.length - 1].endTime : -1;
+        // 捕球直後〜送球開始前: ボールを野手の位置に描画
+        const isHoldingBall = currentTime >= catchTime && currentTime < firstThrowStart;
+        // 送球完了後: ボールを最後の送球先に描画
+        const throwDone = throwSegments.length > 0 && currentTime >= lastThrowEnd;
+        // 送球がない場合（フライアウト等）: ボールを野手の位置に描画し続ける
+        const noThrow = throwSegments.length === 0;
+        if ((isHoldingBall || noThrow) && catcherSvgPos) {
+          elements.push(
+            <circle key="held-ball"
+              cx={catcherSvgPos.x} cy={catcherSvgPos.y} r={3}
+              fill="white" stroke="#22c55e" strokeWidth="1" opacity="0.95"
+            />
+          );
+        }
+        // 送球セグメント描画
+        for (let si = 0; si < throwSegments.length; si++) {
+          const seg = throwSegments[si];
+          // 送球完了済み: 軌跡線を表示
+          if (currentTime >= seg.endTime) {
+            elements.push(
+              <line key={`throw-trail-${si}`}
+                x1={seg.fromSvg.x} y1={seg.fromSvg.y}
+                x2={seg.toSvg.x} y2={seg.toSvg.y}
+                stroke="#ef4444" strokeWidth="1" strokeDasharray="3,2" opacity="0.4"
+              />
+            );
+            // 塁到着エフェクト（短時間表示）
+            if (currentTime < seg.endTime + 0.3) {
+              elements.push(
+                <circle key={`throw-arrive-${si}`}
+                  cx={seg.toSvg.x} cy={seg.toSvg.y} r={6}
+                  fill="none" stroke="#ef4444" strokeWidth="1.5" opacity={0.6}
+                />
+              );
+            }
+          }
+          // 送球中: ボールドット + 軌跡線を描画
+          if (currentTime >= seg.startTime && currentTime < seg.endTime) {
+            const ratio = (currentTime - seg.startTime) / (seg.endTime - seg.startTime);
+            const bx = seg.fromSvg.x + (seg.toSvg.x - seg.fromSvg.x) * ratio;
+            const by = seg.fromSvg.y + (seg.toSvg.y - seg.fromSvg.y) * ratio;
+            elements.push(
+              <line key={`throw-partial-${si}`}
+                x1={seg.fromSvg.x} y1={seg.fromSvg.y}
+                x2={bx} y2={by}
+                stroke="#ef4444" strokeWidth="1.2" opacity="0.5"
+              />
+            );
+            elements.push(
+              <circle key={`throw-ball-${si}`}
+                cx={bx} cy={by} r={3}
+                fill="#ef4444" stroke="white" strokeWidth="0.8" opacity="0.95"
+              />
+            );
+          }
+        }
+        // 送球完了後: ボールを塁上に表示
+        if (throwDone) {
+          const lastSeg = throwSegments[throwSegments.length - 1];
+          elements.push(
+            <circle key="arrived-ball"
+              cx={lastSeg.toSvg.x} cy={lastSeg.toSvg.y} r={3}
+              fill="white" stroke="#ef4444" strokeWidth="1" opacity="0.9"
+            />
+          );
+        }
+        return elements;
+      })()}
 
       {/* アウトカウント表示 */}
       {outsBeforePlay !== null && (
@@ -1500,25 +1764,58 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
   // SideViewに渡すフェンスヒットフラグ（直撃 or バウンド経由）
   const isFenceHitForSideView = isFenceHit || !!bounceFenceInfo;
 
-  // 総アニメーション時間
+  // エージェントタイムラインの最終時刻
+  const lastAgentT = log.agentTimeline && log.agentTimeline.length > 0
+    ? log.agentTimeline[log.agentTimeline.length - 1].t : 0;
+
+  // 送球タイムラインの最終時刻
+  const throwEndT = useMemo(() => {
+    if (!log.throwPlays || !log.agentTimeline || log.agentTimeline.length === 0) return 0;
+    const segs = buildThrowTimeline(log.throwPlays, log.agentTimeline);
+    return segs.length > 0 ? segs[segs.length - 1].endTime + 0.3 : 0;
+  }, [log.throwPlays, log.agentTimeline]);
+
+  // 野手が全員ターゲットに到着するまでの時間（外挿込み）
+  const agentSettleT = useMemo(() => {
+    if (!log.agentTimeline || log.agentTimeline.length === 0) return 0;
+    const last = log.agentTimeline[log.agentTimeline.length - 1];
+    let maxExtra = 0;
+    for (const ag of last.agents) {
+      if (ag.state === "COVERING" || ag.state === "BACKING_UP" || ag.state === "PURSUING") {
+        const dx = ag.targetX - ag.x;
+        const dy = ag.targetY - ag.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 0.3) {
+          maxExtra = Math.max(maxExtra, dist / POST_CATCH_SPEED);
+        }
+      }
+    }
+    return last.t + maxExtra;
+  }, [log.agentTimeline]);
+
+  // 総アニメーション時間（打球軌道・エージェント外挿・送球の最大値）
   const totalTime = useMemo(() => {
-    if (!hasFieldData) return 0;
+    if (!hasFieldData) return Math.max(lastAgentT, throwEndT, agentSettleT);
+    let ballTime: number;
     if (isGrounder) {
       const tl = buildGroundBallTimeline(exitVelocity, launchAngle, estimatedDist);
-      return tl.totalTime;
+      ballTime = tl.totalTime;
+    } else {
+      const flightTime = getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
+      if (isHomerun || isCaughtFly) {
+        ballTime = flightTime;
+      } else if (isFenceHit) {
+        const fenceArrival = getFenceArrivalTime(exitVelocity, Math.max(launchAngle, 5), direction, distScale);
+        const fenceBounce = getFenceBounceBackStateAtTime(fenceDistForDir, direction, exitVelocity, launchAngle, 999);
+        ballTime = Math.min(fenceArrival, flightTime) + (fenceBounce?.totalBounceTime ?? 1.0);
+      } else {
+        const bounceInfo = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, estimatedDist, 999, fenceDistForDir);
+        const bounceAndRollTime = bounceInfo?.totalBounceTime ?? 0;
+        ballTime = flightTime + bounceAndRollTime;
+      }
     }
-    const flightTime = getBallFlightTime(exitVelocity, Math.max(launchAngle, 5));
-    if (isHomerun || isCaughtFly) return flightTime;
-    if (isFenceHit) {
-      const fenceArrival = getFenceArrivalTime(exitVelocity, Math.max(launchAngle, 5), direction, distScale);
-      const fenceBounce = getFenceBounceBackStateAtTime(fenceDistForDir, direction, exitVelocity, launchAngle, 999);
-      return Math.min(fenceArrival, flightTime) + (fenceBounce?.totalBounceTime ?? 1.0);
-    }
-    // フライ系はバウンド＋転がり時間を加算（フェンス衝突込み）
-    const bounceInfo = getFieldBounceStateAtTime(exitVelocity, Math.max(launchAngle, 5), direction, estimatedDist, 999, fenceDistForDir);
-    const bounceAndRollTime = bounceInfo?.totalBounceTime ?? 0;
-    return flightTime + bounceAndRollTime;
-  }, [hasFieldData, isGrounder, isHomerun, isCaughtFly, isFenceHit, exitVelocity, estimatedDist, launchAngle, direction, distScale, fenceDistForDir]);
+    return Math.max(ballTime, lastAgentT, throwEndT, agentSettleT);
+  }, [hasFieldData, isGrounder, isHomerun, isCaughtFly, isFenceHit, exitVelocity, estimatedDist, launchAngle, direction, distScale, fenceDistForDir, lastAgentT, throwEndT, agentSettleT]);
 
   // フライ時の滞空時間（SideView用）
   const totalFlightTime = useMemo(() => {
@@ -1653,6 +1950,7 @@ export function BattedBallPopup({ log, batterName, pitcherName, onClose }: Batte
               totalTime={totalTime}
               trailPoints={trailPoints}
               distScale={distScale}
+              agentTimeline={log.agentTimeline}
             />
           </div>
           <div>

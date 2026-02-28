@@ -1,5 +1,6 @@
 import type { TeamRecord } from "./team";
 import type { PitchType } from "./player";
+import type { AgentTimelineEntry, ThrowPlay } from "@/engine/fielding-agent-types";
 
 /** リーグ構成 */
 export interface League {
@@ -220,6 +221,8 @@ export interface AtBatLog {
   pitchLocation?: { x: number; y: number };
   pitchCountInAtBat?: number;
   fieldingTrace?: FieldingTrace;
+  agentTimeline?: AgentTimelineEntry[];
+  throwPlays?: ThrowPlay[];
 }
 
 /** 1イニングのスコア */

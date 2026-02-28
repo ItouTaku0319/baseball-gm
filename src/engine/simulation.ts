@@ -4,7 +4,7 @@ import type { Player, Position, PitchRepertoire, PitchType, Injury } from "@/mod
 import { calcBallLanding } from "./fielding-ai";
 import type { BallLanding } from "./fielding-ai";
 import { resolvePlayWithAgents } from "./fielding-agent";
-import type { ThrowPlay } from "./fielding-agent-types";
+import type { ThrowPlay, AgentTimelineEntry } from "./fielding-agent-types";
 import {
   GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR,
   FENCE_BASE, FENCE_CENTER_EXTRA, FENCE_HEIGHT,
@@ -145,6 +145,8 @@ interface AtBatDetail {
   assistPos?: FielderPosition[];
   /** エージェント由来のエラー者 */
   errorPos?: FielderPosition;
+  /** エージェントタイムライン（守備アニメーション用） */
+  agentTimeline?: AgentTimelineEntry[];
 }
 
 /** 走者の状態 */
@@ -680,7 +682,8 @@ function simulateAtBat(
   bases: BaseRunners,
   outs: number,
   pitcherState?: PitcherGameState,
-  batterIndex?: number
+  batterIndex?: number,
+  collectTimeline?: boolean,
 ): AtBatDetail & { pitchCount: number; buntNewBases?: BaseRunners } {
   const bat = batter.batting;
   let balls = 0;
@@ -811,7 +814,7 @@ function simulateAtBat(
             };
           }
 
-          const agentResult = resolvePlayWithAgents(ball, landing, fielderMap, batter, bases, outs);
+          const agentResult = resolvePlayWithAgents(ball, landing, fielderMap, batter, bases, outs, collectTimeline ? { collectTimeline: true } : undefined);
           return {
             result: agentResult.result,
             battedBallType: ball.type,
@@ -825,6 +828,7 @@ function simulateAtBat(
             putOutPos: agentResult.putOutPos,
             assistPos: agentResult.assistPos,
             errorPos: agentResult.errorPos,
+            agentTimeline: agentResult.agentTimeline,
           };
         } else {
           // ファウル打球 → resolveFoulBall で判定
@@ -1906,7 +1910,7 @@ function simulateHalfInning(
     const pitcher = pitcherState.player;
     const pitcherLog = pitcherState.log;
 
-    const detail = simulateAtBat(batter, pitcher, fielderMap, bases, outs, pitcherState, idx % battingTeam.length);
+    const detail = simulateAtBat(batter, pitcher, fielderMap, bases, outs, pitcherState, idx % battingTeam.length, options?.collectAtBatLogs);
     // 投球数をpitcherStateに累積
     pitcherState.pitchCount += detail.pitchCount;
     const result = detail.result;
@@ -2286,6 +2290,8 @@ function simulateHalfInning(
         pitchLocation,
         pitchCountInAtBat: detail.pitchCount,
         fieldingTrace: detail.fieldingTrace,
+        agentTimeline: detail.agentTimeline,
+        throwPlays: detail.throwPlays,
       });
     }
 

@@ -46,6 +46,7 @@ import {
   CLOSER_PURSUER_INTERCEPT_RATIO,
   CLOSER_PURSUER_CHASE_RATIO,
   PITCHER_GROUND_BALL_MAX_DIST,
+  INFIELDER_GROUND_PURSUIT_LIMIT,
   INFIELD_HIT_PROB,
   INFIELD_HIT_MARGIN_SCALE,
   INFIELD_HIT_SPEED_BONUS,
@@ -213,6 +214,16 @@ export function resolvePlayWithAgents(
       updatePerception(agent, trajectory, t, noiseScale, rng);
     }
 
+    // --- Step 1.5: 外野フライ/ポップアップ時、反応中の内野手を即座にカバーへ ---
+    // 現実の野球では、明白な外野フライ/ポップフライに対し内野手は反応を待たずベースカバーに動き出す
+    if (!trajectory.isGroundBall && trajectory.landingDistance >= 50 && ball.launchAngle >= 20) {
+      for (const agent of agents) {
+        if (agent.pos >= 3 && agent.pos <= 6 && agent.state === "REACTING") {
+          assignNonPursuitRole(agent, trajectory, bases, outs);
+        }
+      }
+    }
+
     // --- Step 2: 行動決定 ---
     for (const agent of agents) {
       if (agent.reactionRemaining > 0) continue;
@@ -242,6 +253,10 @@ export function resolvePlayWithAgents(
         catcherAgent = result.agent;
         catchResult = result.catchResult;
         catchTime = t;
+        // 捕球フレームをタイムラインに記録してからbreak
+        if (collectTimeline) {
+          timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory, ball.launchAngle));
+        }
         break;
       }
     }
@@ -252,6 +267,10 @@ export function resolvePlayWithAgents(
         catcherAgent = result.agent;
         catchResult = result.catchResult;
         catchTime = t;
+        // 捕球フレームをタイムラインに記録してからbreak
+        if (collectTimeline) {
+          timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory, ball.launchAngle));
+        }
         break;
       }
     }
@@ -508,7 +527,11 @@ function resolveCallOffs(agents: FielderAgent[], trajectory: BallTrajectory): vo
       // GC圧力削減: DistanceSqで比較（sqrt不要）CALLOFF_TARGET_THRESHOLD^2=225
       const targetDistSq = vec2DistanceSq(a.targetPos, b.targetPos);
 
-      if (targetDistSq < CALLOFF_TARGET_THRESHOLD * CALLOFF_TARGET_THRESHOLD) {
+      // ゴロでinterceptPoint持ち同士: ターゲット距離に関係なくコールオフ対象
+      const isGroundBallIntercept = trajectory.isGroundBall
+        && a.interceptPoint != null && b.interceptPoint != null;
+
+      if (targetDistSq < CALLOFF_TARGET_THRESHOLD * CALLOFF_TARGET_THRESHOLD || isGroundBallIntercept) {
         // 投手がゴロインターセプト中なら、投手を含むペアのコールオフをスキップ
         // （投手と内野手が同じゴロを追う場合、先にインターセプトした方が処理する）
         if (pitcherIntercepting && (a.pos === 1 || b.pos === 1)) continue;
@@ -663,6 +686,14 @@ function updateDecision(
     const ballAngle = getBallZoneAngle(trajectory);
     const iAmZoneOwner = isInPrimaryZone(agent.pos, ballAngle);
     if (intercept && intercept.canReach) {
+      // 内野手の深度制限: インターセプト点が内野限界(38m)を超えたらカバーに回る
+      if (agent.pos >= 3 && agent.pos <= 6) {
+        const ipDist = Math.sqrt(intercept.point.x ** 2 + intercept.point.y ** 2);
+        if (ipDist > INFIELDER_GROUND_PURSUIT_LIMIT) {
+          assignNonPursuitRole(agent, trajectory, bases, outs);
+          return;
+        }
+      }
       // より近い野手が既にインターセプトに向かっている場合はカバーに回る
       // ただし自分がゾーン持ちで相手がゾーン外の場合は譲らない
       const interceptThresholdSq = (distToTarget * CLOSER_PURSUER_INTERCEPT_RATIO) * (distToTarget * CLOSER_PURSUER_INTERCEPT_RATIO);
@@ -683,6 +714,12 @@ function updateDecision(
       agent.targetPos = intercept.point;
       agent.interceptPoint = intercept.point;
       agent.interceptBallTime = intercept.ballTime;
+      return;
+    }
+
+    // 内野手は深い停止球を追わない（外野手に任せる）
+    if (agent.pos >= 3 && agent.pos <= 6 && trajectory.landingDistance > INFIELDER_GROUND_PURSUIT_LIMIT) {
+      assignNonPursuitRole(agent, trajectory, bases, outs);
       return;
     }
 
@@ -1194,9 +1231,14 @@ function resolveGroundOut(
   agents: FielderAgent[],
   rng: () => number
 ): AgentFieldingResult {
-  // 外野手がゴロを回収 → 内野を抜けたヒット（シングル確定）
+  // 外野手がゴロを回収 → 内野を抜けたヒット（シングル確定）+ 内野への送球
   if (catcher.pos >= 7) {
-    return { result: "single", fielderPos: catcher.pos };
+    const throwTarget = findBestThrowTarget(catcher, agents, "second");
+    return {
+      result: "single",
+      fielderPos: catcher.pos,
+      throwPlays: throwTarget ? [throwTarget] : undefined,
+    };
   }
 
   const fieldTime = catcher.arrivalTime;
@@ -1548,11 +1590,16 @@ function resolveHitWithRetriever(
   const resultStr: AtBatResult =
     basesReached >= 3 ? "triple" : basesReached >= 2 ? "double" : "single";
 
+  // 送球先を打者の到達塁に基づいて決定
+  const throwBase: keyof typeof BASE_POSITIONS = basesReached >= 2 ? "third" : "second";
+  const throwTarget = findBestThrowTarget(retriever, agents, throwBase);
+
   return {
     result: resultStr,
     fielderPos: retriever.pos,
     putOutPos: undefined,
     assistPos: undefined,
+    throwPlays: throwTarget ? [throwTarget] : undefined,
   };
 }
 
@@ -1587,6 +1634,30 @@ function calcThrowTime(
   }
 
   return throwDist / throwSpeed;
+}
+
+// ====================================================================
+// ヒット時の送球先決定
+// ====================================================================
+
+function findBestThrowTarget(
+  thrower: FielderAgent,
+  agents: FielderAgent[],
+  targetBase: keyof typeof BASE_POSITIONS
+): ThrowPlay | null {
+  // リレーマン（relay状態のCOVERING野手）がいれば中継
+  const relayAgent = agents.find(
+    a => a.state === "COVERING" && a.action === "relay" && a.pos !== thrower.pos
+  );
+  if (relayAgent) {
+    return { from: thrower.pos, to: relayAgent.pos, base: targetBase };
+  }
+  // ベースカバー者へ直接送球
+  const cover = findBaseCoverer(agents, targetBase, thrower.pos);
+  if (cover) {
+    return { from: thrower.pos, to: cover.pos, base: targetBase };
+  }
+  return null;
 }
 
 // ====================================================================
