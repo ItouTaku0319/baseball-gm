@@ -94,6 +94,8 @@ function createGroundBallTrajectory(
     maxHeight: 0,
     direction,
     ballType,
+    launchAngle,
+    exitVelocity: v0 * 3.6, // m/s → km/h
     groundSpeed: stopTime > 0 ? maxDist / stopTime : 0,
     pathDirX,
     pathDirY,
@@ -160,6 +162,8 @@ function createFlyTrajectory(
     maxHeight: maxH,
     direction,
     ballType,
+    launchAngle,
+    exitVelocity: v0 * 3.6, // m/s → km/h
 
     getPositionAt(t: number, out?: Vec2): Vec2 {
       const tc = clamp(t, 0, rawFlight);

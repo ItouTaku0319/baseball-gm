@@ -23,7 +23,9 @@ export interface BallTrajectory {
   readonly maxHeight: number;
   readonly direction: number;
   readonly ballType: BallType;
-  readonly groundSpeed?: number; // ゴロの平均地上速度(m/s)
+  readonly launchAngle: number;   // 打球角度(度) — 知覚ノイズ計算で使用
+  readonly exitVelocity: number;  // 初速(km/h) — 知覚ノイズ計算で使用
+  readonly groundSpeed?: number;  // ゴロの平均地上速度(m/s)
   /** ゴロ専用: 経路方向X（正規化済み）。キャッシュ済み定数 */
   readonly pathDirX?: number;
   /** ゴロ専用: 経路方向Y（正規化済み）。キャッシュ済み定数 */

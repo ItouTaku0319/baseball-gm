@@ -81,18 +81,8 @@ export const TRANSFER_TIME_ARM_SCALE = 0.15; // 肩力による送球準備時�
 export const RUNNER_START_DELAY = 0.65;      // 打者走者のスタート遅延(秒)：スイング完了→走り出し
 
 // 守備範囲計算（捕球リーチ）— 物理ベースモデル
-// 変更前: 固定半径(AGENT_CATCH_RADIUS_IF=1.0m, AGENT_CATCH_RADIUS_OF=1.5m, GROUND_INTERCEPT=0.7m)
-// 変更後: 守備力依存の動的リーチ（base + fielding/100 * factor）
-export const CATCH_REACH_BASE_IF = 0.5;        // 内野手の基本捕球リーチ(m)
-export const CATCH_REACH_GROUND_BONUS = 0.5;   // ゴロ捕球時の追加リーチ(m)：伸身・ダイブ・逆シングル
-export const CATCH_REACH_BASE_P_GROUND = 2.0;  // 投手のゴロ捕球基本リーチ(m、マウンド上で横に伸ばせる)
-export const CATCH_REACH_BASE_OF = 1.5;        // 外野手の基本捕球リーチ(m)
-export const CATCH_REACH_BASE_C = 4.0;         // 捕手の基本捕球リーチ(m、ポップフライ専門訓練)
+export const CATCH_REACH_BASE = 1.1;           // 全ポジション共通基本捕球リーチ(m)
 export const CATCH_REACH_SKILL_FACTOR = 1.5;   // fielding/100 あたりの追加リーチ(m)
-// 変更前: 捕手はゴロ以外すべてにCATCH_REACH_BASE_C=4.0mを適用していた
-// 変更後: 高角度(>=50°)のポップフライのみ4.0m、それ以外はIF並み(0.5m)
-// 現実の捕手はライナー・通常フライは前方に飛ぶためほぼ捕れない
-export const POPUP_LAUNCH_ANGLE_THRESHOLD = 50;  // ポップフライ判定の打球角度閾値(度)
 // ポップフライ(50°以上)の初速上限
 // 芯を外した不完全コンタクトで初速が大幅に低下する
 // 80km/hで着地距離18-27m（NPB内野ポップフライの典型的な範囲）
@@ -107,8 +97,6 @@ export const CALLOFF_TARGET_THRESHOLD = 15;    // コールオフ判定ターゲ
 // 自分より十分近い野手が追跡中なら、カバーに回る判定の比率
 export const CLOSER_PURSUER_INTERCEPT_RATIO = 0.7; // インターセプト時（70%以内なら譲る）
 export const CLOSER_PURSUER_CHASE_RATIO = 0.6;     // チェーシング/フライ時（60%以内なら譲る）
-export const PITCHER_GROUND_BALL_MAX_DIST = 30;    // 投手がゴロを追跡する最大着弾距離(m)
-export const INFIELDER_GROUND_PURSUIT_LIMIT = 38;  // 内野手がゴロを追跡する最大深度(m)
 
 // 併殺(DP)成功率
 // DP試行時（2塁送球後ピボット→1塁送球）の成功率
@@ -199,11 +187,9 @@ export const AGENT_MAX_TIME_GROUND = 8.0;        // ゴロの最大シミュレ�
 export const AGENT_MAX_TIME_FLY = 12.0;          // フライの最大シミュレーション時間(秒)
 
 // 反応時間
-export const AGENT_BASE_REACTION_IF = 0.60;      // 内野手基本反応時間(秒)
-export const AGENT_BASE_REACTION_OF = 0.45;      // 外野手基本反応時間(秒)
-export const AGENT_PITCHER_REACTION = 0.60;      // 投手の反応遅延(秒)
-export const AGENT_CATCHER_REACTION = 0.40;      // 捕手の反応時間(秒)
-export const AGENT_LINE_DRIVE_REACTION_MULT = 2.5; // ライナー時の反応時間倍率
+export const AGENT_BASE_REACTION = 0.40;         // 全ポジション共通基本反応時間(秒)
+export const AGENT_AWARENESS_REACTION_SCALE = 0.005; // awareness 1ポイントあたりの反応時間短縮(秒)
+export const AGENT_REACTING_SPEED_RATIO = 0.35;      // REACTING中の移動速度割合（初動フェーズ）
 
 // ダイビングキャッチ
 export const AGENT_DIVE_MIN_DIST = 1.5;          // ダイビング可能最小距離(m)
@@ -217,14 +203,17 @@ export const AGENT_RUNNING_CATCH_SKILL = 0.003;  // 守備力1あたりの成功
 
 // 知覚ノイズ
 export const AGENT_PERCEPTION_BASE_NOISE = 12;   // 基本ノイズσ(m)
-export const AGENT_PERCEPTION_LINE_DRIVE_MULT = 2.0; // ライナーのノイズ倍率
-export const AGENT_PERCEPTION_POPUP_MULT = 0.3;  // ポップフライのノイズ倍率
+export const PERCEPTION_ANGLE_DECAY_RATE = 0.03; // 打球角度による知覚ノイズ減衰率
 
 // 移動
 export const AGENT_ACCELERATION_TIME = 0.3;      // 0→最高速に達するまでの時間(秒)
-export const AGENT_BASE_SPEED_IF = 6.5;          // 内野手基本走速(m/s)
-export const AGENT_BASE_SPEED_OF = 7.0;          // 外野手基本走速(m/s)
+export const AGENT_BASE_SPEED = 6.75;            // 全ポジション共通基本走速(m/s)
 export const AGENT_SPEED_SKILL_FACTOR = 2.5;     // speed/100 あたりの走速追加(m/s)
-export const OF_BACKUP_MAX_DIST = 40;  // OFバックアップ判定距離(m) — これ以上は「遠い」
-export const OF_DRIFT_MIN = 0.10;      // 遠方OFドリフト最小割合 (fielding=0)
-export const OF_DRIFT_MAX = 0.25;      // 遠方OFドリフト最大割合 (fielding=100)
+export const BACKUP_DRIFT_THRESHOLD = 40;        // バックアップ判定距離(m) — これ以上は「遠い」
+export const DRIFT_RATIO_MIN = 0.10;             // 遠方OFドリフト最小割合 (fielding=0)
+export const DRIFT_RATIO_MAX = 0.25;             // 遠方OFドリフト最大割合 (fielding=100)
+
+// Phase 5: 結果解決フェーズ用
+export const OUTFIELD_DEPTH_THRESHOLD = 45;     // 外野域判定の距離閾値(m)
+export const SECOND_BASE_PROXIMITY = 5.0;        // 2塁ベース踏み判定距離(m)
+export const FIRST_BASE_PROXIMITY = 8.0;         // 1塁自己処理判定距離(m)

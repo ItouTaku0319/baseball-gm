@@ -20,21 +20,15 @@ import {
 import { DEFAULT_FIELDER_POSITIONS } from "./fielding-ai";
 import {
   AGENT_ACCELERATION_TIME,
-  CATCH_REACH_BASE_C,
-  CATCH_REACH_BASE_IF,
-  CATCH_REACH_BASE_OF,
-  CATCH_REACH_BASE_P_GROUND,
-  CATCH_REACH_GROUND_BONUS,
+  CATCH_REACH_BASE,
   CATCH_REACH_SKILL_FACTOR,
-  OF_BACKUP_MAX_DIST,
-  OF_DRIFT_MIN,
-  OF_DRIFT_MAX,
-  INFIELDER_GROUND_PURSUIT_LIMIT,
-  PITCHER_GROUND_BALL_MAX_DIST,
+  BACKUP_DRIFT_THRESHOLD,
+  DRIFT_RATIO_MIN,
+  DRIFT_RATIO_MAX,
 } from "./physics-constants";
 
 // ====================================================================
-// ローカル定数（Phase 4 で physics-constants.ts への移動を検討）
+// ローカル定数
 // ====================================================================
 
 /** proximity スコアの正規化距離(m) */
@@ -42,9 +36,6 @@ const PROXIMITY_NORM_DIST = 60;
 
 /** mobility スコアの正規化距離(m) */
 const MOBILITY_NORM_DIST = 50;
-
-/** CF(pos=8)の追跡スコアボーナス */
-const CF_PURSUIT_BONUS = 0.15;
 
 /** calling 強度のペナルティ閾値 */
 const CALLING_INTENSITY_THRESHOLD = 0.3;
@@ -60,9 +51,6 @@ const ARRIVAL_TIME_PENALTY = 0.4;
 
 /** hold スコアのデフォルト値 */
 const HOLD_SCORE_DEFAULT = 0.1;
-
-/** 捕手の hold スコア（ホーム固定） */
-const CATCHER_HOLD_SCORE = 0.6;
 
 /** awareness 低下による hold スコア加算係数 */
 const AWARENESS_HOLD_BOOST = 0.15;
@@ -84,12 +72,6 @@ const COVER_URGENCY_BONUS = 0.2;
 
 /** カバースコアの近接性正規化距離(m) */
 const COVER_PROXIMITY_NORM_DIST = 30;
-
-/** 1B(pos=3)→first, C(pos=2)→home の自然マッピングボーナス */
-const COVER_NATURAL_MAPPING_BONUS = 0.3;
-
-/** ゴロ走塁先の推定余裕秒 */
-const BACKUP_THROW_MARGIN = 0.5;
 
 /**
  * ゴロインターセプト時の捕球リーチ係数。
@@ -173,10 +155,13 @@ export function calcAndStorePursuitScore(
     return;
   }
 
-  // フライ時、OFが既にBACKING_UP → pursuit しない
-  if (agent.state === "BACKING_UP" && agent.pos >= 7 && !trajectory.isGroundBall) {
-    agentMut.pursuitScore = -1;
-    return;
+  // フライ時、遠方でBACKING_UP → pursuit しない（近距離は再評価可能）
+  if (agent.state === "BACKING_UP" && !trajectory.isGroundBall) {
+    const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
+    if (distToLanding > BACKUP_DRIFT_THRESHOLD) {
+      agentMut.pursuitScore = -1;
+      return;
+    }
   }
 
   // フライで既にPURSUING → 現在のスコアを維持
@@ -205,9 +190,12 @@ export function autonomousDecide(
       agent.state === "FIELDING" || agent.state === "THROWING" ||
       agent.hasYielded) return;
 
-  // フライ時、OFが既にBACKING_UP → 目標を維持
-  if (agent.state === "BACKING_UP" && agent.pos >= 7 && !trajectory.isGroundBall) {
-    return;
+  // フライ時、遠方でBACKING_UP → 目標を維持（近距離は再評価可能）
+  if (agent.state === "BACKING_UP" && !trajectory.isGroundBall) {
+    const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
+    if (distToLanding > BACKUP_DRIFT_THRESHOLD) {
+      return;
+    }
   }
 
   // フライで既にPURSUING → 知覚更新のみ
@@ -242,20 +230,17 @@ export function autonomousDecide(
   const scores: ActionScore[] = [];
   scores.push({ action: "pursuit", score: myPursuitScore, target: myPursuitTarget });
   const coverScores = calcCoverScores(agent, observation, trajectory, bases, outs);
-  if (trajectory.isGroundBall) {
-    // ゴロ: 打球捕球が最優先。カバーは追跡より低くなるよう減衰
-    for (const s of coverScores) {
-      s.score *= GROUND_BALL_COVER_DAMPING;
-    }
-  } else {
-    const damping = trajectory.ballType === "popup" ? 0.15 : 0.5;
-    for (const s of coverScores) {
-      s.score *= damping;
-    }
+  // カバー減衰: 着弾距離ベース（近い=追跡優先、遠い=カバー重要）
+  // ポップフライ(20m)→0.25, 通常フライ(60m)→0.7, 深いフライ(90m)→0.7
+  const coverDamping = trajectory.isGroundBall
+    ? GROUND_BALL_COVER_DAMPING
+    : clamp(trajectory.landingDistance / 80, 0.15, 0.7);
+  for (const s of coverScores) {
+    s.score *= coverDamping;
   }
   scores.push(...coverScores);
   scores.push(calcBackupScore(agent, observation, trajectory, bases));
-  scores.push(calcHoldScore(agent, trajectory));
+  scores.push(calcHoldScore(agent));
 
   applyDecision(agent, scores, trajectory);
 }
@@ -356,24 +341,19 @@ function calcPursuitScore(
     }
     // インターセプト不可でも停止球チェーシングを試行
     if (!canReach) {
-      // 内野手: 停止球が INFIELDER_GROUND_PURSUIT_LIMIT を超える場合はチェーシングしない
-      const percDist = Math.sqrt(perceived.x * perceived.x + perceived.y * perceived.y);
-      const blocked = agent.pos >= 3 && agent.pos <= 6 && percDist > INFIELDER_GROUND_PURSUIT_LIMIT;
-      if (!blocked) {
-        const distToPerceived = vec2Distance(agent.currentPos, perceived);
-        const chaseDeadline = trajectory.flightTime + 4.0;
-        const chaseTime = distToPerceived / agent.maxSpeed + agent.reactionRemaining;
-        if (t + chaseTime < chaseDeadline) {
-          canReach = true;
-          // チェーシングのマージンはインターセプトより低く抑える（CHASE_ARRIVAL_MARGIN_CAP）
-          arrivalMargin = clamp(1 - chaseTime / chaseDeadline, 0, 1) * CHASE_ARRIVAL_MARGIN_CAP;
-          groundTarget = null; // 停止球チェーシング: targetPos = perceived
-        }
+      const distToPerceived = vec2Distance(agent.currentPos, perceived);
+      const chaseDeadline = trajectory.flightTime + 4.0;
+      const chaseTime = distToPerceived / agent.maxSpeed + agent.reactionRemaining;
+      if (t + chaseTime < chaseDeadline) {
+        canReach = true;
+        // チェーシングのマージンはインターセプトより低く抑える（CHASE_ARRIVAL_MARGIN_CAP）
+        arrivalMargin = clamp(1 - chaseTime / chaseDeadline, 0, 1) * CHASE_ARRIVAL_MARGIN_CAP;
+        groundTarget = null; // 停止球チェーシング: targetPos = perceived
       }
     }
   } else {
     // フライ/ライナー/ポップ: 到達距離で判定
-    const catchReach = calcCatchReach(agent, false);
+    const catchReach = calcCatchReach(agent);
     const reachable = calcReachableDistanceAuto(agent.maxSpeed, agent.reactionRemaining, timeRemaining + 1.0);
     const distToPerceived = vec2Distance(agent.currentPos, perceived);
     const effectiveRange = reachable + catchReach;
@@ -387,43 +367,6 @@ function calcPursuitScore(
     return { action: "pursuit", score: -1, target: landingPos };
   }
 
-  // 投手制限: フライ・ポップフライは追わない（現実でも投手がポップを追うのは稀）
-  if (agent.pos === 1) {
-    if (!trajectory.isGroundBall) {
-      return { action: "pursuit", score: -1, target: landingPos };
-    }
-    // ゴロ: 一定距離以上は追わない
-    if (trajectory.landingDistance > PITCHER_GROUND_BALL_MAX_DIST) {
-      return { action: "pursuit", score: -1, target: landingPos };
-    }
-  }
-
-  // 内野手深度制限: ゴロのインターセプト点が深すぎる場合
-  if (agent.pos >= 3 && agent.pos <= 6 && trajectory.isGroundBall) {
-    const ip = (agent as { interceptPoint?: Vec2 }).interceptPoint;
-    if (ip) {
-      const ipDist = Math.sqrt(ip.x * ip.x + ip.y * ip.y);
-      if (ipDist > INFIELDER_GROUND_PURSUIT_LIMIT) {
-        return { action: "pursuit", score: -1, target: landingPos };
-      }
-    }
-  }
-
-  // 内野手(3-6)は外野手が到達可能 or 既に追跡中の外野フライには参加しない（ポップフライは除く）
-  if (agent.pos >= 3 && agent.pos <= 6 && !trajectory.isGroundBall && trajectory.ballType !== "popup") {
-    const ofCanReach = observation.allAgents.some((other) => {
-      if (other === agent || other.pos < 7) return false;
-      if (other.state === "PURSUING") return true;
-      const ofDist = vec2Distance(other.currentPos, perceived);
-      const catchReachOF = calcCatchReach(other, false);
-      const ofRange = calcReachableDistanceAuto(other.maxSpeed, other.reactionRemaining, timeRemaining + 1.0) + catchReachOF;
-      return ofDist <= ofRange;
-    });
-    if (ofCanReach) {
-      return { action: "pursuit", score: -1, target: landingPos };
-    }
-  }
-
   // proximity: homePos（デフォルト位置）からの距離
   // ゴロはインターセプト点、フライは着弾点を基準にする
   const homePos = agent.homePos ?? getDefaultPos(agent.pos) ?? agent.currentPos;
@@ -435,9 +378,6 @@ function calcPursuitScore(
   const mobilityRef = groundTarget ?? perceived;
   const moveDist = vec2Distance(agent.currentPos, mobilityRef);
   const mobility = clamp(1 - moveDist / MOBILITY_NORM_DIST, 0, 1);
-
-  // CF ボーナス
-  const cfBonus = agent.pos === 8 ? CF_PURSUIT_BONUS : 0;
 
   // コーディネーションペナルティ
   let coordPenalty = 0;
@@ -457,7 +397,7 @@ function calcPursuitScore(
   }
 
   const score = clamp(
-    proximity * 0.3 + mobility * 0.2 + arrivalMargin * 0.4 + cfBonus - coordPenalty,
+    proximity * 0.3 + mobility * 0.2 + arrivalMargin * 0.4 - coordPenalty,
     -1,
     1
   );
@@ -511,12 +451,7 @@ function calcCoverScores(
     if (entry.name === "third" && bases.second) urgency = COVER_URGENCY_BONUS;
     if (entry.name === "home" && bases.third) urgency = COVER_URGENCY_BONUS;
 
-    // 自然マッピングボーナス
-    let naturalBonus = 0;
-    if (agent.pos === 3 && entry.name === "first") naturalBonus = COVER_NATURAL_MAPPING_BONUS;
-    if (agent.pos === 2 && entry.name === "home") naturalBonus = COVER_NATURAL_MAPPING_BONUS;
-
-    const score = clamp(COVER_SCORE_UNCOVERED * coverProximity + urgency + naturalBonus, 0, 1);
+    const score = clamp(COVER_SCORE_UNCOVERED * coverProximity + urgency, 0, 1);
     results.push({ action: "cover", score, target: entry.pos, coverBase: entry.name });
   }
 
@@ -528,23 +463,19 @@ function calcRelayScore(
   observation: TeammateObservation,
   trajectory: BallTrajectory
 ): ActionScore | null {
-  // SS(6): 打球方向 <= 45° / 2B(4): 打球方向 > 45°
-  const isSS = agent.pos === 6;
-  const is2B = agent.pos === 4;
-  if (!isSS && !is2B) return null;
-
-  const dir = trajectory.direction;
-  const isMyBallSide = isSS ? dir <= 45 : dir > 45;
-  if (!isMyBallSide) return null;
-
   // 既にリレーしている味方がいたらスキップ
   const someoneRelaying = (observation.pursuers as FielderAgent[]).some(
     a => a.action === "relay"
   );
   if (someoneRelaying) return null;
 
+  // カットオフ位置への近接性でスコア計算（全野手がリレー候補）
   const cutoffPos = calcCutoffPosition(trajectory);
-  return { action: "cover", score: RELAY_SCORE, target: cutoffPos };
+  const dist = vec2Distance(agent.currentPos, cutoffPos);
+  const proximity = clamp(1 - dist / 30, 0, 1);
+  if (proximity <= 0.3) return null;
+
+  return { action: "cover", score: RELAY_SCORE * proximity, target: cutoffPos };
 }
 
 // ====================================================================
@@ -572,18 +503,16 @@ function calcBackupScore(
   const distToBackup = vec2Distance(agent.currentPos, backupPos);
   const backupProximity = clamp(1 - distToBackup / COVER_PROXIMITY_NORM_DIST, 0, 1);
 
-  // OF バックアップ/ドリフト
-  if (agent.pos >= 7) {
-    const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
-    if (distToLanding >= OF_BACKUP_MAX_DIST) {
-      const driftRatio = OF_DRIFT_MIN + (agent.skill.fielding / 100) * (OF_DRIFT_MAX - OF_DRIFT_MIN);
-      const driftTarget = {
-        x: agent.currentPos.x + (backupPos.x - agent.currentPos.x) * driftRatio,
-        y: agent.currentPos.y + (backupPos.y - agent.currentPos.y) * driftRatio,
-      };
-      const score = backupProximity * 0.5;
-      return { action: "backup", score, target: driftTarget };
-    }
+  // 着地点から遠い場合はドリフト（全野手適用）
+  const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
+  if (distToLanding >= BACKUP_DRIFT_THRESHOLD) {
+    const driftRatio = DRIFT_RATIO_MIN + (agent.skill.fielding / 100) * (DRIFT_RATIO_MAX - DRIFT_RATIO_MIN);
+    const driftTarget = {
+      x: agent.currentPos.x + (backupPos.x - agent.currentPos.x) * driftRatio,
+      y: agent.currentPos.y + (backupPos.y - agent.currentPos.y) * driftRatio,
+    };
+    const score = backupProximity * 0.5;
+    return { action: "backup", score, target: driftTarget };
   }
 
   const score = backupProximity * 0.6;
@@ -604,25 +533,14 @@ function predictThrowTarget(trajectory: BallTrajectory, bases: BaseRunners): key
 // hold スコア計算
 // ====================================================================
 
-function calcHoldScore(agent: FielderAgent, trajectory?: BallTrajectory): ActionScore {
+function calcHoldScore(agent: FielderAgent): ActionScore {
   let holdScore = HOLD_SCORE_DEFAULT;
-
-  // 捕手はホーム固定（ただしポップフライ時は追跡を優先するため hold を下げる）
-  if (agent.pos === 2) {
-    const isPopup = trajectory && trajectory.ballType === "popup";
-    const score = isPopup ? HOLD_SCORE_DEFAULT : CATCHER_HOLD_SCORE;
-    return { action: "hold", score, target: BASE_POSITIONS.home };
-  }
 
   // awareness が低い選手は hold スコアが相対的に上がる
   const awareness = (agent.skill as { awareness?: number }).awareness ?? 50;
   holdScore += (1 - awareness / 100) * AWARENESS_HOLD_BOOST;
 
-  // 投手はマウンド位置
-  const target = agent.pos === 1
-    ? { x: 0, y: 18.4 }
-    : agent.homePos ?? getDefaultPos(agent.pos) ?? agent.currentPos;
-
+  const target = agent.homePos ?? getDefaultPos(agent.pos) ?? agent.currentPos;
   return { action: "hold", score: holdScore, target };
 }
 
@@ -741,20 +659,8 @@ function calcReachableDistanceAuto(
  * 捕球リーチ計算。
  * fielding-agent.ts の getCatchReach と同等のロジック。
  */
-function calcCatchReach(agent: FielderAgent, forGroundBall: boolean): number {
-  let base: number;
-  if (agent.pos === 1 && forGroundBall) {
-    base = CATCH_REACH_BASE_P_GROUND;
-  } else if (agent.pos >= 7) {
-    base = CATCH_REACH_BASE_OF;
-  } else if (agent.pos === 2 && !forGroundBall) {
-    base = CATCH_REACH_BASE_C;
-  } else if (forGroundBall) {
-    base = CATCH_REACH_BASE_IF + CATCH_REACH_GROUND_BONUS;
-  } else {
-    base = CATCH_REACH_BASE_IF;
-  }
-  return base + (agent.skill.fielding / 100) * CATCH_REACH_SKILL_FACTOR;
+function calcCatchReach(agent: FielderAgent): number {
+  return CATCH_REACH_BASE + (agent.skill.fielding / 100) * CATCH_REACH_SKILL_FACTOR;
 }
 
 /**
@@ -787,7 +693,7 @@ function calcGroundBallIntercept(
   const projDist = agent.currentPos.x * pathDirX + agent.currentPos.y * pathDirY;
   if (projDist < 0) return null;
 
-  const rawCatchReach = calcCatchReach(agent, true);
+  const rawCatchReach = calcCatchReach(agent);
   // 物理チェック(fielding-agent.ts)と同じ0.7係数を適用して一貫性を確保
   const interceptReach = rawCatchReach * GROUND_INTERCEPT_REACH_FACTOR;
   const perpX = agent.currentPos.x - projDist * pathDirX;
@@ -800,8 +706,7 @@ function calcGroundBallIntercept(
   if (perpDist > maxReachable) return null;
 
   // 最初に到達可能な地点（earliest intercept）を探す
-  // 理由: best-margin（停止点）を使うと外野深くの停止点を返し、
-  //        INFIELDER_GROUND_PURSUIT_LIMIT に引っかかって全内野手がブロックされる
+  // 理由: best-margin（停止点）を使うと外野深くの停止点を返し、内野手が不必要に遠くまで追跡する
   let earliestPoint: Vec2 | null = null;
   let earliestBallTime = 0;
   let earliestMargin = 0;

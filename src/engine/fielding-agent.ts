@@ -15,11 +15,9 @@ import {
   AGENT_DT,
   AGENT_MAX_TIME_GROUND,
   AGENT_MAX_TIME_FLY,
-  AGENT_BASE_REACTION_IF,
-  AGENT_BASE_REACTION_OF,
-  AGENT_PITCHER_REACTION,
-  AGENT_CATCHER_REACTION,
-  AGENT_LINE_DRIVE_REACTION_MULT,
+  AGENT_BASE_REACTION,
+  AGENT_AWARENESS_REACTION_SCALE,
+  AGENT_REACTING_SPEED_RATIO,
   AGENT_DIVE_MIN_DIST,
   AGENT_DIVE_MAX_DIST,
   AGENT_DIVE_BASE_RATE,
@@ -27,22 +25,15 @@ import {
   AGENT_RUNNING_CATCH_BASE,
   AGENT_RUNNING_CATCH_SKILL,
   AGENT_PERCEPTION_BASE_NOISE,
-  AGENT_PERCEPTION_LINE_DRIVE_MULT,
-  AGENT_PERCEPTION_POPUP_MULT,
+  PERCEPTION_ANGLE_DECAY_RATE,
   AGENT_ACCELERATION_TIME,
   AGENT_SPEED_SKILL_FACTOR,
-  AGENT_BASE_SPEED_IF,
-  AGENT_BASE_SPEED_OF,
+  AGENT_BASE_SPEED,
   TRANSFER_TIME_BASE,
   TRANSFER_TIME_ARM_SCALE,
   RUNNER_START_DELAY,
-  CATCH_REACH_BASE_IF,
-  CATCH_REACH_GROUND_BONUS,
-  CATCH_REACH_BASE_P_GROUND,
-  CATCH_REACH_BASE_OF,
-  CATCH_REACH_BASE_C,
+  CATCH_REACH_BASE,
   CATCH_REACH_SKILL_FACTOR,
-  POPUP_LAUNCH_ANGLE_THRESHOLD,
   INFIELD_HIT_PROB,
   INFIELD_HIT_MARGIN_SCALE,
   INFIELD_HIT_SPEED_BONUS,
@@ -55,6 +46,8 @@ import {
   DP_PIVOT_SUCCESS_SPEED_FACTOR,
   DP_STEP_ON_BASE_SUCCESS,
   DP_STEP_ON_BASE_SPEED_FACTOR,
+  OUTFIELD_DEPTH_THRESHOLD,
+  FIRST_BASE_PROXIMITY,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -157,6 +150,16 @@ export function resolvePlayWithAgents(
       updatePerception(agent, trajectory, t, noiseScale, rng);
     }
 
+    // --- Step 1.5: REACTING中の初動目標設定 ---
+    for (const agent of agents) {
+      if (agent.state === "REACTING" && agent.reactionRemaining > 0) {
+        (agent as { targetPos: Vec2 }).targetPos = {
+          x: agent.perceivedLanding.position.x,
+          y: agent.perceivedLanding.position.y,
+        };
+      }
+    }
+
     // --- Step 2: 自律行動決定（2パス: 順序非依存） ---
     // Pass 1: 全員の raw pursuit score を計算（他者のスコアに依存しない）
     for (const agent of agents) {
@@ -188,21 +191,21 @@ export function resolvePlayWithAgents(
         catchTime = t;
         // 捕球フレームをタイムラインに記録してからbreak
         if (collectTimeline) {
-          timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory, ball.launchAngle));
+          timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
         }
         break;
       }
     }
 
     if (!trajectory.isGroundBall && ballOnGround && t > 0) {
-      const result = checkFlyCatchAtLanding(agents, trajectory, t, rng, ball.launchAngle);
+      const result = checkFlyCatchAtLanding(agents, trajectory, t, rng);
       if (result) {
         catcherAgent = result.agent;
         catchResult = result.catchResult;
         catchTime = t;
         // 捕球フレームをタイムラインに記録してからbreak
         if (collectTimeline) {
-          timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory, ball.launchAngle));
+          timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
         }
         break;
       }
@@ -210,7 +213,7 @@ export function resolvePlayWithAgents(
 
     // --- Step 6: タイムライン記録 ---
     if (collectTimeline) {
-      timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory, ball.launchAngle));
+      timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
     }
 
     // --- Step 7: 早期終了 ---
@@ -342,24 +345,13 @@ function createAgents(
       awareness: player.batting.awareness ?? 50,
     };
 
-    // 反応時間（ゴロ時は内野手がレディ姿勢で構えており初動が速い）
-    let baseReaction: number;
-    if (pos === 1) baseReaction = AGENT_PITCHER_REACTION;
-    else if (pos === 2) baseReaction = AGENT_CATCHER_REACTION;
-    else if (pos >= 7) baseReaction = AGENT_BASE_REACTION_OF;
-    else baseReaction = AGENT_BASE_REACTION_IF;
-    if (trajectory.isGroundBall && (pos === 1 || (pos >= 3 && pos <= 6))) {
-      baseReaction *= 0.60;
-    }
-    // ライナーは弾道が低く速いため初動判断が遅れる
-    if (trajectory.ballType === "line_drive") {
-      baseReaction *= AGENT_LINE_DRIVE_REACTION_MULT;
-    }
+    // 統一反応時間 + awareness のみで決定
+    let baseReaction = AGENT_BASE_REACTION;
+    baseReaction -= (skill.awareness - 50) * AGENT_AWARENESS_REACTION_SCALE;
+    baseReaction = Math.max(0.05, baseReaction);
 
-    // 走速
-    const isOF = pos >= 7;
-    const baseSpeed = isOF ? AGENT_BASE_SPEED_OF : AGENT_BASE_SPEED_IF;
-    const maxSpeed = baseSpeed + (skill.speed / 100) * AGENT_SPEED_SKILL_FACTOR;
+    // 統一走速
+    const maxSpeed = AGENT_BASE_SPEED + (skill.speed / 100) * AGENT_SPEED_SKILL_FACTOR;
 
     agents.push({
       pos,
@@ -410,7 +402,7 @@ function updatePerception(
 
   let sigma: number;
   if (trajectory.isGroundBall) {
-    // ゴロ: 初期は方向読みが不正確、時間経過で改善
+    // ゴロ: 地面を転がる予測可能な弾道 → ノイズ小
     const gbProgress = clamp(t / trajectory.flightTime, 0, 0.95);
     sigma =
       3.0 *
@@ -418,14 +410,15 @@ function updatePerception(
       Math.sqrt(1 - gbProgress) *
       noiseScale;
   } else {
+    // フライ系: launchAngle と exitVelocity から連続計算
     const progressRatio = clamp(t / trajectory.flightTime, 0, 0.95);
     const skillFactor = 1 - agent.skill.fielding / 200;
-    let baseSigma = AGENT_PERCEPTION_BASE_NOISE;
-    if (trajectory.ballType === "line_drive") {
-      baseSigma *= AGENT_PERCEPTION_LINE_DRIVE_MULT;
-    } else if (trajectory.ballType === "popup") {
-      baseSigma *= AGENT_PERCEPTION_POPUP_MULT;
-    }
+    // 角度ファクター: 低角度(ライナー)=読みにくい、高角度(ポップ)=読みやすい
+    const angleFactor = clamp(trajectory.launchAngle, 10, 70);
+    const heightNoise = 2.0 * Math.exp(-PERCEPTION_ANGLE_DECAY_RATE * (angleFactor - 10));
+    // 速度ファクター: 速い=読みにくい
+    const speedNoise = 0.7 + 0.3 * clamp(trajectory.exitVelocity / 170, 0, 1);
+    const baseSigma = AGENT_PERCEPTION_BASE_NOISE * heightNoise * speedNoise;
     sigma = baseSigma * Math.sqrt(1 - progressRatio) * skillFactor * noiseScale;
   }
 
@@ -457,33 +450,12 @@ function calcReachableDistance(agent: FielderAgent, tRemaining: number): number 
   return accelDist + cruiseDist;
 }
 
-function getCatchReach(agent: FielderAgent, forGroundBall = false, launchAngle?: number): number {
-  let base: number;
-  if (agent.pos === 1 && forGroundBall) {
-    // 投手: マウンド上でゴロを捕球（横方向に伸ばせる範囲が広い）
-    base = CATCH_REACH_BASE_P_GROUND;
-  } else if (agent.pos === 2) {
-    // 捕手: ゴロはIF同等
-    // ポップフライ(launchAngle>=50°)のみ専門訓練で広いリーチ
-    // ライナー・通常フライは前方に飛ぶため捕れない → IF並み
-    if (forGroundBall) {
-      base = CATCH_REACH_BASE_IF;
-    } else if (launchAngle !== undefined && launchAngle >= POPUP_LAUNCH_ANGLE_THRESHOLD) {
-      base = CATCH_REACH_BASE_C;
-    } else {
-      base = CATCH_REACH_BASE_IF;
-    }
-  } else if (agent.pos >= 7) {
-    base = CATCH_REACH_BASE_OF;
-  } else {
-    base = CATCH_REACH_BASE_IF;
-    if (forGroundBall) base += CATCH_REACH_GROUND_BONUS;
-  }
-  return base + (agent.skill.fielding / 100) * CATCH_REACH_SKILL_FACTOR;
+function getCatchReach(agent: FielderAgent): number {
+  return CATCH_REACH_BASE + (agent.skill.fielding / 100) * CATCH_REACH_SKILL_FACTOR;
 }
 
-function getEffectiveRange(agent: FielderAgent, tRemaining: number, forGroundBall = false, launchAngle?: number): number {
-  return calcReachableDistance(agent, tRemaining) + getCatchReach(agent, forGroundBall, launchAngle);
+function getEffectiveRange(agent: FielderAgent, tRemaining: number): number {
+  return calcReachableDistance(agent, tRemaining) + getCatchReach(agent);
 }
 
 // ====================================================================
@@ -493,7 +465,6 @@ function getEffectiveRange(agent: FielderAgent, tRemaining: number, forGroundBal
 function moveAgent(agent: FielderAgent, dt: number): void {
   if (
     agent.state === "READY" ||
-    agent.state === "REACTING" ||
     agent.state === "HOLDING" ||
     agent.state === "FIELDING" ||
     agent.state === "THROWING"
@@ -501,6 +472,11 @@ function moveAgent(agent: FielderAgent, dt: number): void {
     (agent as { currentSpeed: number }).currentSpeed = 0;
     return;
   }
+
+  // REACTING中は最高速度を制限（初動フェーズ: 打球への最初の一歩）
+  const effectiveMaxSpeed = agent.state === "REACTING"
+    ? agent.maxSpeed * AGENT_REACTING_SPEED_RATIO
+    : agent.maxSpeed;
 
   const dx = agent.targetPos.x - agent.currentPos.x;
   const dy = agent.targetPos.y - agent.currentPos.y;
@@ -512,11 +488,14 @@ function moveAgent(agent: FielderAgent, dt: number): void {
   }
 
   // 加速
-  if (agent.currentSpeed < agent.maxSpeed) {
+  if (agent.currentSpeed < effectiveMaxSpeed) {
     (agent as { currentSpeed: number }).currentSpeed = Math.min(
-      agent.maxSpeed,
-      agent.currentSpeed + (agent.maxSpeed / AGENT_ACCELERATION_TIME) * dt
+      effectiveMaxSpeed,
+      agent.currentSpeed + (effectiveMaxSpeed / AGENT_ACCELERATION_TIME) * dt
     );
+  } else if (agent.currentSpeed > effectiveMaxSpeed) {
+    // REACTING中の速度制限 or 状態遷移後の速度調整
+    (agent as { currentSpeed: number }).currentSpeed = effectiveMaxSpeed;
   }
 
   const moveDist = agent.currentSpeed * dt;
@@ -578,7 +557,7 @@ function checkGroundBallIntercept(
       if (distSq < bestDistSq) { bestDistSq = distSq; bestChaser = a; }
     }
     if (bestChaser) {
-      const reach = getCatchReach(bestChaser, true) * 1.4;
+      const reach = getCatchReach(bestChaser) * 1.4;
       if (bestDistSq < reach * reach) {
         bestChaser.state = "FIELDING";
         bestChaser.arrivalTime = t;
@@ -640,7 +619,7 @@ function checkGroundBallIntercept(
     const distSq =
       (px - nearestX) * (px - nearestX) + (py - nearestY) * (py - nearestY);
 
-    const interceptReach = getCatchReach(agent, true) * 1.0; // ゴロ用リーチ（伸身・逆シングル含む）
+    const interceptReach = getCatchReach(agent) * 1.0; // ゴロ用リーチ（伸身・逆シングル含む）
     if (distSq < interceptReach * interceptReach) {
       agent.state = "FIELDING";
       agent.arrivalTime = t;
@@ -681,7 +660,7 @@ function checkGroundBallIntercept(
       if (distSq < bestPursuerDistSq) { bestPursuerDistSq = distSq; bestPursuer = a; }
     }
     if (bestPursuer) {
-      const reach = getCatchReach(bestPursuer, true) * 1.4;
+      const reach = getCatchReach(bestPursuer) * 1.4;
       if (bestPursuerDistSq < reach * reach) {
         bestPursuer.state = "FIELDING";
         bestPursuer.arrivalTime = t;
@@ -709,8 +688,7 @@ function checkFlyCatchAtLanding(
   agents: FielderAgent[],
   trajectory: BallTrajectory,
   t: number,
-  rng: () => number,
-  launchAngle?: number
+  rng: () => number
 ): { agent: FielderAgent; catchResult: CatchResult } | null {
   if (!trajectory.isOnGround(t)) return null;
 
@@ -726,11 +704,7 @@ function checkFlyCatchAtLanding(
   candidates.sort((a, b) => a.dist - b.dist);
 
   for (const { agent, dist } of candidates) {
-    let catchReach = getCatchReach(agent, false, launchAngle);
-    // ライナーは低弾道・高速で到達するため外野手の捕球ゾーンが狭い
-    if (trajectory.ballType === "line_drive" && agent.pos >= 7) {
-      catchReach *= 0.40;
-    }
+    const catchReach = getCatchReach(agent);
     const extendedRadius = catchReach * 1.2;
 
     const fieldingRate =
@@ -745,21 +719,11 @@ function checkFlyCatchAtLanding(
         0,
         1
       );
-      // ライナー: marginが小さい（ギリギリ到達）ほど捕球困難
-      let catchRate: number;
-      if (trajectory.ballType === "line_drive" && agent.pos >= 7) {
-        catchRate = clamp(
-          0.70 + marginFactor * 0.20 + fieldingRate * 0.05,
-          0.70,
-          0.95
-        );
-      } else {
-        catchRate = clamp(
-          0.9 + marginFactor * 0.07 + fieldingRate * 0.03,
-          0.9,
-          0.99
-        );
-      }
+      const catchRate = clamp(
+        0.9 + marginFactor * 0.07 + fieldingRate * 0.03,
+        0.9,
+        0.99
+      );
       const success = rng() < catchRate;
       return {
         agent,
@@ -818,20 +782,17 @@ function checkFlyCatchAtLanding(
 // 結果解決
 // ====================================================================
 
-/** ベースカバーに向かっているエージェントを返す。home は捕手固定 */
+/** ベースカバーに向かっているエージェントを返す */
 function findBaseCoverer(
   agents: FielderAgent[],
   base: keyof typeof BASE_POSITIONS,
   excludePos: FielderPosition
 ): FielderAgent | undefined {
-  if (base === "home") {
-    const c = agents.find(a => a.pos === 2);
-    return c && c.pos !== excludePos ? c : undefined;
-  }
   const basePos = BASE_POSITIONS[base];
-  return agents
-    .filter(a => a.pos !== excludePos && a.state === "COVERING" && a.action === "cover_base")
-    .sort((a, b) => vec2Distance(a.currentPos, basePos) - vec2Distance(b.currentPos, basePos))[0];
+  const candidates = base === "home"
+    ? agents.filter(a => a.pos !== excludePos && (a.state === "COVERING" || a.state === "HOLDING"))
+    : agents.filter(a => a.pos !== excludePos && a.state === "COVERING" && a.action === "cover_base");
+  return candidates.sort((a, b) => vec2Distance(a.currentPos, basePos) - vec2Distance(b.currentPos, basePos))[0];
 }
 
 function resolveSuccessfulCatch(
@@ -851,6 +812,22 @@ function resolveSuccessfulCatch(
   return resolveFlyOut(catcher, trajectory.ballType, batter, bases, outs, agents, rng);
 }
 
+function findClosestFielderToBase(
+  agents: FielderAgent[],
+  base: keyof typeof BASE_POSITIONS,
+  excludePos: FielderPosition
+): FielderPosition {
+  const basePos = BASE_POSITIONS[base];
+  let best: FielderAgent | null = null;
+  let bestDist = Infinity;
+  for (const a of agents) {
+    if (a.pos === excludePos) continue;
+    const d = vec2Distance(a.currentPos, basePos);
+    if (d < bestDist) { bestDist = d; best = a; }
+  }
+  return best?.pos ?? (6 as FielderPosition);
+}
+
 function resolveGroundOut(
   catcher: FielderAgent,
   batter: Player,
@@ -859,8 +836,9 @@ function resolveGroundOut(
   agents: FielderAgent[],
   rng: () => number
 ): AgentFieldingResult {
-  // 外野手がゴロを回収 → 内野を抜けたヒット（シングル確定）+ 内野への送球
-  if (catcher.pos >= 7) {
+  // 外野域でゴロを回収 → 内野を抜けたヒット（シングル確定）+ 内野への送球
+  const catcherDistFromHome = Math.sqrt(catcher.currentPos.x ** 2 + catcher.currentPos.y ** 2);
+  if (catcherDistFromHome > OUTFIELD_DEPTH_THRESHOLD) {
     const throwTarget = findBestThrowTarget(catcher, agents, "second");
     return {
       result: "single",
@@ -883,7 +861,7 @@ function resolveGroundOut(
 
   // フォールバック用ポジション（COVERINGエージェントが見つからない場合のデフォルト）
   const firstCoverPos: FielderPosition = firstCover?.pos ?? 3;
-  const secondCoverPos: FielderPosition = secondCover?.pos ?? (catcher.pos === 6 ? 4 : 6);
+  const secondCoverPos: FielderPosition = secondCover?.pos ?? findClosestFielderToBase(agents, "second", catcher.pos);
   const thirdCoverPos: FielderPosition = thirdCover?.pos ?? 5;
 
   const runnerSpeed = 6.5 + (batter.batting.speed / 100) * 2.5;
@@ -922,9 +900,9 @@ function resolveGroundOut(
     if (defenseTimeSecond < runnerFirstToSecond + 0.3) {
       // 2塁フォースアウト成功
 
-      // SS/2Bが2塁ベース付近で打球処理 → 自分でベースを踏む（5m以内）
+      // 2塁ベース付近で打球処理 → 自分でベースを踏む（5m以内）
       const distToSecondBase = vec2Distance(catcher.currentPos, BASE_POSITIONS.second);
-      if ((catcher.pos === 6 || catcher.pos === 4) && distToSecondBase < 5.0) {
+      if (distToSecondBase < 5.0) {
         if (outs < 2) {
           const dpRate = DP_STEP_ON_BASE_SUCCESS + (1 - batter.batting.speed / 100) * DP_STEP_ON_BASE_SPEED_FACTOR;
           if (rng() < dpRate) {
@@ -1020,21 +998,22 @@ function resolveGroundOut(
   }
 
   // === 1塁送球（デフォルト） ===
-  // 1B自己処理または1Bが打球処理→投手等がベースカバー
-  if (catcher.pos === 3) {
-    const pCover = findBaseCoverer(agents, "first", 3);
+  // 1塁ベース付近で処理 → 自己処理またはカバー者に送球
+  const distToFirst = vec2Distance(catcher.currentPos, BASE_POSITIONS.first);
+  if (distToFirst < FIRST_BASE_PROXIMITY) {
+    const pCover = findBaseCoverer(agents, "first", catcher.pos);
     if (pCover) {
       return {
         result: "groundout",
         fielderPos: catcher.pos,
-        throwPlays: [{ from: 3, to: pCover.pos, base: "first" }],
+        throwPlays: [{ from: catcher.pos, to: pCover.pos, base: "first" }],
       };
     }
-    // 1B自己処理: 3U（無補殺刺殺）
+    // 自己処理（無補殺刺殺）
     return {
       result: "groundout",
       fielderPos: catcher.pos,
-      putOutPos: 3 as FielderPosition,
+      putOutPos: catcher.pos,
       throwPlays: [],
     };
   }
@@ -1323,7 +1302,7 @@ function calcPathIntercept(
   const perpY = agent.currentPos.y - projDist * pathDirY;
   const perpDist = Math.sqrt(perpX * perpX + perpY * perpY);
 
-  const catchReach = getCatchReach(agent, true); // ゴロ用リーチ
+  const catchReach = getCatchReach(agent);
 
   if (projDist < 0) return null; // 野手がホーム後方
 
@@ -1431,12 +1410,10 @@ function findNearestAgent(
   agents: FielderAgent[],
   pos: Vec2
 ): FielderAgent | null {
-  // 推定到達時間ベースで回収野手を決定。
-  // P/Cは回収者にならない（バックアップ/カバー担当）
+  // 推定到達時間ベースで回収野手を決定（全野手が回収候補）
   let best: FielderAgent | null = null;
   let bestTime = Infinity;
   for (const a of agents) {
-    if (a.pos <= 2) continue;
     const dist = vec2Distance(a.currentPos, pos);
     const arrivalTime = a.maxSpeed > 0 ? dist / a.maxSpeed : Infinity;
     if (arrivalTime < bestTime) {
@@ -1459,8 +1436,7 @@ function snapshotAll(
   ballPos: Vec2,
   ballHeight: number,
   t: number,
-  trajectory?: BallTrajectory,
-  launchAngle?: number
+  trajectory?: BallTrajectory
 ): AgentTimelineEntry {
   return {
     t,
@@ -1480,7 +1456,7 @@ function snapshotAll(
           action: a.action,
           perceivedX: a.perceivedLanding.position.x,
           perceivedY: a.perceivedLanding.position.y,
-          effectiveRange: trajectory ? getEffectiveRange(a, tRemaining, false, launchAngle) : undefined,
+          effectiveRange: trajectory ? getEffectiveRange(a, tRemaining) : undefined,
         };
       });
     })(),
