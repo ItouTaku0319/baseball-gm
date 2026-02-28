@@ -203,7 +203,10 @@ export const AGENT_RUNNING_CATCH_SKILL = 0.003;  // 守備力1あたりの成功
 
 // 知覚ノイズ
 export const AGENT_PERCEPTION_BASE_NOISE = 12;   // 基本ノイズσ(m)
-export const PERCEPTION_ANGLE_DECAY_RATE = 0.03; // 打球角度による知覚ノイズ減衰率
+// 打球高さによる知覚ノイズ減衰率
+// 旧: launchAngle(0-60°範囲, 0.03/度) → 新: maxHeight(0-25m範囲, 0.07/m)
+// 低い打球=高ノイズ(読みにくいライナー)、高い打球=低ノイズ(放物線が読めるフライ/ポップ)
+export const PERCEPTION_ANGLE_DECAY_RATE = 0.07;
 
 // 移動
 export const AGENT_ACCELERATION_TIME = 0.3;      // 0→最高速に達するまでの時間(秒)
