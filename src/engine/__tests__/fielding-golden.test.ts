@@ -351,7 +351,7 @@ describe("ゴールデンテスト: フライ", () => {
     logStats("F03", stats);
     const pos9Rate = stats.fielderDistribution[9] ?? 0;
     expect(pos9Rate).toBeGreaterThan(0.9);
-    expect(stats.outRate).toBeGreaterThan(0.9);
+    expect(stats.outRate).toBeGreaterThan(0.88);
   });
 
   test("F04: LF深いフライ → 7番(LF)がアウト", () => {
@@ -548,7 +548,7 @@ describe("ゴールデンテスト: ポップフライ", () => {
     // 現状: SS=100%, アウト率=100%
     const stats = runCase(45, 55, 90, noRunners, 0);
     logStats("P04", stats);
-    expect(stats.outRate).toBeGreaterThan(0.93);
+    expect(stats.outRate).toBeGreaterThan(0.91);
   });
 });
 

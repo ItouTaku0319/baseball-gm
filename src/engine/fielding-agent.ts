@@ -19,6 +19,7 @@ import {
   AGENT_BASE_REACTION_OF,
   AGENT_PITCHER_REACTION,
   AGENT_CATCHER_REACTION,
+  AGENT_LINE_DRIVE_REACTION_MULT,
   AGENT_DIVE_MIN_DIST,
   AGENT_DIVE_MAX_DIST,
   AGENT_DIVE_BASE_RATE,
@@ -42,11 +43,6 @@ import {
   CATCH_REACH_BASE_C,
   CATCH_REACH_SKILL_FACTOR,
   POPUP_LAUNCH_ANGLE_THRESHOLD,
-  CALLOFF_TARGET_THRESHOLD,
-  CLOSER_PURSUER_INTERCEPT_RATIO,
-  CLOSER_PURSUER_CHASE_RATIO,
-  PITCHER_GROUND_BALL_MAX_DIST,
-  INFIELDER_GROUND_PURSUIT_LIMIT,
   INFIELD_HIT_PROB,
   INFIELD_HIT_MARGIN_SCALE,
   INFIELD_HIT_SPEED_BONUS,
@@ -62,9 +58,6 @@ import {
   DP_PIVOT_SUCCESS_SPEED_FACTOR,
   DP_STEP_ON_BASE_SUCCESS,
   DP_STEP_ON_BASE_SPEED_FACTOR,
-  OF_BACKUP_MAX_DIST,
-  OF_DRIFT_MIN,
-  OF_DRIFT_MAX,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -82,7 +75,6 @@ import type {
   ThrowPlay,
 } from "./fielding-agent-types";
 import {
-  CALLOFF_PRIORITY,
   BASE_POSITIONS,
   BASE_LENGTH,
   BASE_NAMES,
@@ -90,9 +82,9 @@ import {
   vec2DistanceSq,
   clamp,
   gaussianRandom,
-  PRIMARY_ZONE,
 } from "./fielding-agent-types";
 import type { FielderAction } from "../models/league";
+import { calcAndStorePursuitScore, autonomousDecide } from "./autonomous-fielder";
 
 // ====================================================================
 // BattedBall / BaseRunners — simulation.ts 内部型のミラー
@@ -217,25 +209,15 @@ export function resolvePlayWithAgents(
       updatePerception(agent, trajectory, t, noiseScale, rng);
     }
 
-    // --- Step 1.5: 外野フライ/ポップアップ時、反応中の内野手を即座にカバーへ ---
-    // 現実の野球では、明白な外野フライ/ポップフライに対し内野手は反応を待たずベースカバーに動き出す
-    if (!trajectory.isGroundBall && trajectory.landingDistance >= 50 && ball.launchAngle >= 20) {
-      for (const agent of agents) {
-        if (agent.pos >= 3 && agent.pos <= 6 && agent.state === "REACTING") {
-          assignNonPursuitRole(agent, trajectory, bases, outs, agents);
-        }
-      }
-    }
-
-    // --- Step 2: 行動決定 ---
+    // --- Step 2: 自律行動決定（2パス: 順序非依存） ---
+    // Pass 1: 全員の raw pursuit score を計算（他者のスコアに依存しない）
     for (const agent of agents) {
-      if (agent.reactionRemaining > 0) continue;
-      if (agent.state === "FIELDING" || agent.state === "THROWING") continue;
-      updateDecision(agent, trajectory, t, agents, bases, outs, ball.launchAngle);
+      calcAndStorePursuitScore(agent, agents, trajectory, t);
     }
-
-    // --- Step 3: コールオフ解決（行動決定後に実行し、捕球チェック前に競合解消） ---
-    resolveCallOffs(agents, trajectory);
+    // Pass 2: 全員のスコアを見て最終行動決定
+    for (const agent of agents) {
+      autonomousDecide(agent, agents, trajectory, t, bases, outs);
+    }
 
     // --- Step 4: 移動 ---
     for (const agent of agents) {
@@ -409,6 +391,7 @@ function createAgents(
         : player.batting.catching,
       arm: isPitcher ? player.pitching?.arm ?? 50 : player.batting.arm,
       speed: player.batting.speed,
+      awareness: player.batting.awareness ?? 50,
     };
 
     // 反応時間（ゴロ時は内野手がレディ姿勢で構えており初動が速い）
@@ -422,7 +405,7 @@ function createAgents(
     }
     // ライナーは弾道が低く速いため初動判断が遅れる
     if (trajectory.ballType === "line_drive") {
-      baseReaction *= 3.0;
+      baseReaction *= AGENT_LINE_DRIVE_REACTION_MULT;
     }
 
     // 走速
@@ -448,6 +431,7 @@ function createAgents(
       hasYielded: false,
       action: "hold" as FielderAction,
       skill,
+      homePos: { ...startPos },
       distanceAtArrival: Infinity,
       arrivalTime: Infinity,
     });
@@ -506,85 +490,6 @@ function updatePerception(
 }
 
 // ====================================================================
-// コールオフ
-// ====================================================================
-
-function resolveCallOffs(agents: FielderAgent[], trajectory: BallTrajectory): void {
-  // GC圧力削減: filter()の代わりにforループでpursuersを収集
-  const pursuers: FielderAgent[] = [];
-  for (let i = 0; i < agents.length; i++) {
-    const a = agents[i];
-    if (a.state === "PURSUING" && !a.hasYielded) pursuers.push(a);
-  }
-  if (pursuers.length < 2) return;
-
-  // 投手がゴロインターセプトモード（interceptPointあり）の場合、
-  // コールオフの対象から除外（弱ゴロ追跡時は他の内野手と競合させる）
-  const pitcherIntercepting = trajectory.isGroundBall &&
-    pursuers.some(a => a.pos === 1 && a.interceptPoint != null);
-
-  for (let i = 0; i < pursuers.length - 1; i++) {
-    for (let j = i + 1; j < pursuers.length; j++) {
-      const a = pursuers[i];
-      const b = pursuers[j];
-      // GC圧力削減: DistanceSqで比較（sqrt不要）CALLOFF_TARGET_THRESHOLD^2=225
-      const targetDistSq = vec2DistanceSq(a.targetPos, b.targetPos);
-
-      // ゴロでinterceptPoint持ち同士: ターゲット距離に関係なくコールオフ対象
-      const isGroundBallIntercept = trajectory.isGroundBall
-        && a.interceptPoint != null && b.interceptPoint != null;
-
-      if (targetDistSq < CALLOFF_TARGET_THRESHOLD * CALLOFF_TARGET_THRESHOLD || isGroundBallIntercept) {
-        // 投手がゴロインターセプト中なら、投手を含むペアのコールオフをスキップ
-        // （投手と内野手が同じゴロを追う場合、先にインターセプトした方が処理する）
-        if (pitcherIntercepting && (a.pos === 1 || b.pos === 1)) continue;
-
-        // 外野手同士(pos>=7): ゾーン持ちが優先、同条件ならターゲットに近い方が呼び込む
-        if (a.pos >= 7 && b.pos >= 7) {
-          const ballAngle = getBallZoneAngle(trajectory);
-          const aInZone = isInPrimaryZone(a.pos, ballAngle);
-          const bInZone = isInPrimaryZone(b.pos, ballAngle);
-          // GC圧力削減: DistanceSqで比較（sqrt不要）
-          const aDist = vec2DistanceSq(a.currentPos, a.targetPos);
-          const bDist = vec2DistanceSq(b.currentPos, b.targetPos);
-          if (aInZone && !bInZone) {
-            (b as { hasYielded: boolean }).hasYielded = true;
-            (a as { hasCalled: boolean }).hasCalled = true;
-          } else if (!aInZone && bInZone) {
-            (a as { hasYielded: boolean }).hasYielded = true;
-            (b as { hasCalled: boolean }).hasCalled = true;
-          } else if (aDist <= bDist) {
-            (b as { hasYielded: boolean }).hasYielded = true;
-            (a as { hasCalled: boolean }).hasCalled = true;
-          } else {
-            (a as { hasYielded: boolean }).hasYielded = true;
-            (b as { hasCalled: boolean }).hasCalled = true;
-          }
-        } else {
-          // 内野手含む一般ケース: ゾーン持ちが優先、同条件ならCALLOFF_PRIORITYで決定
-          const ballAngleIF = getBallZoneAngle(trajectory);
-          const aInZoneIF = isInPrimaryZone(a.pos, ballAngleIF);
-          const bInZoneIF = isInPrimaryZone(b.pos, ballAngleIF);
-          if (aInZoneIF && !bInZoneIF) {
-            (b as { hasYielded: boolean }).hasYielded = true;
-            (a as { hasCalled: boolean }).hasCalled = true;
-          } else if (!aInZoneIF && bInZoneIF) {
-            (a as { hasYielded: boolean }).hasYielded = true;
-            (b as { hasCalled: boolean }).hasCalled = true;
-          } else if (CALLOFF_PRIORITY[a.pos] >= CALLOFF_PRIORITY[b.pos]) {
-            (b as { hasYielded: boolean }).hasYielded = true;
-            (a as { hasCalled: boolean }).hasCalled = true;
-          } else {
-            (a as { hasYielded: boolean }).hasYielded = true;
-            (b as { hasCalled: boolean }).hasCalled = true;
-          }
-        }
-      }
-    }
-  }
-}
-
-// ====================================================================
 // 物理ベース守備範囲計算
 // ====================================================================
 
@@ -631,307 +536,6 @@ function getCatchReach(agent: FielderAgent, forGroundBall = false, launchAngle?:
 
 function getEffectiveRange(agent: FielderAgent, tRemaining: number, forGroundBall = false, launchAngle?: number): number {
   return calcReachableDistance(agent, tRemaining) + getCatchReach(agent, forGroundBall, launchAngle);
-}
-
-function getBallZoneAngle(trajectory: BallTrajectory): number {
-  return clamp(trajectory.direction, 0, 90);
-}
-
-function isInPrimaryZone(pos: FielderPosition, ballAngle: number): boolean {
-  const zone = PRIMARY_ZONE[pos];
-  if (!zone) return false;
-  return ballAngle >= zone.min && ballAngle <= zone.max;
-}
-
-// ====================================================================
-// 行動決定
-// ====================================================================
-
-function updateDecision(
-  agent: FielderAgent,
-  trajectory: BallTrajectory,
-  t: number,
-  allAgents: FielderAgent[],
-  bases: BaseRunners,
-  outs: number,
-  launchAngle?: number
-): void {
-  if (agent.hasYielded) {
-    if (agent.pos >= 7) {
-      const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
-      if (distToLanding >= OF_BACKUP_MAX_DIST) {
-        // 遠方OF → ドリフト
-        const driftRatio = OF_DRIFT_MIN + (agent.skill.fielding / 100) * (OF_DRIFT_MAX - OF_DRIFT_MIN);
-        const backupPos = calcBackupPosition(trajectory);
-        agent.state = "BACKING_UP";
-        agent.action = "backup";
-        agent.targetPos = {
-          x: agent.currentPos.x + (backupPos.x - agent.currentPos.x) * driftRatio,
-          y: agent.currentPos.y + (backupPos.y - agent.currentPos.y) * driftRatio,
-        };
-        return;
-      }
-    }
-    agent.state = "BACKING_UP";
-    agent.action = "backup";
-    agent.targetPos = calcBackupPosition(trajectory);
-    return;
-  }
-
-  // フライ時、OFが既にBACKING_UP → 目標を維持（ドリフト目標の毎ティック再計算防止）
-  // ゴロの場合はOFも再判定が必要（知覚更新で追跡に切り替わる可能性あり）
-  if (agent.state === "BACKING_UP" && agent.pos >= 7 && !trajectory.isGroundBall) {
-    return;
-  }
-
-  const perceived = agent.perceivedLanding.position;
-  // GC圧力削減: 距離二乗で比較できる箇所はDistanceSqを使用
-  const distToTargetSq = vec2DistanceSq(agent.currentPos, perceived);
-  const distToTarget = Math.sqrt(distToTargetSq);
-  const timeRemaining = Math.max(0, trajectory.flightTime - t);
-
-  if (trajectory.isGroundBall) {
-    // 投手専用ゴロ処理: 弱いゴロ(着弾距離<=30m)のみインターセプトを試行
-    // 投手はゾーンなし(PRIMARY_ZONE=null)だが、弱ゴロでは自発的に追跡
-    if (agent.pos === 1 && trajectory.landingDistance <= PITCHER_GROUND_BALL_MAX_DIST) {
-      const intercept = calcPathIntercept(agent, trajectory, t);
-      if (intercept && intercept.canReach) {
-        agent.state = "PURSUING";
-        agent.action = "charge";
-        agent.targetPos = intercept.point;
-        agent.interceptPoint = intercept.point;
-        agent.interceptBallTime = intercept.ballTime;
-        return;
-      }
-    }
-
-    // ゴロ: 統一ロジック — インターセプト点を物理計算で求める
-    const intercept = calcPathIntercept(agent, trajectory, t);
-    const ballAngle = getBallZoneAngle(trajectory);
-    const iAmZoneOwner = isInPrimaryZone(agent.pos, ballAngle);
-    if (intercept && intercept.canReach) {
-      // 内野手の深度制限: インターセプト点が内野限界(38m)を超えたらカバーに回る
-      if (agent.pos >= 3 && agent.pos <= 6) {
-        const ipDist = Math.sqrt(intercept.point.x ** 2 + intercept.point.y ** 2);
-        if (ipDist > INFIELDER_GROUND_PURSUIT_LIMIT) {
-          assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
-          return;
-        }
-      }
-      // より近い野手が既にインターセプトに向かっている場合はカバーに回る
-      // ただし自分がゾーン持ちで相手がゾーン外の場合は譲らない
-      const interceptThresholdSq = (distToTarget * CLOSER_PURSUER_INTERCEPT_RATIO) * (distToTarget * CLOSER_PURSUER_INTERCEPT_RATIO);
-      const closerPursuer = allAgents.find((other) => {
-        if (other === agent || other.state !== "PURSUING") return false;
-        if (!other.interceptPoint) return false;
-        const otherDistSq = vec2DistanceSq(other.currentPos, other.interceptPoint);
-        if (otherDistSq >= interceptThresholdSq) return false;
-        if (iAmZoneOwner && !isInPrimaryZone(other.pos, ballAngle)) return false;
-        return true;
-      });
-      if (closerPursuer) {
-        assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
-        return;
-      }
-      agent.state = "PURSUING";
-      agent.action = "charge";
-      agent.targetPos = intercept.point;
-      agent.interceptPoint = intercept.point;
-      agent.interceptBallTime = intercept.ballTime;
-      return;
-    }
-
-    // 内野手は深い停止球を追わない（外野手に任せる）
-    if (agent.pos >= 3 && agent.pos <= 6 && trajectory.landingDistance > INFIELDER_GROUND_PURSUIT_LIMIT) {
-      assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
-      return;
-    }
-
-    // 停止球チャーシング: 移動速度ベースで到達可能か判定
-    const chaseDeadline = trajectory.flightTime + 4.0;
-    const chaseTime = distToTarget / agent.maxSpeed + agent.reactionRemaining;
-    if (t + chaseTime < chaseDeadline) {
-      // より近い野手が既に追跡中ならカバーに回る
-      // ただし自分がゾーン持ちで相手がゾーン外の場合は譲らない
-      const chaseThresholdSq = (distToTarget * CLOSER_PURSUER_CHASE_RATIO) * (distToTarget * CLOSER_PURSUER_CHASE_RATIO);
-      const closerChaser = allAgents.find((other) => {
-        if (other === agent || other.state !== "PURSUING") return false;
-        const otherDistSq = vec2DistanceSq(other.currentPos, perceived);
-        if (otherDistSq >= chaseThresholdSq) return false;
-        if (iAmZoneOwner && !isInPrimaryZone(other.pos, ballAngle)) return false;
-        return true;
-      });
-      if (closerChaser) {
-        assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
-        return;
-      }
-      agent.state = "PURSUING";
-      agent.action = "field_ball";
-      agent.targetPos = perceived;
-      return;
-    }
-
-    assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
-    return;
-  }
-
-  // フライ/ライナー/ポップフライ: 統一ロジック（投手含む全ポジション）
-  // 投手は反応時間0.6sと位置(0, 18.44)で自然に制限される
-
-  // 既にPURSUINGなら知覚更新のみ反映して継続（再判定でfloat誤差による脱落を防ぐ）
-  if (agent.state === "PURSUING") {
-    agent.targetPos = perceived;
-    return;
-  }
-
-  // 到達判定: 物理ベース（加速フェーズ+等速フェーズでの移動距離 + 捕球リーチ）
-  const flyRange = getEffectiveRange(agent, timeRemaining + 1.0, false, launchAngle);
-  const canReachFly = distToTarget <= flyRange;
-
-  if (!canReachFly) {
-    assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
-    return;
-  }
-
-  // 内野手(3-6)は外野手が到達可能or既に追跡中の外野フライには参加しない
-  if (agent.pos >= 3 && agent.pos <= 6) {
-    const ofCanReach = allAgents.some((other) => {
-      if (other === agent || other.pos < 7) return false;
-      // OFが既にPURSUING → 処理を任せる
-      if (other.state === "PURSUING") return true;
-      const ofDist = vec2Distance(other.currentPos, perceived);
-      const ofRange = getEffectiveRange(other, timeRemaining + 1.0, false, launchAngle);
-      return ofDist <= ofRange;
-    });
-    if (ofCanReach) {
-      assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
-      return;
-    }
-  }
-
-  // より近い野手が既に追跡中ならカバーに回る
-  // ただし自分がゾーン持ちで相手がゾーン外の場合は譲らない
-  const flyBallAngle = getBallZoneAngle(trajectory);
-  const iAmFlyZoneOwner = isInPrimaryZone(agent.pos, flyBallAngle);
-  // GC圧力削減: DistanceSqで比較
-  const flyChaseThresholdSq = (distToTarget * CLOSER_PURSUER_CHASE_RATIO) * (distToTarget * CLOSER_PURSUER_CHASE_RATIO);
-  const closerFlyPursuer = allAgents.find((other) => {
-    if (other === agent || other.state !== "PURSUING") return false;
-    const otherDistSq = vec2DistanceSq(other.currentPos, perceived);
-    if (otherDistSq >= flyChaseThresholdSq) return false;
-    if (iAmFlyZoneOwner && !isInPrimaryZone(other.pos, flyBallAngle)) return false;
-    return true;
-  });
-  if (closerFlyPursuer) {
-    assignNonPursuitRole(agent, trajectory, bases, outs, allAgents);
-    return;
-  }
-
-  agent.state = "PURSUING";
-  if (perceived.y < agent.currentPos.y - 2) {
-    agent.action = "charge";
-  } else if (perceived.y > agent.currentPos.y + 5) {
-    agent.action = "retreat";
-  } else {
-    agent.action = "lateral";
-  }
-  agent.targetPos = perceived;
-}
-
-function assignNonPursuitRole(
-  agent: FielderAgent,
-  trajectory: BallTrajectory,
-  _bases: BaseRunners,
-  _outs: number,
-  allAgents: FielderAgent[] = []
-): void {
-  const pos = agent.pos;
-  switch (pos) {
-    case 1: // P
-      if (trajectory.landingPos.x > 0 && trajectory.isGroundBall) {
-        agent.state = "COVERING";
-        agent.action = "cover_base";
-        agent.targetPos = { ...BASE_POSITIONS.first };
-      } else {
-        agent.state = "HOLDING";
-        agent.action = "hold";
-        agent.targetPos = { x: 0, y: 18.4 };
-      }
-      break;
-    case 2: // C
-      agent.state = "HOLDING";
-      agent.action = "hold";
-      agent.targetPos = { ...BASE_POSITIONS.home };
-      break;
-    case 3: // 1B
-      agent.state = "COVERING";
-      agent.action = "cover_base";
-      agent.targetPos = { ...BASE_POSITIONS.first };
-      break;
-    case 4: // 2B — 深いフライの中継判断（独立判断+周囲観察）
-      if (!trajectory.isGroundBall && trajectory.landingDistance >= 60) {
-        const isBallSide4 = trajectory.direction > 45;  // 2Bは右側担当
-        const someoneRelaying4 = allAgents.some(a => a !== agent && a.action === "relay");
-        if (isBallSide4 && !someoneRelaying4) {
-          agent.state = "COVERING";
-          agent.action = "relay";
-          agent.targetPos = calcCutoffPos(trajectory);
-        } else {
-          agent.state = "COVERING";
-          agent.action = "cover_base";
-          agent.targetPos = { ...BASE_POSITIONS.second };
-        }
-      } else {
-        agent.state = "COVERING";
-        agent.action = "cover_base";
-        agent.targetPos = { ...BASE_POSITIONS.second };
-      }
-      break;
-    case 5: // 3B
-      agent.state = "COVERING";
-      agent.action = "cover_base";
-      agent.targetPos = { ...BASE_POSITIONS.third };
-      break;
-    case 6: // SS — 深いフライの中継判断（独立判断+周囲観察）
-      if (!trajectory.isGroundBall && trajectory.landingDistance >= 60) {
-        const isBallSide6 = trajectory.direction <= 45;  // SSは左側担当
-        const someoneRelaying6 = allAgents.some(a => a !== agent && a.action === "relay");
-        if (isBallSide6 && !someoneRelaying6) {
-          agent.state = "COVERING";
-          agent.action = "relay";
-          agent.targetPos = calcCutoffPos(trajectory);
-        } else {
-          agent.state = "COVERING";
-          agent.action = "cover_base";
-          agent.targetPos = { ...BASE_POSITIONS.second };
-        }
-      } else {
-        agent.state = "COVERING";
-        agent.action = "cover_base";
-        agent.targetPos = { ...BASE_POSITIONS.second };
-      }
-      break;
-    default: { // 7, 8, 9 (OF) — 距離に応じたバックアップ/ドリフト
-      const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
-      if (distToLanding < OF_BACKUP_MAX_DIST) {
-        // 近い(隣接OF) → 通常バックアップ
-        agent.state = "BACKING_UP";
-        agent.action = "backup";
-        agent.targetPos = calcBackupPosition(trajectory);
-      } else {
-        // 遠い(反対側OF) → 軽くドリフト
-        const driftRatio = OF_DRIFT_MIN + (agent.skill.fielding / 100) * (OF_DRIFT_MAX - OF_DRIFT_MIN);
-        const backupPos = calcBackupPosition(trajectory);
-        agent.state = "BACKING_UP";
-        agent.action = "backup";
-        agent.targetPos = {
-          x: agent.currentPos.x + (backupPos.x - agent.currentPos.x) * driftRatio,
-          y: agent.currentPos.y + (backupPos.y - agent.currentPos.y) * driftRatio,
-        };
-      }
-      break;
-    }
-  }
 }
 
 // ====================================================================
@@ -1843,27 +1447,6 @@ function calcPathIntercept(
     perpDist,
   };
 }
-
-function calcBackupPosition(trajectory: BallTrajectory): Vec2 {
-  const landingPos = trajectory.landingPos;
-  const angleRad = ((trajectory.direction - 45) * Math.PI) / 180;
-  const backupDist = 8;
-  return {
-    x: landingPos.x + backupDist * Math.sin(angleRad),
-    y: landingPos.y + backupDist * Math.cos(angleRad),
-  };
-}
-
-function calcCutoffPos(
-  trajectory: BallTrajectory
-): Vec2 {
-  const landing = trajectory.landingPos;
-  return {
-    x: landing.x * 0.4,
-    y: landing.y * 0.4,
-  };
-}
-
 
 /**
  * 着地後のボール転がり位置を推定する。

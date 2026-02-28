@@ -104,10 +104,10 @@ function applyGrowth(player: Player): Player {
 
   const newBatting = { ...player.batting };
   // ランダムに2-3の能力を成長
-  const batKeys: (keyof typeof newBatting)[] = ["contact", "power", "speed", "arm", "fielding", "catching", "eye"];
+  const batKeys: ("contact" | "power" | "speed" | "arm" | "fielding" | "catching" | "eye" | "awareness")[] = ["contact", "power", "speed", "arm", "fielding", "catching", "eye", "awareness"];
   for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i++) {
     const key = batKeys[Math.floor(Math.random() * batKeys.length)];
-    newBatting[key] = Math.min(100, newBatting[key] + growthAmount);
+    newBatting[key] = Math.min(100, (newBatting[key] ?? 50) + growthAmount);
   }
 
   let newPitching = player.pitching;
@@ -134,12 +134,12 @@ function applyDecline(player: Player): Player {
   const declineAmount = Math.max(1, Math.round((age - 32) * 1.5 * (0.5 + Math.random())));
 
   const newBatting = { ...player.batting };
-  const batKeys: (keyof typeof newBatting)[] = ["contact", "power", "speed", "arm", "fielding", "catching", "eye"];
+  const batKeys: ("contact" | "power" | "speed" | "arm" | "fielding" | "catching" | "eye" | "awareness")[] = ["contact", "power", "speed", "arm", "fielding", "catching", "eye", "awareness"];
   // 足から衰える
   newBatting.speed = Math.max(1, newBatting.speed - Math.round(declineAmount * 1.5));
   for (let i = 0; i < 1 + Math.floor(Math.random() * 2); i++) {
     const key = batKeys[Math.floor(Math.random() * batKeys.length)];
-    newBatting[key] = Math.max(1, newBatting[key] - declineAmount);
+    newBatting[key] = Math.max(1, (newBatting[key] ?? 50) - declineAmount);
   }
 
   let newPitching = player.pitching;

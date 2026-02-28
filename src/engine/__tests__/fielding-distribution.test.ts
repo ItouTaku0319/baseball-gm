@@ -111,10 +111,9 @@ describe("ポジション別守備機会分布", () => {
     expect(true).toBe(true);
   });
 
-  // teamAはホームチームとして9イニングの表のみ守備するため、
-  // SS守備機会はフル18イニングの約半分になる
-  it("SS: 1試合あたりPO+Aが3.0-8.0", () => {
-    expect(avg["SS"].total).toBeGreaterThanOrEqual(3.0);
+  // 自律型AIでは近接性ベースで分配されるため、SS守備機会はゾーン制より少なくなる
+  it("SS: 1試合あたりPO+Aが1.5-8.0", () => {
+    expect(avg["SS"].total).toBeGreaterThanOrEqual(1.5);
     expect(avg["SS"].total).toBeLessThanOrEqual(8.0);
   });
 
@@ -123,9 +122,9 @@ describe("ポジション別守備機会分布", () => {
     expect(avg["SS"].po).toBeLessThanOrEqual(4.5);
   });
 
-  it("SS: 1試合あたりAが2.0-6.5", () => {
-    // コンタクトモデル導入後のゴロ率変化でSSのアシスト数が増加
-    expect(avg["SS"].a).toBeGreaterThanOrEqual(1.8);
+  it("SS: 1試合あたりAが1.0-6.5", () => {
+    // 自律型AI移行後、近接性ベースでの分配によりSSアシストが減少
+    expect(avg["SS"].a).toBeGreaterThanOrEqual(1.0);
     expect(avg["SS"].a).toBeLessThanOrEqual(6.5);
   });
 
@@ -135,8 +134,9 @@ describe("ポジション別守備機会分布", () => {
     expect(avg["1B"].po).toBeLessThanOrEqual(12);
   });
 
-  it("2B: 1試合あたりPO+Aが3.0-8", () => {
-    expect(avg["2B"].total).toBeGreaterThanOrEqual(3.0);
+  it("2B: 1試合あたりPO+Aが2.5-8", () => {
+    // 自律型AI移行後、近接性ベースでの分配により2B守備機会がやや減少
+    expect(avg["2B"].total).toBeGreaterThanOrEqual(2.5);
     expect(avg["2B"].total).toBeLessThanOrEqual(8);
   });
 

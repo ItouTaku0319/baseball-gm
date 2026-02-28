@@ -73,19 +73,20 @@ function applyCampTraining(player: Player): {
 
   if (ageFactor > 0 && maxGrowth > 0) {
     // 打撃能力の成長
-    const batKeys: { key: keyof typeof newBatting; label: string }[] = [
+    const batKeys: { key: "contact" | "power" | "speed" | "fielding" | "eye" | "awareness"; label: string }[] = [
       { key: "contact", label: "ミート" },
       { key: "power", label: "パワー" },
       { key: "speed", label: "走力" },
       { key: "fielding", label: "守備力" },
       { key: "eye", label: "選球眼" },
+      { key: "awareness", label: "守備意識" },
     ];
 
     for (const { key, label } of batKeys) {
       if (Math.random() < 0.25 * ageFactor) {
         const amount = Math.round((1 + Math.random() * maxGrowth) * ageFactor);
         if (amount > 0) {
-          newBatting[key] = Math.min(100, newBatting[key] + amount);
+          newBatting[key] = Math.min(100, (newBatting[key] ?? 50) + amount);
           improved.push(`${label}+${amount}`);
         }
       }

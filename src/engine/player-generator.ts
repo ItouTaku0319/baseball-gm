@@ -53,6 +53,7 @@ function generateBatterAbilities(overall: number): BatterAbilities {
     fielding: randomAbility(overall, 10),
     catching: randomAbility(overall, 10),
     eye: randomAbility(overall, 15),
+    awareness: randomAbility(overall, 10),
   };
 }
 

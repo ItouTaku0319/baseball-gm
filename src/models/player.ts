@@ -131,6 +131,8 @@ export interface BatterAbilities {
   catching: number;
   /** 選球眼 (四球率に影響) */
   eye: number;
+  /** 守備意識 (カバー・バックアップの判断力、0-100) */
+  awareness?: number;
 }
 
 export interface PitcherAbilities {

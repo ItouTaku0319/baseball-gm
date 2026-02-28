@@ -73,6 +73,7 @@ export interface FielderAgent {
     catching: number;
     arm: number;
     speed: number;
+    awareness: number;
   };
   /** ゴロ: 経路インターセプト点 */
   interceptPoint?: Vec2;
@@ -82,21 +83,17 @@ export interface FielderAgent {
   arrivalTime: number;
   /** 捕球試行の結果（あれば） */
   catchResult?: CatchResult;
+  /** 初期守備位置（デフォルトポジション） */
+  homePos?: Vec2;
+  /** calling の強度 (0-1、pursuitScore に比例) */
+  callingIntensity?: number;
+  /** 最新の pursuit スコア */
+  pursuitScore?: number;
+  /** pursuit の目標位置（Pass 1 で計算） */
+  pursuitTarget?: Vec2;
+  /** 到達推定時刻 */
+  estimatedArrivalTime?: number;
 }
-
-// --- コールオフ優先度 ---
-// 値が大きいほど優先 (呼び込み権限が高い)
-export const CALLOFF_PRIORITY: Record<FielderPosition, number> = {
-  2: 1,
-  1: 2,
-  3: 3,
-  5: 4,
-  4: 5,
-  6: 6,
-  7: 7,
-  9: 7,
-  8: 7, // CF（LF/RFと同優先度、距離で決定）
-};
 
 // --- 捕球 ---
 export type CatchType = "standard" | "diving" | "running" | "ground_field";
@@ -235,17 +232,3 @@ export function gaussianRandom(
   return mean + z * stdDev;
 }
 
-// --- ゾーン責任 ---
-// このアプローチの方法良くない気がする
-// 打球方向角: 0°=三塁ファウル線, 45°=センター, 90°=一塁ファウル線
-export const PRIMARY_ZONE: Record<FielderPosition, { min: number; max: number } | null> = {
-  1: null,  // P: ゾーンなし（投手ゴロはupdateDecisionで特別処理）
-  2: null,  // C: ゾーンなし
-  5: { min: 0,  max: 28 },  // 3B: 三塁線付近
-  6: { min: 22, max: 52 },  // SS: 二遊間
-  4: { min: 48, max: 68 },  // 2B: 一二塁間（68°以上は1B管轄）
-  3: { min: 65, max: 90 },  // 1B: 一塁線付近（65°から担当）
-  7: { min: 0,  max: 38 },  // LF: 左翼
-  8: { min: 30, max: 60 },  // CF: 中堅
-  9: { min: 52, max: 90 },  // RF: 右翼
-};

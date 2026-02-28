@@ -206,6 +206,7 @@ export const AGENT_BASE_REACTION_IF = 0.60;      // 内野手基本反応時間(
 export const AGENT_BASE_REACTION_OF = 0.45;      // 外野手基本反応時間(秒)
 export const AGENT_PITCHER_REACTION = 0.60;      // 投手の反応遅延(秒)
 export const AGENT_CATCHER_REACTION = 0.40;      // 捕手の反応時間(秒)
+export const AGENT_LINE_DRIVE_REACTION_MULT = 2.5; // ライナー時の反応時間倍率
 
 // ダイビングキャッチ
 export const AGENT_DIVE_MIN_DIST = 1.5;          // ダイビング可能最小距離(m)
