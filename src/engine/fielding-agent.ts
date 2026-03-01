@@ -51,8 +51,13 @@ import {
   BASE_TAG_TIME,
   RETRIEVER_APPROACH_FACTOR,
   RETRIEVER_PICKUP_TIME,
+  DEEP_HIT_PENALTY_THRESHOLD,
+  DEEP_HIT_PENALTY_SCALE,
+  DEEP_HIT_PENALTY_MAX,
   EXTRA_BASE_ROUNDING_TIME,
   EXTRA_BASE_GO_THRESHOLD,
+  EXTRA_BASE_ROUNDING_FATIGUE,
+  EXTRA_BASE_TRIPLE_THRESHOLD_ADD,
   EXTRA_BASE_DECISION_NOISE,
   TAGUP_ARM_PERCEPTION_NOISE,
   TAGUP_GO_THRESHOLD,
@@ -1090,11 +1095,17 @@ function decideExtraBase(
     estBallTime = 10;
   }
 
-  const estRunTime = EXTRA_BASE_ROUNDING_TIME + BASE_LENGTH / runner.speed;
+  // 疲労: 2→3で+0.4s, 3→4で+0.8s（走るほど遅くなる）
+  const basesRun = nextBase - 1; // 1→2=1, 2→3=2, 3→4=3
+  const fatigue = Math.max(0, basesRun - 1) * EXTRA_BASE_ROUNDING_FATIGUE;
+  const roundingTime = EXTRA_BASE_ROUNDING_TIME + fatigue;
+  const estRunTime = roundingTime + BASE_LENGTH / runner.speed;
   const margin = estBallTime - estRunTime;
   const br = runner.skill?.baseRunning ?? 50;
   const noise = gaussianRandom(0, EXTRA_BASE_DECISION_NOISE * (1 - br / 100), rng);
-  return (margin + noise) > EXTRA_BASE_GO_THRESHOLD;
+  // 2→3(三塁打)以上は追加閾値で保守的に判断
+  const threshold = EXTRA_BASE_GO_THRESHOLD + (nextBase >= 3 ? EXTRA_BASE_TRIPLE_THRESHOLD_ADD : 0);
+  return (margin + noise) > threshold;
 }
 
 /** タッチアップ判断（DECIDING状態で呼ばれる） */
@@ -1400,8 +1411,11 @@ function moveRunner(runner: RunnerAgent, dt: number, catchSuccess: boolean): voi
       runner.state = "SAFE";
     } else if (!catchSuccess && runner.targetBase < 4) {
       // ヒット時 → ROUNDING（エキストラベース判断へ）
+      // 疲労: 走った塁数が多いほどラウンディングが遅くなる
+      const basesRun = runner.targetBase - (runner.originalBase ?? 0);
+      const fatigue = Math.max(0, basesRun - 1) * EXTRA_BASE_ROUNDING_FATIGUE;
       runner.state = "ROUNDING";
-      runner.roundingTimer = EXTRA_BASE_ROUNDING_TIME;
+      runner.roundingTimer = EXTRA_BASE_ROUNDING_TIME + fatigue;
     } else {
       // ゴロフォースプレー到達 → 暫定セーフ（後からOUTに変わりうる）
       runner.state = "SAFE";
@@ -1637,8 +1651,14 @@ function resolvePhase2WithTicks(
     const distToBall = vec2Distance(retrieverAgent.currentPos, ballRestPos);
     // 回収時間 = 走行(減速考慮) + ボール拾い上げ時間
     const approachTime = distToBall / (retrieverAgent.maxSpeed * RETRIEVER_APPROACH_FACTOR);
+    // 深い外野ヒット回収ペナルティ: 着弾距離が大きいほどボール回収に時間がかかる
+    // （壁バウンド・悪いバウンス・コーナー転がりを包括的にモデル化）
+    const depthOverThreshold = trajectory.landingDistance - DEEP_HIT_PENALTY_THRESHOLD;
+    const depthPenalty = depthOverThreshold > 0
+      ? DEEP_HIT_PENALTY_MAX * Math.min(depthOverThreshold / DEEP_HIT_PENALTY_SCALE, 1)
+      : 0;
     retrieverArrivalTime = Math.min(
-      catchTime + approachTime + RETRIEVER_PICKUP_TIME,
+      catchTime + approachTime + RETRIEVER_PICKUP_TIME + depthPenalty,
       catchTime + MAX_PHASE2_TIME - PHASE2_DT
     );
   }

@@ -230,7 +230,7 @@ export const FIRST_BASE_PROXIMITY = 8.0;         // 1塁自己処理判定距離
 // ============================================================
 
 export const PHASE2_DT = 0.05;                   // Phase 2 タイムステップ(秒) — 送球判定の精度のため細かめ
-export const MAX_PHASE2_TIME = 8.0;              // Phase 2 最大シミュレーション時間(秒)
+export const MAX_PHASE2_TIME = 15.0;             // Phase 2 最大シミュレーション時間(秒) ※三塁打到達に~12s必要
 export const SECURING_TIME_BASE = 0.25;          // 捕球→送球準備の基本時間(秒)
 export const SECURING_TIME_SKILL_SCALE = 0.15;   // fielding/100 あたりの準備時間短縮(秒)
 export const PIVOT_TIME = 0.35;                  // DP ピボット時の追加準備時間(秒)
@@ -249,10 +249,15 @@ export const BASE_TAG_TIME = 0.15;               // ベースタッチ所要時�
 // ボール回収モデル
 export const RETRIEVER_APPROACH_FACTOR = 0.6;    // 回収時の走速低下率(減速+ボール読み)
 export const RETRIEVER_PICKUP_TIME = 1.5;        // ボール拾い上げ+送球体勢までの時間(秒)
+export const DEEP_HIT_PENALTY_THRESHOLD = 65;    // この着弾距離(m)以上でボール回収ペナルティ発生
+export const DEEP_HIT_PENALTY_SCALE = 40;        // ペナルティが最大になるまでの距離レンジ(m)
+export const DEEP_HIT_PENALTY_MAX = 3.5;         // 深い外野ヒット時の最大追加回収時間(秒)
 
 // エキストラベース（ヒット時の進塁判断）
-export const EXTRA_BASE_ROUNDING_TIME = 0.3;     // 塁を回る所要時間(秒)
+export const EXTRA_BASE_ROUNDING_TIME = 0.3;     // 塁を回る基本所要時間(秒)
+export const EXTRA_BASE_ROUNDING_FATIGUE = 0.4;  // 塁を回るごとの疲労加算(秒): 2→3で+0.4, 3→4で+0.8
 export const EXTRA_BASE_GO_THRESHOLD = -0.2;     // 進塁GO閾値(負=やや積極的に走る)
+export const EXTRA_BASE_TRIPLE_THRESHOLD_ADD = 5.5; // 2→3(三塁打)時の追加閾値(三塁打を稀にする)
 export const EXTRA_BASE_DECISION_NOISE = 0.4;    // 判断ノイズσ(baseRunning=0時)
 
 // タッチアップ判断
