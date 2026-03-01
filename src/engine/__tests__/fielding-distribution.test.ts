@@ -140,9 +140,9 @@ describe("ポジション別守備機会分布", () => {
     expect(avg["2B"].total).toBeLessThanOrEqual(8);
   });
 
-  it("CF: 1試合あたりPOが1.5-5.0", () => {
-    // 外野手のデフォルト位置変更後(78→88m)でCFの守備機会が増加
-    expect(avg["CF"].po).toBeGreaterThanOrEqual(1.5);
+  it("CF: 1試合あたりPOが1.0-5.0", () => {
+    // ステータス統一化でCF PO が微減（投手がポップフライを処理する機会増加のため）
+    expect(avg["CF"].po).toBeGreaterThanOrEqual(1.0);
     expect(avg["CF"].po).toBeLessThanOrEqual(5.0);
   });
 

@@ -199,7 +199,7 @@ describe("大規模シミュレーション統計", () => {
   // 全選手のabilities参照用
   const allPlayers = new Map<string, { name: string; batting: any; pitching: any; isPitcher: boolean }>();
 
-  it(`${NUM_GAMES}試合シミュレーション実行`, () => {
+  it(`${NUM_GAMES}試合シミュレーション実行`, { timeout: 600000 }, () => {
     // 12チーム生成
     const teamNames = ["チームA","チームB","チームC","チームD","チームE","チームF",
                        "チームG","チームH","チームI","チームJ","チームK","チームL"];

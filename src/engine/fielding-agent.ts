@@ -289,8 +289,8 @@ export function resolvePlayWithAgents(
   // 捕球成功 / 捕球失敗(フライ落球) / 未到達 → Phase 2 ティックループ
   const catchSuccess = !!(catchResult && catchResult.success && catcherAgent);
   const effectiveCatcher = catchSuccess ? catcherAgent : (
-    // 未到達時: 最近傍野手を回収者として設定
-    findNearestAgent(agents, catcherAgent?.currentPos ?? estimateRestPosition(trajectory))
+    // 未到達時: ボール停止位置に最も早く到達できる野手を回収者に
+    findNearestAgent(agents, estimateRestPosition(trajectory))
   );
 
   if (!effectiveCatcher) {
