@@ -254,6 +254,8 @@ export const BASE_TAG_TIME = 0.15;               // ベースタッチ所要時�
 // ボール回収モデル
 export const RETRIEVER_APPROACH_FACTOR = 0.6;    // 回収時の走速低下率(減速+ボール読み)
 export const RETRIEVER_PICKUP_TIME = 1.5;        // ボール拾い上げ+送球体勢までの時間(秒)
+export const RETRIEVER_PICKUP_RADIUS = 1.5;     // ボール拾い上げ可能距離(m)
+export const RETRIEVER_PICKUP_SPEED = 3.0;       // この速度(m/s)以下のボールを拾える
 export const DEEP_HIT_PENALTY_THRESHOLD = 65;    // この着弾距離(m)以上でボール回収ペナルティ発生
 export const DEEP_HIT_PENALTY_SCALE = 40;        // ペナルティが最大になるまでの距離レンジ(m)
 export const DEEP_HIT_PENALTY_MAX = 3.5;         // 深い外野ヒット時の最大追加回収時間(秒)

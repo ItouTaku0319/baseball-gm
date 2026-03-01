@@ -51,9 +51,8 @@ import {
   BASE_TAG_TIME,
   RETRIEVER_APPROACH_FACTOR,
   RETRIEVER_PICKUP_TIME,
-  DEEP_HIT_PENALTY_THRESHOLD,
-  DEEP_HIT_PENALTY_SCALE,
-  DEEP_HIT_PENALTY_MAX,
+  RETRIEVER_PICKUP_RADIUS,
+  RETRIEVER_PICKUP_SPEED,
   EXTRA_BASE_ROUNDING_TIME,
   EXTRA_BASE_GO_THRESHOLD,
   EXTRA_BASE_ROUNDING_FATIGUE,
@@ -289,28 +288,16 @@ export function resolvePlayWithAgents(
 
   // === Phase 2: 捕球後ティックベースシミュレーション ===
 
-  // 捕球失敗時のエラー判定（Phase 2 に渡す前に判定）
-  if (catchResult && !catchResult.success && catcherAgent) {
-    // ゴロの強い打球は捕球失敗でもヒット扱い
-    if (trajectory.isGroundBall) {
-      const ballSpeedAtCatch = trajectory.getSpeedAt(catcherAgent.arrivalTime);
-      if (ballSpeedAtCatch >= GROUND_BALL_HARD_HIT_SPEED) {
-        const collectedTimeline = collectTimeline ? timeline : undefined;
-        return {
-          result: "single",
-          fielderPos: catcherAgent.pos,
-          agentTimeline: collectedTimeline,
-        };
-      }
-      // 捕球可能球の捕球失敗 → エラー
-      const collectedTimeline = collectTimeline ? timeline : undefined;
-      return {
-        result: "error",
-        fielderPos: catcherAgent.pos,
-        errorPos: catcherAgent.pos,
-        agentTimeline: collectedTimeline,
-      };
+  // エラーフラグ（ゴロ捕球失敗: Phase 2で結果解決）
+  let catchError = false;
+  let catchErrorPos: FielderPosition | undefined;
+  if (catchResult && !catchResult.success && catcherAgent && trajectory.isGroundBall) {
+    const ballSpeedAtCatch = trajectory.getSpeedAt(catcherAgent.arrivalTime);
+    if (ballSpeedAtCatch < GROUND_BALL_HARD_HIT_SPEED) {
+      catchError = true;
+      catchErrorPos = catcherAgent.pos;
     }
+    // いずれの場合もPhase 2に流す（returnしない）
   }
 
   // フェンス直撃: 捕球不可（ボールはフェンスに当たって跳ねるため）
@@ -353,7 +340,9 @@ export function resolvePlayWithAgents(
     rng,
     collectTimeline,
     timeline,
-    fenceDistance
+    fenceDistance,
+    catchError,
+    catchErrorPos
   );
   return { ...phase2Result, agentTimeline: collectTimeline ? timeline : undefined };
 }
@@ -935,6 +924,41 @@ function calcPathIntercept(
   };
 }
 
+/** Phase 2中のボール地上位置を計算（GC削減用outバッファ） */
+function getPhase2BallGroundPos(
+  trajectory: BallTrajectory,
+  restPos: Vec2,
+  t: number,
+  out: Vec2
+): { speed: number } {
+  if (trajectory.isGroundBall) {
+    // ゴロ: trajectoryの等減速モデルをそのまま使用
+    const clampedT = Math.min(t, trajectory.flightTime);
+    trajectory.getPositionAt(clampedT, out);
+    return { speed: trajectory.getSpeedAt(t) };
+  }
+  // フライ/ライナー: 着弾前は飛行中
+  if (t < trajectory.flightTime) {
+    trajectory.getPositionAt(t, out);
+    return { speed: 10 };
+  }
+  // 着弾後→restPosへ減速ロール
+  const timeSinceLanding = t - trajectory.flightTime;
+  const rollDist = vec2Distance(trajectory.landingPos, restPos);
+  if (rollDist < 0.5) {
+    out.x = restPos.x; out.y = restPos.y;
+    return { speed: 0 };
+  }
+  const avgRollSpeed = 3.0; // m/s (草地ロール平均速度)
+  const totalRollTime = rollDist / avgRollSpeed;
+  const progress = Math.min(1, timeSinceLanding / totalRollTime);
+  const eased = 2 * progress - progress * progress; // 等減速曲線
+  out.x = trajectory.landingPos.x + (restPos.x - trajectory.landingPos.x) * eased;
+  out.y = trajectory.landingPos.y + (restPos.y - trajectory.landingPos.y) * eased;
+  const currentSpeed = progress >= 1 ? 0 : avgRollSpeed * (1 - progress);
+  return { speed: currentSpeed };
+}
+
 /**
  * 着地後のボール転がり位置を推定する。
  * ライナー/フライは着地後にバウンドして外野方向に転がる。
@@ -1149,9 +1173,10 @@ function decideExtraBase(
   runner: RunnerAgent,
   ballHolder: FielderAgent | null,
   retrieverAgent: FielderAgent | null,
-  retrieverArrivalTime: number,
   throwBall: ThrowBallState | null,
   currentTime: number,
+  trajectory: BallTrajectory,
+  restPos: Vec2,
   rng: () => number
 ): boolean {
   const nextBase = runner.targetBase + 1;
@@ -1179,11 +1204,14 @@ function decideExtraBase(
       estBallTime = throwRemaining + SECURING_TIME_BASE + PIVOT_TIME + relayDist / relaySpeed;
     }
   } else if (retrieverAgent) {
-    // まだ回収中 → 回収+送球(直接)時間
-    const remainRetrieval = Math.max(0, retrieverArrivalTime - currentTime);
+    // retrieverの実位置からボール位置への距離で推定
+    const tmpBuf: Vec2 = { x: 0, y: 0 };
+    getPhase2BallGroundPos(trajectory, restPos, currentTime, tmpBuf);
+    const distRetrieverToBall = vec2Distance(retrieverAgent.currentPos, tmpBuf);
+    const pickupTime = distRetrieverToBall / (retrieverAgent.maxSpeed * 0.8);
     const throwSpeed = calcThrowSpeed(retrieverAgent);
-    const throwDist = vec2Distance(retrieverAgent.currentPos, nextBasePos);
-    estBallTime = remainRetrieval + SECURING_TIME_BASE + throwDist / throwSpeed;
+    const throwDist = vec2Distance(tmpBuf, nextBasePos);
+    estBallTime = pickupTime + RETRIEVER_PICKUP_TIME + SECURING_TIME_BASE + throwDist / throwSpeed;
   } else {
     estBallTime = 10;
   }
@@ -1720,7 +1748,9 @@ function resolvePhase2WithTicks(
   rng: () => number,
   collectTimeline: boolean,
   existingTimeline: AgentTimelineEntry[],
-  fenceDistance?: number
+  fenceDistance?: number,
+  catchError?: boolean,
+  catchErrorPos?: FielderPosition
 ): AgentFieldingResult {
   const dt = PHASE2_DT;
 
@@ -1734,32 +1764,22 @@ function resolvePhase2WithTicks(
   let outsAdded = 0;
   let securingTimer = 0;
 
+  // ボール静止位置(Phase 2ボール位置計算用)
+  const restPos = fenceDistance !== undefined
+    ? capRestPositionToFence(trajectory, fenceDistance)
+    : estimateRestPosition(trajectory);
+
+  // GC削減: Phase 2ボール位置計算用バッファ
+  const ballPosBuf: Vec2 = { x: 0, y: 0 };
+
   // ボール回収モデル（ヒット時: 捕球失敗→最寄り野手がボールを拾う）
   let retrieverAgent: FielderAgent | null = null;
-  let retrieverArrivalTime = Infinity;
 
   if (!catchSuccess && catcherAgent) {
     retrieverAgent = catcherAgent;
-    // フェンス直撃時はボール静止位置をフェンス付近にキャップ
-    const ballRestPos = fenceDistance !== undefined
-      ? capRestPositionToFence(trajectory, fenceDistance)
-      : estimateRestPosition(trajectory);
-    const distToBall = vec2Distance(retrieverAgent.currentPos, ballRestPos);
-    // 回収時間 = 走行(減速考慮) + ボール拾い上げ時間
-    const approachTime = distToBall / (retrieverAgent.maxSpeed * RETRIEVER_APPROACH_FACTOR);
-    // 深い外野ヒット回収ペナルティ: 着弾距離が大きいほどボール回収に時間がかかる
-    // フェンス直撃時はフェンス距離で計算（軌道上の着弾距離はフェンスを超えるため）
-    const effectiveLandingDist = fenceDistance !== undefined
-      ? fenceDistance
-      : trajectory.landingDistance;
-    const depthOverThreshold = effectiveLandingDist - DEEP_HIT_PENALTY_THRESHOLD;
-    const depthPenalty = depthOverThreshold > 0
-      ? DEEP_HIT_PENALTY_MAX * Math.min(depthOverThreshold / DEEP_HIT_PENALTY_SCALE, 1)
-      : 0;
-    retrieverArrivalTime = Math.min(
-      catchTime + approachTime + RETRIEVER_PICKUP_TIME + depthPenalty,
-      catchTime + MAX_PHASE2_TIME - PHASE2_DT
-    );
+    retrieverAgent.state = "PURSUING";
+    retrieverAgent.targetPos = { x: restPos.x, y: restPos.y };
+    retrieverAgent.currentSpeed = retrieverAgent.maxSpeed * RETRIEVER_APPROACH_FACTOR;
   }
 
   // 打者走者のスタート遅延を進捗に反映
@@ -1844,7 +1864,7 @@ function resolvePhase2WithTicks(
       if (runner.state === "ROUNDING") {
         runner.roundingTimer = (runner.roundingTimer ?? 0) - dt;
         if (runner.roundingTimer <= 0) {
-          if (decideExtraBase(runner, ballHolder, retrieverAgent, retrieverArrivalTime, throwBall, t, rng)) {
+          if (decideExtraBase(runner, ballHolder, retrieverAgent, throwBall, t, trajectory, restPos, rng)) {
             runner.fromBase = runner.targetBase;
             runner.targetBase += 1;
             runner.progress = 0;
@@ -1857,11 +1877,21 @@ function resolvePhase2WithTicks(
       }
     }
 
-    // 2c-3. ボール回収（ヒット時: 最寄り野手がボールを拾う）
-    if (!ballHolder && retrieverAgent && t >= retrieverArrivalTime) {
-      ballHolder = retrieverAgent;
-      ballHolder.state = "SECURING";
-      securingTimer = calcSecuringTime(ballHolder);
+    // 2c-3. ボール回収（retrieverが物理移動で拾いに行く）
+    if (!ballHolder && retrieverAgent && retrieverAgent.state === "PURSUING") {
+      // 毎tick: ボールの現在位置にtargetPosを更新
+      const ballInfo = getPhase2BallGroundPos(trajectory, restPos, t, ballPosBuf);
+      retrieverAgent.targetPos = { x: ballPosBuf.x, y: ballPosBuf.y };
+      moveAgent(retrieverAgent, dt);
+
+      // 到着判定: retrieverがボールに十分近い AND ボール速度が低い
+      const distToBall = vec2Distance(retrieverAgent.currentPos, ballPosBuf);
+      if (distToBall < RETRIEVER_PICKUP_RADIUS && ballInfo.speed < RETRIEVER_PICKUP_SPEED) {
+        ballHolder = retrieverAgent;
+        ballHolder.state = "SECURING";
+        securingTimer = calcSecuringTime(ballHolder) + RETRIEVER_PICKUP_TIME;
+        retrieverAgent = null;
+      }
     }
 
     // 2d. ボール保持野手の更新（SECURING → 送球）
@@ -1947,9 +1977,17 @@ function resolvePhase2WithTicks(
 
     // 2g. タイムラインにランナー情報を追加
     if (collectTimeline) {
-      const ballPos = throwBall
-        ? interpolateThrowBall(throwBall, t)
-        : (ballHolder ? ballHolder.currentPos : getBasePosition(1));
+      let ballPos: Vec2;
+      if (throwBall) {
+        ballPos = interpolateThrowBall(throwBall, t);
+      } else if (ballHolder) {
+        ballPos = ballHolder.currentPos;
+      } else {
+        // ボール回収中: ボールの実位置を使用
+        const tmpBuf: Vec2 = { x: 0, y: 0 };
+        getPhase2BallGroundPos(trajectory, restPos, t, tmpBuf);
+        ballPos = tmpBuf;
+      }
       const entry: AgentTimelineEntry = {
         t,
         ballPos: { ...ballPos },
@@ -1989,7 +2027,7 @@ function resolvePhase2WithTicks(
       r.state === "RUNNING" || r.state === "ROUNDING" ||
       r.state === "TAGGED_UP" || r.state === "WAITING_TAG" || r.state === "DECIDING"
     );
-    const retrieverPending = hasActiveRunners && !ballHolder && retrieverAgent != null && t < retrieverArrivalTime;
+    const retrieverPending = hasActiveRunners && !ballHolder && retrieverAgent != null;
     if (isPhase2Complete(runners, throwBall, ballHolder, retrieverPending)) break;
   }
 
@@ -2003,7 +2041,9 @@ function resolvePhase2WithTicks(
     outsAdded,
     outs,
     agents,
-    rng
+    rng,
+    catchError,
+    catchErrorPos
   );
 }
 
@@ -2055,7 +2095,9 @@ function buildPhase2Result(
   outsAdded: number,
   originalOuts: number,
   agents: FielderAgent[],
-  rng: () => number
+  rng: () => number,
+  catchError?: boolean,
+  catchErrorPos?: FielderPosition
 ): AgentFieldingResult {
   const fielderPos = catcherAgent?.pos ?? (8 as FielderPosition);
 
@@ -2157,7 +2199,10 @@ function buildPhase2Result(
     : 1;
 
   let result: AtBatResult;
-  if (batterReachedBase >= 3) {
+  if (catchError) {
+    // ゴロ捕球可能球の捕球失敗 → エラー（走者進塁はrunnerResultsで反映）
+    result = "error";
+  } else if (batterReachedBase >= 3) {
     result = "triple";
   } else if (batterReachedBase >= 2) {
     result = "double";
@@ -2177,5 +2222,6 @@ function buildPhase2Result(
     fielderPos,
     throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
     runnerResults,
+    errorPos: catchError ? catchErrorPos : undefined,
   };
 }
