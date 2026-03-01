@@ -72,6 +72,9 @@ const COVER_SCORE_UNCOVERED = 1.0;
 /** カバースコア: 走者進塁先 urgency ボーナス */
 const COVER_URGENCY_BONUS = 0.2;
 
+/** カバースコア: 1塁urgency（打者走者は打球と同時に必ず1塁へ走る。他塁のurgencyより高い） */
+const COVER_URGENCY_FIRST_BASE = 0.35;
+
 /** カバースコアの近接性正規化距離(m) */
 const COVER_PROXIMITY_NORM_DIST = 30;
 
@@ -105,6 +108,8 @@ export interface ActionScore {
   target: Vec2;
   /** cover/backup の詳細 */
   coverBase?: keyof typeof BASE_POSITIONS;
+  /** ダンピングの影響を受けない緊急度（走者がこの塁に向かっている事実） */
+  urgency?: number;
 }
 
 /** チームメイト観察結果 */
@@ -178,6 +183,9 @@ export function calcAndStorePursuitScore(
   agentMut.estimatedArrivalTime = estimateArrivalTime(agent, trajectory, t);
 }
 
+/** カバー割当スナップショット: 前tickの状態を保持し、処理順序に依存しない公平な判定を実現 */
+export type CoverSnapshot = ReadonlyMap<string, FielderAgent>;
+
 /** Pass 2: pursuitScore を踏まえて最終行動決定（pursuit を再計算しない） */
 export function autonomousDecide(
   agent: FielderAgent,
@@ -185,7 +193,8 @@ export function autonomousDecide(
   trajectory: BallTrajectory,
   t: number,
   bases: BaseRunners,
-  outs: number
+  outs: number,
+  coverSnapshot?: CoverSnapshot
 ): void {
   // スキップ条件
   if (agent.reactionRemaining > 0 ||
@@ -231,7 +240,7 @@ export function autonomousDecide(
   const observation = observeTeammates(agent, allAgents, trajectory);
   const scores: ActionScore[] = [];
   scores.push({ action: "pursuit", score: myPursuitScore, target: myPursuitTarget });
-  const coverScores = calcCoverScores(agent, observation, trajectory, bases, outs);
+  const coverScores = calcCoverScores(agent, observation, trajectory, bases, outs, coverSnapshot);
   // カバー減衰: 打球高さ+着弾距離の連続関数
   // 低い打球(ゴロ/低ライナー): 追跡優先でカバー弱め(0.5)
   // 近距離フライ(ポップ20m): 追跡優先(0.25)
@@ -240,7 +249,7 @@ export function autonomousDecide(
     ? GROUND_BALL_COVER_DAMPING
     : clamp(trajectory.landingDistance / 80, 0.15, 0.7);
   for (const s of coverScores) {
-    s.score *= coverDamping;
+    s.score = s.score * coverDamping + (s.urgency ?? 0);
   }
   scores.push(...coverScores);
   scores.push(calcBackupScore(agent, observation, trajectory, bases));
@@ -420,7 +429,8 @@ function calcCoverScores(
   observation: TeammateObservation,
   trajectory: BallTrajectory,
   bases: BaseRunners,
-  _outs: number
+  _outs: number,
+  coverSnapshot?: CoverSnapshot
 ): ActionScore[] {
   const results: ActionScore[] = [];
 
@@ -439,7 +449,15 @@ function calcCoverScores(
   ];
 
   for (const entry of baseEntries) {
-    const isCovered = observation.coveredBases.has(entry.name);
+    // スナップショットベースのカバー判定（処理順序に依存しない）
+    // スナップショットがあれば前tickの状態を使用。自分自身のカバーは "カバー済み" 扱いしない。
+    let isCovered: boolean;
+    if (coverSnapshot) {
+      const coverer = coverSnapshot.get(entry.name);
+      isCovered = coverer != null && coverer !== agent;
+    } else {
+      isCovered = observation.coveredBases.has(entry.name);
+    }
     if (isCovered) {
       results.push({ action: "cover", score: 0, target: entry.pos, coverBase: entry.name });
       continue;
@@ -449,14 +467,15 @@ function calcCoverScores(
     const distToBase = vec2Distance(agent.currentPos, entry.pos);
     const coverProximity = clamp(1 - distToBase / COVER_PROXIMITY_NORM_DIST, 0, 1);
 
-    // urgency: 走者が進塁してくる可能性
+    // urgency: 走者が進塁してくる可能性（打者走者は常に1塁へ向かう）
     let urgency = 0;
+    if (entry.name === "first") urgency = COVER_URGENCY_FIRST_BASE;
     if (entry.name === "second" && bases.first) urgency = COVER_URGENCY_BONUS;
     if (entry.name === "third" && bases.second) urgency = COVER_URGENCY_BONUS;
     if (entry.name === "home" && bases.third) urgency = COVER_URGENCY_BONUS;
 
-    const score = clamp(COVER_SCORE_UNCOVERED * coverProximity + urgency, 0, 1);
-    results.push({ action: "cover", score, target: entry.pos, coverBase: entry.name });
+    const score = clamp(COVER_SCORE_UNCOVERED * coverProximity, 0, 1);
+    results.push({ action: "cover", score, target: entry.pos, coverBase: entry.name, urgency });
   }
 
   return results;
@@ -743,6 +762,7 @@ function calcGroundBallIntercept(
   }
 
   // 経路上で到達不可でも停止点に間に合うかチェック
+  let isEndpointOnly = false;
   if (!earliestPoint) {
     const sdx = agent.currentPos.x - landing.x;
     const sdy = agent.currentPos.y - landing.y;
@@ -754,15 +774,19 @@ function calcGroundBallIntercept(
       earliestPoint = { x: landing.x, y: landing.y };
       earliestBallTime = stopTime;
       earliestMargin = margin;
+      isEndpointOnly = true;
     }
   }
 
   if (!earliestPoint) return null;
 
   // margin を [0,1] に正規化
-  // インターセプト可能 = 基本 0.5、余裕があるほど最大 1.0 に近づく
-  // 5m基準: 余裕5m以上なら十分余裕ありとみなす
-  const normalizedMargin = 0.5 + 0.5 * clamp(earliestMargin / 5.0, 0, 1);
+  // 経路途中のインターセプト: 基本 0.5、余裕があるほど最大 1.0 に近づく
+  // 停止点到達のみ: チェーシングと同じキャップ(CHASE_ARRIVAL_MARGIN_CAP)を適用
+  //   → 遠方から停止球を拾いに行く追跡は、経路インターセプトより低い価値
+  const normalizedMargin = isEndpointOnly
+    ? clamp(earliestMargin / 5.0, 0, 1) * CHASE_ARRIVAL_MARGIN_CAP
+    : 0.5 + 0.5 * clamp(earliestMargin / 5.0, 0, 1);
 
   return {
     canReach: true,

@@ -34,7 +34,12 @@ export const FOUL_FLY_BASE_CATCH_RATE = 0.70;  // 基本捕球成功率
 export const FOUL_TIP_DIRECTION_THRESHOLD = 5; // ファウルライン外の角度閾値
 export const FOUL_TIP_MAX_LAUNCH_ANGLE = 10;   // 低角度のみ
 export const FOUL_TIP_MIN_VELOCITY = 100;      // 一定以上の速度 (km/h)
-export const FOUL_TIP_STRIKEOUT_RATE = 0.55;   // 捕手捕球成功率
+// リネーム: FOUL_TIP_STRIKEOUT_RATE → FOUL_TIP_STRIKEOUT_BASE (catching依存化のため)
+// 変更前: FOUL_TIP_STRIKEOUT_RATE = 0.55 → 変更後: FOUL_TIP_STRIKEOUT_BASE = 0.55 (値は同じ)
+export const FOUL_TIP_STRIKEOUT_BASE = 0.55;   // 捕手捕球成功率基準値 (catching=50想定)
+// catching依存スケール: catching 1ポイントあたりの捕球率変化
+// catching=50: +0 (基準), catching=100: +0.20, catching=0: -0.20 → clamp(0.30, 0.80)
+export const FOUL_TIP_CATCHING_SCALE = 0.004;
 
 // コンタクトモデル定数
 // Phase A: carry廃止・コンタクトモデル導入
@@ -271,3 +276,54 @@ export const GROUND_ADVANCE_DECISION_NOISE = 0.3; // 判断ノイズσ(baseRunni
 // 外野手タッチアップ送球判断
 export const TAGUP_THROW_MARGIN_BASE = 0.8;      // 送球判断基本マージン(秒)
 export const TAGUP_THROW_MARGIN_AWARENESS_SCALE = 0.6; // awareness依存の送球断念スケール
+
+// === 打席フロー ===
+// ゾーン投球率
+export const ZONE_RATE_BASE = 0.35;
+export const ZONE_RATE_CONTROL_SCALE = 0.30;
+export const ZONE_RATE_COUNT_ADJUST = 0.05;
+
+// スイング判定
+export const SWING_RATE_BASE = 0.55;
+export const SWING_RATE_EYE_SCALE = 0.20;
+export const CHASE_RATE_BASE = 0.40;
+export const CHASE_RATE_EYE_SCALE = 0.25;
+
+// コンタクト判定
+export const CONTACT_RATE_BASE = 0.50;
+export const CONTACT_RATE_SKILL_SCALE = 0.40;
+export const CONTACT_RATE_PITCH_PENALTY = 0.15;
+
+// === バント ===
+export const SACRIFICE_BUNT_SUCCESS_BASE = 0.60;
+export const SACRIFICE_BUNT_CONTACT_SCALE = 0.002;
+export const SAFETY_BUNT_SUCCESS_BASE = 0.20;
+export const SAFETY_BUNT_SPEED_SCALE = 0.002;
+export const SAFETY_BUNT_CONTACT_SCALE = 0.001;
+export const SAFETY_BUNT_ATTEMPT_BASE = 0.01;
+export const SAFETY_BUNT_ATTEMPT_SPEED_SCALE = 0.0005;
+export const BUNT_FAIL_FOUL_RATE = 0.40;
+export const BUNT_RETRY_FOUL_RATE = 0.40;
+
+// === その他 ===
+// リネーム: DROPPED_THIRD_STRIKE_RATE → DROPPED_THIRD_STRIKE_BASE (catching依存化のため)
+// 変更前: DROPPED_THIRD_STRIKE_RATE = 0.03 → 変更後: DROPPED_THIRD_STRIKE_BASE = 0.03 (値は同じ)
+export const DROPPED_THIRD_STRIKE_BASE = 0.03; // 振り逃げ基準率 (catching=50想定)
+// catching依存スケール: catching 1ポイントあたりの振り逃げ発生率変化
+// catching=50: +0 (基準), catching=0: +0.02, catching=100: -0.02
+export const DROPPED_THIRD_STRIKE_CATCHING_FACTOR = 0.0004;
+// リネーム: HIT_BY_PITCH_RATE → HIT_BY_PITCH_BASE (control依存化のため)
+// 変更前: HIT_BY_PITCH_RATE = 0.003 → 変更後: HIT_BY_PITCH_BASE = 0.003 (値は同じ)
+export const HIT_BY_PITCH_BASE = 0.003;     // 死球基準率 (control=50想定)
+// control依存スケール: control 1ポイントあたりの死球発生率変化
+// control=50: +0 (基準), control=0: +0.0025, control=100: -0.0025
+export const HIT_BY_PITCH_CONTROL_FACTOR = 0.00005;
+// 変更: FOUL_FLY_FIELDING_SCALE 0.25 → 0.50
+// 理由: fielding/100 スケールへ変更(fielding=50: 50/100*0.50=0.25 で元と同じ、fielding=100: +50%)
+// 変更前: +0.25固定(fielding=50想定ハードコード) → 変更後: (fielding/100)*0.50
+export const FOUL_FLY_FIELDING_SCALE = 0.50;  // fielding/100スケール係数 (fielding=100で+50%、fielding=50で+25%)
+
+// アウト結果の打球角度判定（ballType文字列の置換）
+// ballType === "popup" → launchAngle >= 50°、ballType === "line_drive" → launchAngle < 20°
+export const POPUP_LAUNCH_ANGLE = 50;     // この角度以上 → popout
+export const LINER_LAUNCH_ANGLE_MAX = 20; // この角度未満 → lineout

@@ -66,6 +66,8 @@ import {
   GROUND_ADVANCE_DECISION_NOISE,
   TAGUP_THROW_MARGIN_BASE,
   TAGUP_THROW_MARGIN_AWARENESS_SCALE,
+  POPUP_LAUNCH_ANGLE,
+  LINER_LAUNCH_ANGLE_MAX,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -98,6 +100,7 @@ import {
 } from "./fielding-agent-types";
 import type { FielderAction } from "../models/league";
 import { calcAndStorePursuitScore, autonomousDecide } from "./autonomous-fielder";
+import type { CoverSnapshot } from "./autonomous-fielder";
 
 // ====================================================================
 // BattedBall / BaseRunners — simulation.ts 内部型のミラー
@@ -188,10 +191,16 @@ export function resolvePlayWithAgents(
     for (const agent of agents) {
       calcAndStorePursuitScore(agent, agents, trajectory, t);
     }
+    // カバー割当スナップショット: 前tickの状態を保持し処理順序非依存にする
+    const coverSnapshot = snapshotCoverAssignments(agents);
     // Pass 2: 全員のスコアを見て最終行動決定
     for (const agent of agents) {
-      autonomousDecide(agent, agents, trajectory, t, bases, outs);
+      autonomousDecide(agent, agents, trajectory, t, bases, outs, coverSnapshot);
     }
+
+    // --- Step 3: カバー衝突解決 ---
+    // 同じベースを複数エージェントがカバーしている場合、最も近いエージェントだけ残す
+    deconflictBaseCoverage(agents);
 
     // --- Step 4: 移動 ---
     for (const agent of agents) {
@@ -1025,6 +1034,67 @@ function snapshotAll(
   };
 }
 
+/**
+ * 前tickのカバー状態をスナップショットとして取得。
+ * Pass 2 で全エージェントが同じ「前tick」の状態を参照し、処理順序に依存しない判定を行う。
+ * 同じベースに複数エージェントがいる場合は最も近いエージェントを代表にする。
+ */
+function snapshotCoverAssignments(agents: readonly FielderAgent[]): CoverSnapshot {
+  const assignments = new Map<string, FielderAgent>();
+  for (const a of agents) {
+    if (a.state !== "COVERING" || a.action !== "cover_base") continue;
+    for (const [name, pos] of Object.entries(BASE_POSITIONS)) {
+      if (vec2Distance(a.targetPos, pos as Vec2) <= 3.0) {
+        const existing = assignments.get(name);
+        if (!existing || vec2Distance(a.currentPos, pos as Vec2) < vec2Distance(existing.currentPos, pos as Vec2)) {
+          assignments.set(name, a);
+        }
+        break;
+      }
+    }
+  }
+  return assignments;
+}
+
+/**
+ * カバー衝突解決: 同じベースを複数エージェントがCOVERINGしている場合、
+ * 最も近いエージェントだけ残し、他はHOLDINGに戻す。
+ * これにより、Pass 2 のエージェント処理順序に依存しない公平なカバー割当を実現する。
+ */
+function deconflictBaseCoverage(agents: FielderAgent[]): void {
+  const baseNames = ["first", "second", "third", "home"] as const;
+  for (const baseName of baseNames) {
+    const basePos = BASE_POSITIONS[baseName];
+    // このベースをカバー中のエージェントを収集
+    let first: FielderAgent | null = null;
+    let firstDist = Infinity;
+    let hasConflict = false;
+    for (const a of agents) {
+      if (a.state !== "COVERING" || a.action !== "cover_base") continue;
+      const d = vec2Distance(a.targetPos, basePos);
+      if (d > 3.0) continue; // このベースをカバーしていない
+      if (first === null) {
+        first = a;
+        firstDist = vec2Distance(a.currentPos, basePos);
+      } else {
+        hasConflict = true;
+        const aDist = vec2Distance(a.currentPos, basePos);
+        if (aDist < firstDist) {
+          // 現在のwinnerより近い → winnerをevict
+          first.state = "HOLDING";
+          first.action = "hold";
+          first = a;
+          firstDist = aDist;
+        } else {
+          // 遠い → evict
+          a.state = "HOLDING";
+          a.action = "hold";
+        }
+      }
+    }
+  }
+}
+
 /** 浮動小数点丸め (0.1刻みの累積誤差防止) */
 function round(v: number): number {
   return Math.round(v * 1000) / 1000;
@@ -1034,11 +1104,11 @@ function round(v: number): number {
 // Phase 2: 捕球後ティックベースシミュレーション
 // ====================================================================
 
-/** 塁番号 → 座標 */
+/** 塁番号 → 座標（コピーを返す。直接参照するとBASE_POSITIONS定数が汚染されるため） */
 function getBasePosition(baseNum: number): Vec2 {
   const name = BASE_NAMES[baseNum];
-  if (name) return BASE_POSITIONS[name];
-  return BASE_POSITIONS.home;
+  const pos = name ? BASE_POSITIONS[name] : BASE_POSITIONS.home;
+  return { x: pos.x, y: pos.y };
 }
 
 /** 塁間の線形補間 */
@@ -1423,7 +1493,8 @@ function moveRunner(runner: RunnerAgent, dt: number, catchSuccess: boolean): voi
   runner.progress += (runner.speed * dt) / BASE_LENGTH;
   if (runner.progress >= 1.0) {
     runner.progress = 1.0;
-    runner.currentPos = getBasePosition(runner.targetBase);
+    const reachedBase = getBasePosition(runner.targetBase);
+    runner.currentPos = { x: reachedBase.x, y: reachedBase.y };
     if (runner.targetBase >= 4) {
       // ホーム到達 → 得点
       runner.state = "SAFE";
@@ -1715,6 +1786,14 @@ function resolvePhase2WithTicks(
   for (const a of agents) {
     if (a.state === "COVERING" && a.action === "cover_base") {
       a.state = "RECEIVING";
+    }
+  }
+
+  // 捕球者以外のPURSUING野手をHOLDINGに遷移（findReceiverForBaseで送球先候補に）
+  for (const a of agents) {
+    if (a !== catcherAgent && a.state === "PURSUING") {
+      a.state = "HOLDING";
+      a.action = "hold";
     }
   }
 
@@ -2044,8 +2123,8 @@ function buildPhase2Result(
     // タッチアップでアウト
     if (outsAdded > 0) {
       // フライアウト + タッチアップアウト: 捕球者POをself-playとして先頭に追加
-      const baseResult = trajectory.ballType === "popup" ? "popout"
-        : trajectory.ballType === "line_drive" ? "lineout"
+      const baseResult = trajectory.launchAngle >= POPUP_LAUNCH_ANGLE ? "popout"
+        : trajectory.launchAngle < LINER_LAUNCH_ANGLE_MAX ? "lineout"
         : "flyout";
       const allPlays: ThrowPlay[] = [
         { from: fielderPos, to: fielderPos, base: "first" },
@@ -2060,8 +2139,8 @@ function buildPhase2Result(
     }
 
     // 通常フライアウト
-    const baseResult: AtBatResult = trajectory.ballType === "popup" ? "popout"
-      : trajectory.ballType === "line_drive" ? "lineout"
+    const baseResult: AtBatResult = trajectory.launchAngle >= POPUP_LAUNCH_ANGLE ? "popout"
+      : trajectory.launchAngle < LINER_LAUNCH_ANGLE_MAX ? "lineout"
       : "flyout";
     return {
       result: baseResult,

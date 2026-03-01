@@ -16,7 +16,7 @@ import {
   DIRECTION_MIN, DIRECTION_MAX, FAIR_ZONE_MIN, FAIR_ZONE_MAX,
   FOUL_FLY_MIN_LAUNCH_ANGLE, FOUL_FLY_CATCHABLE_ANGLE, FOUL_FLY_BASE_CATCH_RATE,
   FOUL_TIP_DIRECTION_THRESHOLD, FOUL_TIP_MAX_LAUNCH_ANGLE,
-  FOUL_TIP_MIN_VELOCITY, FOUL_TIP_STRIKEOUT_RATE,
+  FOUL_TIP_MIN_VELOCITY, FOUL_TIP_STRIKEOUT_BASE, FOUL_TIP_CATCHING_SCALE,
   SB_ATTEMPT_80, SB_ATTEMPT_70, SB_ATTEMPT_60, SB_ATTEMPT_50,
   SB3_ATTEMPT_85, SB3_ATTEMPT_75, SB3_ATTEMPT_65,
   SB_BASE_SUCCESS_RATE, SB3_BASE_SUCCESS_RATE,
@@ -32,6 +32,17 @@ import {
   POPUP_EV_CAP,
   OFFSET_TRAJECTORY_SCALE, OFFSET_SIGMA_BASE, OFFSET_SIGMA_CONTACT_SCALE, OFFSET_SIGMA_PITCH_SCALE,
   TIMING_SIGMA_BASE, TIMING_SIGMA_CONTACT_SCALE, TIMING_SIGMA_PITCH_SCALE,
+  ZONE_RATE_BASE, ZONE_RATE_CONTROL_SCALE, ZONE_RATE_COUNT_ADJUST,
+  SWING_RATE_BASE, SWING_RATE_EYE_SCALE,
+  CHASE_RATE_BASE, CHASE_RATE_EYE_SCALE,
+  CONTACT_RATE_BASE, CONTACT_RATE_SKILL_SCALE, CONTACT_RATE_PITCH_PENALTY,
+  SACRIFICE_BUNT_SUCCESS_BASE, SACRIFICE_BUNT_CONTACT_SCALE,
+  SAFETY_BUNT_SUCCESS_BASE, SAFETY_BUNT_SPEED_SCALE, SAFETY_BUNT_CONTACT_SCALE,
+  SAFETY_BUNT_ATTEMPT_BASE, SAFETY_BUNT_ATTEMPT_SPEED_SCALE,
+  BUNT_FAIL_FOUL_RATE, BUNT_RETRY_FOUL_RATE,
+  DROPPED_THIRD_STRIKE_BASE, DROPPED_THIRD_STRIKE_CATCHING_FACTOR,
+  HIT_BY_PITCH_BASE, HIT_BY_PITCH_CONTROL_FACTOR,
+  FOUL_FLY_FIELDING_SCALE,
 } from "./physics-constants";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
@@ -488,14 +499,16 @@ function assignFoulFlyFielder(
 ): FielderPosition {
   if (direction < FAIR_ZONE_MIN) {
     // 左ファウル
-    if (estimatedDistance < 20) return Math.random() < 0.5 ? 2 : 5; // 捕手 or 三塁手
-    if (estimatedDistance < 50) return Math.random() < 0.5 ? 5 : 6; // 三塁手 or 遊撃手
-    return 7; // 左翼手
+    if (estimatedDistance < 15) return 2;  // 捕手
+    if (estimatedDistance < 40) return 5;  // 三塁手
+    if (estimatedDistance < 60) return 6;  // 遊撃手
+    return 7;                              // 左翼手
   } else {
     // 右ファウル (direction > 90)
-    if (estimatedDistance < 20) return Math.random() < 0.5 ? 2 : 3; // 捕手 or 一塁手
-    if (estimatedDistance < 50) return Math.random() < 0.5 ? 3 : 4; // 一塁手 or 二塁手
-    return 9; // 右翼手
+    if (estimatedDistance < 15) return 2;  // 捕手
+    if (estimatedDistance < 40) return 3;  // 一塁手
+    if (estimatedDistance < 60) return 4;  // 二塁手
+    return 9;                              // 右翼手
   }
 }
 
@@ -509,6 +522,8 @@ interface FoulBallResult {
 function resolveFoulBall(
   ball: BattedBall,
   strikes: number,
+  catcherCatching: number = 50,
+  fielderMap?: Map<FielderPosition, Player>,
   rng: () => number = Math.random
 ): FoulBallResult {
   const foulDepth = ball.direction < FAIR_ZONE_MIN
@@ -521,7 +536,11 @@ function resolveFoulBall(
     const clampedDir = clamp(ball.direction, FAIR_ZONE_MIN, FAIR_ZONE_MAX);
     const landing = calcBallLanding(clampedDir, ball.launchAngle, ball.exitVelocity);
     const fielder = assignFoulFlyFielder(ball.direction, landing.distance);
-    const catchRate = FOUL_FLY_BASE_CATCH_RATE * (1 - foulDepth / FOUL_FLY_CATCHABLE_ANGLE) + 0.005 * 50; // fielding/200 概算(平均fielding=50)
+    // fielding依存捕球率: fielding=50で+0.25(元と同じ)、fielding=100で+0.50
+    const fielderPlayer = fielderMap?.get(fielder);
+    const fielderFielding = fielderPlayer?.batting.fielding ?? 50;
+    const depthFactor = 1 - foulDepth / FOUL_FLY_CATCHABLE_ANGLE;
+    const catchRate = FOUL_FLY_BASE_CATCH_RATE * depthFactor + (fielderFielding / 100) * FOUL_FLY_FIELDING_SCALE;
     if (rng() < catchRate) {
       const resultType: AtBatResult = ball.type === "popup" ? "popout" : "flyout";
       return { isOut: true, result: resultType, fielderPosition: fielder };
@@ -529,14 +548,16 @@ function resolveFoulBall(
     return { isOut: false };
   }
 
-  // --- Phase 3: ファウルチップ三振 ---
+  // --- Phase 3: ファウルチップ三振 (catching依存) ---
   if (strikes === 2) {
     const isBackward = ball.direction < -(FOUL_TIP_DIRECTION_THRESHOLD)
       || ball.direction > FAIR_ZONE_MAX + FOUL_TIP_DIRECTION_THRESHOLD;
     const isLow = ball.launchAngle <= FOUL_TIP_MAX_LAUNCH_ANGLE;
     const isFast = ball.exitVelocity >= FOUL_TIP_MIN_VELOCITY;
     if (isBackward && isLow && isFast) {
-      if (rng() < FOUL_TIP_STRIKEOUT_RATE) {
+      // catching=50: 0.55(基準)、catching=100: 0.75、catching=0: 0.35 → clamp(0.30, 0.80)
+      const ftRate = clamp(FOUL_TIP_STRIKEOUT_BASE + (catcherCatching - 50) * FOUL_TIP_CATCHING_SCALE, 0.30, 0.80);
+      if (rng() < ftRate) {
         return { isOut: true, result: "strikeout", fielderPosition: 2 };
       }
     }
@@ -569,7 +590,7 @@ function shouldAttemptSafetyBunt(batter: Player): boolean {
   // 走力85以上が条件
   if (batter.batting.speed < 85) return false;
   // 試行確率: 1〜2%（NPB基準に準じた低頻度）
-  const attemptRate = 0.01 + (batter.batting.speed - 85) * 0.0005;
+  const attemptRate = SAFETY_BUNT_ATTEMPT_BASE + (batter.batting.speed - 85) * SAFETY_BUNT_ATTEMPT_SPEED_SCALE;
   return Math.random() < attemptRate;
 }
 
@@ -579,7 +600,7 @@ function resolveSacrificeBunt(
   bases: BaseRunners
 ): { result: AtBatResult; newBases: BaseRunners } {
   // 成功率: contact 50 → 70%, contact 100 → 80%
-  const successRate = 0.60 + batter.batting.contact * 0.002;
+  const successRate = SACRIFICE_BUNT_SUCCESS_BASE + batter.batting.contact * SACRIFICE_BUNT_CONTACT_SCALE;
   const rand = Math.random();
 
   if (rand < successRate) {
@@ -595,10 +616,10 @@ function resolveSacrificeBunt(
 
   // 失敗分岐
   const failRand = Math.random();
-  if (failRand < 0.40) {
+  if (failRand < BUNT_FAIL_FOUL_RATE) {
     // ファウル → 再試行は呼び出し元で管理（ここでは失敗として返す）
     return { result: "bunt_out", newBases: bases };
-  } else if (failRand < 0.80) {
+  } else if (failRand < BUNT_FAIL_FOUL_RATE * 2) {
     // ゴロアウト: 打者アウト、走者進塁なし
     return { result: "bunt_out", newBases: bases };
   } else {
@@ -612,7 +633,7 @@ function resolveSacrificeBunt(
 /** セーフティバントを解決する */
 function resolveSafetyBunt(batter: Player, bases: BaseRunners): { result: AtBatResult; newBases: BaseRunners } {
   // 成功率: speed 80, contact 50 → 41%
-  const successRate = 0.20 + batter.batting.speed * 0.002 + batter.batting.contact * 0.001;
+  const successRate = SAFETY_BUNT_SUCCESS_BASE + batter.batting.speed * SAFETY_BUNT_SPEED_SCALE + batter.batting.contact * SAFETY_BUNT_CONTACT_SCALE;
   if (Math.random() < successRate) {
     // 成功: 打者1塁、走者も進塁
     const newBases: BaseRunners = { first: batter, second: null, third: null };
@@ -625,6 +646,14 @@ function resolveSafetyBunt(batter: Player, bases: BaseRunners): { result: AtBatR
   }
   // 失敗: 打者アウト、走者進塁なし
   return { result: "bunt_out", newBases: bases };
+}
+
+/** バント方向から守備担当を決定 */
+function selectBuntFielder(direction: number): FielderPosition {
+  if (direction < 25) return 5;   // 三塁手（三塁側）
+  if (direction < 40) return 1;   // 投手（三塁寄り）
+  if (direction < 55) return 1;   // 投手（中央）
+  return 3;                       // 一塁手（一塁側）
 }
 
 /** HR/フェンス直撃チェック（fly_ball / popup 対象） */
@@ -698,16 +727,17 @@ function simulateAtBat(
     while (buntAttempts < 3) {
       const buntR = resolveSacrificeBunt(batter, bases);
       pitchCount++;
-      if (buntAttempts < 2 && buntR.result === "bunt_out" && Math.random() < 0.40) {
+      if (buntAttempts < 2 && buntR.result === "bunt_out" && Math.random() < BUNT_RETRY_FOUL_RATE) {
         // ファウル扱い: 再試行
         buntAttempts++;
         continue;
       }
+      const buntDirection = 10 + Math.random() * 60;
       return {
         result: buntR.result,
         battedBallType: "ground_ball",
-        fielderPosition: 1,
-        direction: 10 + Math.random() * 60,
+        fielderPosition: selectBuntFielder(buntDirection),
+        direction: buntDirection,
         launchAngle: -5,
         exitVelocity: 50 + Math.random() * 30,
         pitchCount,
@@ -721,11 +751,12 @@ function simulateAtBat(
   if (shouldAttemptSafetyBunt(batter)) {
     const safetyR = resolveSafetyBunt(batter, bases);
     pitchCount++;
+    const buntDirection = 10 + Math.random() * 60;
     return {
       result: safetyR.result,
       battedBallType: "ground_ball",
-      fielderPosition: 1,
-      direction: 10 + Math.random() * 60,
+      fielderPosition: selectBuntFielder(buntDirection),
+      direction: buntDirection,
       launchAngle: -5,
       exitVelocity: 50 + Math.random() * 30,
       pitchCount,
@@ -744,8 +775,10 @@ function simulateAtBat(
 
   while (true) {
 
-    // 死球チェック（ゾーン外投球の低確率）
-    if (Math.random() < 0.003) {
+    // 死球チェック（ゾーン外投球の低確率、投手control依存）
+    // control=50: 0.003(基準)、control=0: 0.0055、control=100: 0.0005
+    const hbpRate = HIT_BY_PITCH_BASE + (50 - effPit.control) * HIT_BY_PITCH_CONTROL_FACTOR;
+    if (Math.random() < Math.max(0, hbpRate)) {
       pitchCount++;
       if (pitcherState) {
         pitcherState.currentStamina -= STAMINA_PER_PITCH;
@@ -763,19 +796,19 @@ function simulateAtBat(
     const effectiveControl = clamp(effPit.control + mentalControlBonus, 0, 100);
 
     // ゾーン内投球率: 制球依存。カウント補正あり
-    let zoneRate = 0.35 + (effectiveControl / 100) * 0.30;
-    if (strikes > balls) zoneRate -= 0.05;  // 投手有利カウント: ボール球を使いやすい
-    if (balls > strikes) zoneRate += 0.05;  // 打者有利カウント: ストライクを取りにいく
+    let zoneRate = ZONE_RATE_BASE + (effectiveControl / 100) * ZONE_RATE_CONTROL_SCALE;
+    if (strikes > balls) zoneRate -= ZONE_RATE_COUNT_ADJUST;  // 投手有利カウント: ボール球を使いやすい
+    if (balls > strikes) zoneRate += ZONE_RATE_COUNT_ADJUST;  // 打者有利カウント: ストライクを取りにいく
 
     const inZone = Math.random() < zoneRate;
 
     // スイング判定
     let swings: boolean;
     if (inZone) {
-      const swingRate = 0.55 + (bat.eye / 100) * 0.20;
+      const swingRate = SWING_RATE_BASE + (bat.eye / 100) * SWING_RATE_EYE_SCALE;
       swings = Math.random() < swingRate;
     } else {
-      const chaseRate = 0.40 - (bat.eye / 100) * 0.25;
+      const chaseRate = CHASE_RATE_BASE - (bat.eye / 100) * CHASE_RATE_EYE_SCALE;
       swings = Math.random() < chaseRate;
     }
 
@@ -790,7 +823,7 @@ function simulateAtBat(
       const avgPitchLevel = effPit.pitches.length > 0
         ? effPit.pitches.reduce((s, p) => s + p.level, 0) / effPit.pitches.length
         : 3;
-      const contactRate = 0.50 + (bat.contact / 100) * 0.40 - (avgPitchLevel / 7) * 0.15;
+      const contactRate = CONTACT_RATE_BASE + (bat.contact / 100) * CONTACT_RATE_SKILL_SCALE - (avgPitchLevel / 7) * CONTACT_RATE_PITCH_PENALTY;
 
       if (Math.random() < contactRate) {
         // コンタクト成功 → 打球生成（方向拡張: フェア/ファウル連続分布）
@@ -839,8 +872,10 @@ function simulateAtBat(
             runnerResults: agentResult.runnerResults,
           };
         } else {
-          // ファウル打球 → resolveFoulBall で判定
-          const foulResult = resolveFoulBall(ball, strikes);
+          // ファウル打球 → resolveFoulBall で判定 (catching/fielding依存)
+          const catcherPlayer = fielderMap.get(2 as FielderPosition);
+          const catcherCatchingVal = catcherPlayer?.batting.catching ?? 50;
+          const foulResult = resolveFoulBall(ball, strikes, catcherCatchingVal, fielderMap);
           if (foulResult.isOut) {
             return {
               result: foulResult.result!,
@@ -1151,9 +1186,9 @@ function attemptStolenBases(
         newBases.first = null;
         bs.caughtStealing++;
         additionalOuts++;
-        // 盗塁死: 捕手にA、2塁カバー(SS 60% / 2B 40%)にPO
+        // 盗塁死: 捕手にA、2塁カバー(SS固定: NPBではSSが2塁カバーする頻度が高い)にPO
         recordFielding(batterStatsMap, fielderMap, 2, "assist");
-        const csCoverPos: FielderPosition = Math.random() < 0.60 ? 6 : 4;
+        const csCoverPos: FielderPosition = 6; // SS固定
         recordFielding(batterStatsMap, fielderMap, csCoverPos, "putOut");
       }
     }
@@ -1855,7 +1890,7 @@ function simulateHalfInning(
         coverPos = 3;
       } else if (bases.second) {
         pickoffBase = 2;
-        coverPos = Math.random() < 0.60 ? 6 : 4;
+        coverPos = 6; // SS固定
       } else if (bases.third) {
         pickoffBase = 3;
         coverPos = 5;
@@ -1959,8 +1994,11 @@ function simulateHalfInning(
         bs.atBats++;
         bs.strikeouts++;
         pitcherLog.strikeouts++;
-        // 振り逃げ風プレー(3%): C(A)+1B(PO)、通常(97%): C(PO)
-        if (Math.random() < 0.03) {
+        // 振り逃げ風プレー(catching依存): C(A)+1B(PO)、通常: C(PO)
+        // catching=50: 0.03(基準)、catching=0: 0.05、catching=100: 0.01
+        const catcherCatching = defensiveState.catcher.batting.catching;
+        const d3sRate = DROPPED_THIRD_STRIKE_BASE + (50 - catcherCatching) * DROPPED_THIRD_STRIKE_CATCHING_FACTOR;
+        if (Math.random() < Math.max(0, d3sRate)) {
           recordFielding(batterStatsMap, fielderMap, 2, "assist");
           recordFielding(batterStatsMap, fielderMap, 3, "putOut");
         } else {
