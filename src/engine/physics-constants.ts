@@ -206,7 +206,7 @@ export const AGENT_PERCEPTION_BASE_NOISE = 12;   // 基本ノイズσ(m)
 // 打球高さによる知覚ノイズ減衰率
 // 旧: launchAngle(0-60°範囲, 0.03/度) → 新: maxHeight(0-25m範囲, 0.07/m)
 // 低い打球=高ノイズ(読みにくいライナー)、高い打球=低ノイズ(放物線が読めるフライ/ポップ)
-export const PERCEPTION_ANGLE_DECAY_RATE = 0.07;
+export const PERCEPTION_ANGLE_DECAY_RATE = 0.09;
 
 // 移動
 export const AGENT_ACCELERATION_TIME = 0.5;      // 0→最高速に達するまでの時間(秒)

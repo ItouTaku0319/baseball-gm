@@ -1445,6 +1445,7 @@ function resolvePhase2WithTicks(
   let ballHolder: FielderAgent | null = catchSuccess && catcherAgent ? catcherAgent : null;
   let throwBall: ThrowBallState | null = null;
   const throwPlays: ThrowPlay[] = [];
+  let pendingThrowPlay: ThrowPlay | null = null;
   let outsAdded = 0;
   let securingTimer = 0;
 
@@ -1515,11 +1516,11 @@ function resolvePhase2WithTicks(
         if (target) {
           throwBall = createThrow(ballHolder, target, t);
           const baseName = BASE_NAMES[target.baseNum] ?? "first";
-          throwPlays.push({
+          pendingThrowPlay = {
             from: ballHolder.pos,
             to: target.receiverAgent.pos,
             base: baseName as keyof typeof BASE_POSITIONS,
-          });
+          };
           target.receiverAgent.state = "RECEIVING";
           ballHolder.state = "THROWING";
           ballHolder = null;
@@ -1540,6 +1541,10 @@ function resolvePhase2WithTicks(
 
       if (isOut) {
         outsAdded++;
+        if (pendingThrowPlay) {
+          throwPlays.push(pendingThrowPlay);
+          pendingThrowPlay = null;
+        }
         // DP継続判定: まだアウトにできる走者がいるか？
         const canContinue = outsAdded < 3 && (outs + outsAdded) < 3 &&
           runners.some(r => r.isForced && (r.state === "RUNNING" || r.state === "TAGGED_UP"));
@@ -1552,7 +1557,8 @@ function resolvePhase2WithTicks(
           throwBall = null;
         }
       } else {
-        // セーフ — プレー終了
+        // セーフ — 保留中のthrowPlayを破棄してプレー終了
+        pendingThrowPlay = null;
         throwBall = null;
       }
     }
@@ -1713,25 +1719,33 @@ function buildPhase2Result(
     // 犠牲フライ判定: 3塁走者がホームに到達 + 2アウト未満
     const thirdRunner = runners.find(r => r.fromBase === 3);
     if (thirdRunner && thirdRunner.state === "SAFE" && thirdRunner.targetBase === 4 && originalOuts < 2) {
+      const sfPlays: ThrowPlay[] = [
+        { from: fielderPos, to: fielderPos, base: "first" },
+        ...throwPlays,
+      ];
       return {
         result: "sacrificeFly",
         fielderPos,
         putOutPos: fielderPos,
-        throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
+        throwPlays: sfPlays,
       };
     }
 
     // タッチアップでアウト
     if (outsAdded > 0) {
-      // フライアウト + タッチアップアウト（DP相当だが結果はflyout）
+      // フライアウト + タッチアップアウト: 捕球者POをself-playとして先頭に追加
       const baseResult = trajectory.ballType === "popup" ? "popout"
         : trajectory.ballType === "line_drive" ? "lineout"
         : "flyout";
+      const allPlays: ThrowPlay[] = [
+        { from: fielderPos, to: fielderPos, base: "first" },
+        ...throwPlays,
+      ];
       return {
         result: baseResult,
         fielderPos,
         putOutPos: fielderPos,
-        throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
+        throwPlays: allPlays,
       };
     }
 
