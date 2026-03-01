@@ -46,6 +46,7 @@ next-env.d.ts
 # temp files
 /tmp/
 tmp-*
+tmp_*
 *.stackdump
 reports/*.csv
 reports/*.xlsx
