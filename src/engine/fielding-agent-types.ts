@@ -140,6 +140,8 @@ export type RunnerState =
   | "RUNNING"      // 走塁中
   | "WAITING_TAG"  // フライ捕球待ち（タッチアップ準備）
   | "TAGGED_UP"    // タッチアップ開始
+  | "ROUNDING"     // 塁を回っている（エキストラベース判断中）
+  | "DECIDING"     // タッチアップ判断中
   | "SAFE"         // セーフ（塁到達）
   | "OUT";         // アウト
 
@@ -153,6 +155,12 @@ export interface RunnerAgent {
   progress: number;         // 塁間の進捗 (0.0 ~ 1.0)
   isBatter: boolean;
   isForced: boolean;        // フォースプレー対象か
+  readonly skill?: {
+    speed: number;          // batting.speed (1-100)
+    baseRunning: number;    // batting.baseRunning ?? 50 (1-100)
+  };
+  roundingTimer?: number;   // ROUNDING状態の残り時間(秒)
+  originalBase?: number;    // 打席開始時の塁（runnerResults用）
 }
 
 // --- Phase 2: 送球ボール ---
@@ -245,6 +253,15 @@ export type AtBatResult =
   | "bunt_hit"
   | "bunt_out";
 
+// --- ランナー結果（simulation.ts連携用） ---
+
+export interface RunnerResult {
+  player: Player;
+  fromBase: number;      // 打席開始時の塁 (0=打者)
+  reachedBase: number;   // 最終到達塁 (4=ホーム=得点)
+  isOut: boolean;
+}
+
 export interface AgentFieldingResult {
   result: AtBatResult;
   fielderPos: FielderPosition;
@@ -259,6 +276,8 @@ export interface AgentFieldingResult {
   throwPlays?: ThrowPlay[];
   /** エージェントタイムライン (collectTimeline=true の場合のみ) */
   agentTimeline?: AgentTimelineEntry[];
+  /** ランナー結果（自律走塁の最終状態） */
+  runnerResults?: RunnerResult[];
 }
 
 // --- ユーティリティ ---

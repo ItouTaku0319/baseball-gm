@@ -241,3 +241,29 @@ export const RUNNER_SPEED_SCALE = 2.5;           // speed/100 あたりの走速
 export const BATTER_START_DELAY = 0.65;          // 打者走者のスタート遅延(秒)
 export const TAGUP_DELAY = 0.3;                  // タッチアップ反応遅延(秒)
 export const BASE_TAG_TIME = 0.15;               // ベースタッチ所要時間(秒)
+
+// ============================================================
+// ランナーエージェント自律走塁判断用定数
+// ============================================================
+
+// ボール回収モデル
+export const RETRIEVER_APPROACH_FACTOR = 0.6;    // 回収時の走速低下率(減速+ボール読み)
+export const RETRIEVER_PICKUP_TIME = 1.5;        // ボール拾い上げ+送球体勢までの時間(秒)
+
+// エキストラベース（ヒット時の進塁判断）
+export const EXTRA_BASE_ROUNDING_TIME = 0.3;     // 塁を回る所要時間(秒)
+export const EXTRA_BASE_GO_THRESHOLD = -0.2;     // 進塁GO閾値(負=やや積極的に走る)
+export const EXTRA_BASE_DECISION_NOISE = 0.4;    // 判断ノイズσ(baseRunning=0時)
+
+// タッチアップ判断
+export const TAGUP_ARM_PERCEPTION_NOISE = 20;    // 肩力知覚ノイズσ(baseRunning=0時)
+export const TAGUP_GO_THRESHOLD = -0.5;          // タッチアップGO閾値(負=積極的にタッチアップ)
+export const TAGUP_DECISION_NOISE = 0.3;         // 判断ノイズσ(baseRunning=0時)
+
+// ゴロ時非フォース走者の進塁判断
+export const GROUND_ADVANCE_GO_THRESHOLD = 1.0;  // ゴロ進塁GO閾値(高め=保守的)
+export const GROUND_ADVANCE_DECISION_NOISE = 0.3; // 判断ノイズσ(baseRunning=0時)
+
+// 外野手タッチアップ送球判断
+export const TAGUP_THROW_MARGIN_BASE = 0.8;      // 送球判断基本マージン(秒)
+export const TAGUP_THROW_MARGIN_AWARENESS_SCALE = 0.6; // awareness依存の送球断念スケール

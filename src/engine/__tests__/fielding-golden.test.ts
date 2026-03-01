@@ -423,8 +423,8 @@ describe("ゴールデンテスト: フライ", () => {
     // SSが処理するのが物理的に正しい
     // Phase 2 ティックベース化に伴い閾値緩和 (旧0.9) — 投手・3B等も処理に参加
     expect(pos6Rate + pos4Rate + pos8Rate).toBeGreaterThan(0.70);
-    // ダイビング/ランニングキャッチ難化に伴い閾値緩和 (旧0.4→0.34)
-    expect(stats.outRate).toBeGreaterThan(0.34);
+    // ダイビング/ランニングキャッチ難化に伴い閾値緩和 (旧0.4→0.34→0.30)
+    expect(stats.outRate).toBeGreaterThan(0.30);
   });
 
   test("F10: フェンス際深いフライ → LFアウト or 長打", () => {

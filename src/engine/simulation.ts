@@ -4,7 +4,7 @@ import type { Player, Position, PitchRepertoire, PitchType, Injury } from "@/mod
 import { calcBallLanding } from "./fielding-ai";
 import type { BallLanding } from "./fielding-ai";
 import { resolvePlayWithAgents } from "./fielding-agent";
-import type { ThrowPlay, AgentTimelineEntry } from "./fielding-agent-types";
+import type { ThrowPlay, AgentTimelineEntry, RunnerResult } from "./fielding-agent-types";
 import {
   GRAVITY, BAT_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR,
   FENCE_BASE, FENCE_CENTER_EXTRA, FENCE_HEIGHT,
@@ -147,6 +147,8 @@ interface AtBatDetail {
   errorPos?: FielderPosition;
   /** エージェントタイムライン（守備アニメーション用） */
   agentTimeline?: AgentTimelineEntry[];
+  /** ランナー結果（自律走塁の最終状態） */
+  runnerResults?: RunnerResult[];
 }
 
 /** 走者の状態 */
@@ -829,6 +831,7 @@ function simulateAtBat(
             assistPos: agentResult.assistPos,
             errorPos: agentResult.errorPos,
             agentTimeline: agentResult.agentTimeline,
+            runnerResults: agentResult.runnerResults,
           };
         } else {
           // ファウル打球 → resolveFoulBall で判定
@@ -2193,15 +2196,45 @@ function simulateHalfInning(
           bs.homeRuns++;
           pitcherLog.homeRunsAllowed++;
         }
-        const hitAdvance = advanceRunners(bases, result, batter);
-        bases = hitAdvance.bases;
-        const hitScored = hitAdvance.runsScored;
-        runs += hitScored;
-        inningRuns += hitScored;
-        bs.rbi += hitScored;
-        pitcherLog.earnedRuns += hitScored;
-        for (const runner of hitAdvance.scoredRunners) {
-          getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
+        // runnerResultsがあれば自律走塁の結果を使用、なければフォールバック
+        if (detail.runnerResults && detail.runnerResults.length > 0) {
+          const newBases: BaseRunners = { first: null, second: null, third: null };
+          let hitScored = 0;
+          let extraOuts = 0;
+          for (const rr of detail.runnerResults) {
+            if (rr.isOut) {
+              extraOuts++;
+              continue;
+            }
+            if (rr.reachedBase >= 4) {
+              hitScored++;
+              getOrCreateBatterStats(batterStatsMap, rr.player.id).runs++;
+            } else if (rr.reachedBase === 3) {
+              newBases.third = rr.player;
+            } else if (rr.reachedBase === 2) {
+              newBases.second = rr.player;
+            } else if (rr.reachedBase === 1) {
+              newBases.first = rr.player;
+            }
+          }
+          // 進塁時にアウトになった走者をカウント
+          outs += extraOuts;
+          bases = newBases;
+          runs += hitScored;
+          inningRuns += hitScored;
+          bs.rbi += hitScored;
+          pitcherLog.earnedRuns += hitScored;
+        } else {
+          const hitAdvance = advanceRunners(bases, result, batter);
+          bases = hitAdvance.bases;
+          const hitScored = hitAdvance.runsScored;
+          runs += hitScored;
+          inningRuns += hitScored;
+          bs.rbi += hitScored;
+          pitcherLog.earnedRuns += hitScored;
+          for (const runner of hitAdvance.scoredRunners) {
+            getOrCreateBatterStats(batterStatsMap, runner.id).runs++;
+          }
         }
         break;
       }

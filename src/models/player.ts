@@ -133,6 +133,8 @@ export interface BatterAbilities {
   eye: number;
   /** 守備意識 (カバー・バックアップの判断力、0-100) */
   awareness?: number;
+  /** 走塁判断力 (エキストラベース・タッチアップ判断に影響、0-100) */
+  baseRunning?: number;
 }
 
 export interface PitcherAbilities {
