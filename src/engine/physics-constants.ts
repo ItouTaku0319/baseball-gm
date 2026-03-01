@@ -81,8 +81,8 @@ export const TRANSFER_TIME_ARM_SCALE = 0.15; // 肩力による送球準備時�
 export const RUNNER_START_DELAY = 0.65;      // 打者走者のスタート遅延(秒)：スイング完了→走り出し
 
 // 守備範囲計算（捕球リーチ）— 物理ベースモデル
-export const CATCH_REACH_BASE = 1.1;           // 全ポジション共通基本捕球リーチ(m)
-export const CATCH_REACH_SKILL_FACTOR = 1.5;   // fielding/100 あたりの追加リーチ(m)
+export const CATCH_REACH_BASE = 0.45;          // 全ポジション共通基本捕球リーチ(m)
+export const CATCH_REACH_SKILL_FACTOR = 0.70;  // fielding/100 あたりの追加リーチ(m)
 // ポップフライ(50°以上)の初速上限
 // 芯を外した不完全コンタクトで初速が大幅に低下する
 // 80km/hで着地距離18-27m（NPB内野ポップフライの典型的な範囲）
@@ -110,8 +110,8 @@ export const INFIELD_HIT_SPEED_BONUS = 0.10;        // speed=100で+10%のボー
 // ゴロ捕球失敗 → ヒット判定の閾値（強い打球は捕れなくてもヒット扱い）
 export const GROUND_BALL_HARD_HIT_SPEED = 20;       // この速度(m/s)以上の捕球失敗はヒット扱い
 // ゴロ捕球率の調整
-export const GROUND_BALL_CATCH_SPEED_PENALTY = 0.007; // ボール速度(>20m/s)による捕球率低下係数
-export const GROUND_BALL_CATCH_FLOOR = 0.85;          // 捕球率の下限
+export const GROUND_BALL_CATCH_SPEED_PENALTY = 0.012; // ボール速度(>20m/s)による捕球率低下係数
+export const GROUND_BALL_CATCH_FLOOR = 0.80;          // 捕球率の下限
 export const GROUND_BALL_REACH_PENALTY = 0.08;        // リーチ端での捕球率低下（最大8%）
 // ゴロ「ギャップ抜け」は廃止: エージェントの物理シミュレーションが直接判定する
 
@@ -187,18 +187,18 @@ export const AGENT_MAX_TIME_GROUND = 8.0;        // ゴロの最大シミュレ�
 export const AGENT_MAX_TIME_FLY = 12.0;          // フライの最大シミュレーション時間(秒)
 
 // 反応時間
-export const AGENT_BASE_REACTION = 0.40;         // 全ポジション共通基本反応時間(秒)
-export const AGENT_AWARENESS_REACTION_SCALE = 0.005; // awareness 1ポイントあたりの反応時間短縮(秒)
-export const AGENT_REACTING_SPEED_RATIO = 0.35;      // REACTING中の移動速度割合（初動フェーズ）
+export const AGENT_BASE_REACTION = 0.50;         // 全ポジション共通基本反応時間(秒)
+export const AGENT_AWARENESS_REACTION_SCALE = 0.004; // awareness 1ポイントあたりの反応時間短縮(秒)
+export const AGENT_REACTING_SPEED_RATIO = 0.20;      // REACTING中の移動速度割合（初動フェーズ）
 
 // ダイビングキャッチ
 export const AGENT_DIVE_MIN_DIST = 1.5;          // ダイビング可能最小距離(m)
-export const AGENT_DIVE_MAX_DIST = 3.5;          // ダイビング可能最大距離(m)
-export const AGENT_DIVE_BASE_RATE = 0.20;        // ダイビング基本成功率
-export const AGENT_DIVE_SKILL_FACTOR = 0.005;    // 守備力1あたりのダイビング成功率上昇
+export const AGENT_DIVE_MAX_DIST = 3.0;          // ダイビング可能最大距離(m)
+export const AGENT_DIVE_BASE_RATE = 0.15;        // ダイビング基本成功率
+export const AGENT_DIVE_SKILL_FACTOR = 0.003;    // 守備力1あたりのダイビング成功率上昇
 
 // ランニングキャッチ
-export const AGENT_RUNNING_CATCH_BASE = 0.70;    // ランニングキャッチ基本成功率
+export const AGENT_RUNNING_CATCH_BASE = 0.65;    // ランニングキャッチ基本成功率
 export const AGENT_RUNNING_CATCH_SKILL = 0.003;  // 守備力1あたりの成功率上昇
 
 // 知覚ノイズ
@@ -209,9 +209,9 @@ export const AGENT_PERCEPTION_BASE_NOISE = 12;   // 基本ノイズσ(m)
 export const PERCEPTION_ANGLE_DECAY_RATE = 0.07;
 
 // 移動
-export const AGENT_ACCELERATION_TIME = 0.3;      // 0→最高速に達するまでの時間(秒)
-export const AGENT_BASE_SPEED = 6.75;            // 全ポジション共通基本走速(m/s)
-export const AGENT_SPEED_SKILL_FACTOR = 2.5;     // speed/100 あたりの走速追加(m/s)
+export const AGENT_ACCELERATION_TIME = 0.5;      // 0→最高速に達するまでの時間(秒)
+export const AGENT_BASE_SPEED = 6.5;             // 全ポジション共通基本走速(m/s)
+export const AGENT_SPEED_SKILL_FACTOR = 2.25;    // speed/100 あたりの走速追加(m/s)
 export const BACKUP_DRIFT_THRESHOLD = 40;        // バックアップ判定距離(m) — これ以上は「遠い」
 export const DRIFT_RATIO_MIN = 0.10;             // 遠方ドリフト最小割合 (fielding=0)
 export const DRIFT_RATIO_MAX = 0.25;             // 遠方ドリフト最大割合 (fielding=100)

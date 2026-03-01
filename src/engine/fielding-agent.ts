@@ -560,7 +560,7 @@ function checkGroundBallIntercept(
       if (distSq < bestDistSq) { bestDistSq = distSq; bestChaser = a; }
     }
     if (bestChaser) {
-      const reach = getCatchReach(bestChaser) * 1.4;
+      const reach = getCatchReach(bestChaser) * 0.9; // 停止球も正確な到達が必要
       if (bestDistSq < reach * reach) {
         bestChaser.state = "FIELDING";
         bestChaser.arrivalTime = t;
@@ -622,7 +622,7 @@ function checkGroundBallIntercept(
     const distSq =
       (px - nearestX) * (px - nearestX) + (py - nearestY) * (py - nearestY);
 
-    const interceptReach = getCatchReach(agent) * 1.0; // ゴロ用リーチ（伸身・逆シングル含む）
+    const interceptReach = getCatchReach(agent) * 0.6; // ゴロ用インターセプトリーチ（通過球は正確な位置取りが必要）
     if (distSq < interceptReach * interceptReach) {
       agent.state = "FIELDING";
       agent.arrivalTime = t;
@@ -663,7 +663,7 @@ function checkGroundBallIntercept(
       if (distSq < bestPursuerDistSq) { bestPursuerDistSq = distSq; bestPursuer = a; }
     }
     if (bestPursuer) {
-      const reach = getCatchReach(bestPursuer) * 1.4;
+      const reach = getCatchReach(bestPursuer) * 0.9; // 停止球も正確な到達が必要
       if (bestPursuerDistSq < reach * reach) {
         bestPursuer.state = "FIELDING";
         bestPursuer.arrivalTime = t;
