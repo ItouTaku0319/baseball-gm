@@ -658,11 +658,9 @@ export function checkHomeRun(
     return { result: "homerun", fielderPos };
   }
 
-  // 距離は足りるが高さ不足 → フェンス直撃（ほぼダブル、走力次第でトリプル）
-  const runnerSpeed = batter.batting.speed;
-  const tripleChance = 0.15 + (runnerSpeed / 100) * 0.15;
-  const hitResult: AtBatResult = Math.random() < tripleChance ? "triple" : "double";
-  return { result: hitResult, fielderPos };
+  // 距離は足りるが高さ不足 → フェンス直撃
+  // フィールディングエージェントに委ね、fenceDistanceオプションで処理させる
+  return null;
 }
 
 /** 外野手をゾーンベースで決定 */
@@ -816,7 +814,14 @@ function simulateAtBat(
             };
           }
 
-          const agentResult = resolvePlayWithAgents(ball, landing, fielderMap, batter, bases, outs, collectTimeline ? { collectTimeline: true } : undefined);
+          // フェンス直撃判定: 打球がフェンスに到達したがHRでない場合
+          const fenceDist = getFenceDistance(ball.direction);
+          const isFenceHit = (ball.type === "fly_ball" || ball.type === "popup") && landing.distance >= fenceDist;
+          const agentOpts = {
+            ...(collectTimeline ? { collectTimeline: true } : {}),
+            ...(isFenceHit ? { fenceDistance: fenceDist } : {}),
+          };
+          const agentResult = resolvePlayWithAgents(ball, landing, fielderMap, batter, bases, outs, Object.keys(agentOpts).length > 0 ? agentOpts : undefined);
           return {
             result: agentResult.result,
             battedBallType: ball.type,

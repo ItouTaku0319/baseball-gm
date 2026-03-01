@@ -57,7 +57,7 @@ import {
   EXTRA_BASE_ROUNDING_TIME,
   EXTRA_BASE_GO_THRESHOLD,
   EXTRA_BASE_ROUNDING_FATIGUE,
-  EXTRA_BASE_TRIPLE_THRESHOLD_ADD,
+
   EXTRA_BASE_DECISION_NOISE,
   TAGUP_ARM_PERCEPTION_NOISE,
   TAGUP_GO_THRESHOLD,
@@ -304,11 +304,22 @@ export function resolvePlayWithAgents(
     }
   }
 
+  // フェンス直撃: 捕球不可（ボールはフェンスに当たって跳ねるため）
+  const fenceDistance = options?.fenceDistance;
+  if (fenceDistance !== undefined) {
+    catchResult = null;
+  }
+
   // 捕球成功 / 捕球失敗(フライ落球) / 未到達 → Phase 2 ティックループ
   const catchSuccess = !!(catchResult && catchResult.success && catcherAgent);
+
+  // フェンス直撃時はボール静止位置をフェンス付近にキャップ
+  const restPos = fenceDistance !== undefined
+    ? capRestPositionToFence(trajectory, fenceDistance)
+    : estimateRestPosition(trajectory);
   const effectiveCatcher = catchSuccess ? catcherAgent : (
     // 未到達時: ボール停止位置に最も早く到達できる野手を回収者に
-    findNearestAgent(agents, estimateRestPosition(trajectory))
+    findNearestAgent(agents, restPos)
   );
 
   if (!effectiveCatcher) {
@@ -332,7 +343,8 @@ export function resolvePlayWithAgents(
     catchTime,
     rng,
     collectTimeline,
-    timeline
+    timeline,
+    fenceDistance
   );
   return { ...phase2Result, agentTimeline: collectTimeline ? timeline : undefined };
 }
@@ -945,6 +957,17 @@ function estimateRestPosition(trajectory: BallTrajectory): Vec2 {
   };
 }
 
+/** フェンス直撃時のボール静止位置: フェンスに当たり跳ね返ってフェンス手前5mに落ちる */
+function capRestPositionToFence(trajectory: BallTrajectory, fenceDistance: number): Vec2 {
+  const lp = trajectory.landingPos;
+  const dist = trajectory.landingDistance;
+  if (dist < 1) return lp;
+  const dirX = lp.x / dist;
+  const dirY = lp.y / dist;
+  const capDist = fenceDistance - 5;
+  return { x: capDist * dirX, y: capDist * dirY };
+}
+
 function findNearestAgent(
   agents: FielderAgent[],
   pos: Vec2
@@ -1103,9 +1126,7 @@ function decideExtraBase(
   const margin = estBallTime - estRunTime;
   const br = runner.skill?.baseRunning ?? 50;
   const noise = gaussianRandom(0, EXTRA_BASE_DECISION_NOISE * (1 - br / 100), rng);
-  // 2→3(三塁打)以上は追加閾値で保守的に判断
-  const threshold = EXTRA_BASE_GO_THRESHOLD + (nextBase >= 3 ? EXTRA_BASE_TRIPLE_THRESHOLD_ADD : 0);
-  return (margin + noise) > threshold;
+  return (margin + noise) > EXTRA_BASE_GO_THRESHOLD;
 }
 
 /** タッチアップ判断（DECIDING状態で呼ばれる） */
@@ -1627,7 +1648,8 @@ function resolvePhase2WithTicks(
   catchTime: number,
   rng: () => number,
   collectTimeline: boolean,
-  existingTimeline: AgentTimelineEntry[]
+  existingTimeline: AgentTimelineEntry[],
+  fenceDistance?: number
 ): AgentFieldingResult {
   const dt = PHASE2_DT;
 
@@ -1647,13 +1669,19 @@ function resolvePhase2WithTicks(
 
   if (!catchSuccess && catcherAgent) {
     retrieverAgent = catcherAgent;
-    const ballRestPos = estimateRestPosition(trajectory);
+    // フェンス直撃時はボール静止位置をフェンス付近にキャップ
+    const ballRestPos = fenceDistance !== undefined
+      ? capRestPositionToFence(trajectory, fenceDistance)
+      : estimateRestPosition(trajectory);
     const distToBall = vec2Distance(retrieverAgent.currentPos, ballRestPos);
     // 回収時間 = 走行(減速考慮) + ボール拾い上げ時間
     const approachTime = distToBall / (retrieverAgent.maxSpeed * RETRIEVER_APPROACH_FACTOR);
     // 深い外野ヒット回収ペナルティ: 着弾距離が大きいほどボール回収に時間がかかる
-    // （壁バウンド・悪いバウンス・コーナー転がりを包括的にモデル化）
-    const depthOverThreshold = trajectory.landingDistance - DEEP_HIT_PENALTY_THRESHOLD;
+    // フェンス直撃時はフェンス距離で計算（軌道上の着弾距離はフェンスを超えるため）
+    const effectiveLandingDist = fenceDistance !== undefined
+      ? fenceDistance
+      : trajectory.landingDistance;
+    const depthOverThreshold = effectiveLandingDist - DEEP_HIT_PENALTY_THRESHOLD;
     const depthPenalty = depthOverThreshold > 0
       ? DEEP_HIT_PENALTY_MAX * Math.min(depthOverThreshold / DEEP_HIT_PENALTY_SCALE, 1)
       : 0;

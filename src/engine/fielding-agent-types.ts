@@ -202,6 +202,8 @@ export interface AgentSimOptions {
   collectTimeline?: boolean;
   /** カスタム乱数(テスト用) */
   random?: () => number;
+  /** フェンス直撃時のフェンス距離(m)。設定時は捕球不可+静止位置をフェンス付近にキャップ */
+  fenceDistance?: number;
 }
 
 // --- 塁位置定数 ---

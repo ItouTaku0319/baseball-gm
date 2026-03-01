@@ -255,9 +255,8 @@ export const DEEP_HIT_PENALTY_MAX = 3.5;         // 深い外野ヒット時の�
 
 // エキストラベース（ヒット時の進塁判断）
 export const EXTRA_BASE_ROUNDING_TIME = 0.3;     // 塁を回る基本所要時間(秒)
-export const EXTRA_BASE_ROUNDING_FATIGUE = 0.4;  // 塁を回るごとの疲労加算(秒): 2→3で+0.4, 3→4で+0.8
+export const EXTRA_BASE_ROUNDING_FATIGUE = 1.5;  // 塁を回るごとの疲労加算(秒): 2→3で+1.5, 3→4で+3.0
 export const EXTRA_BASE_GO_THRESHOLD = -0.2;     // 進塁GO閾値(負=やや積極的に走る)
-export const EXTRA_BASE_TRIPLE_THRESHOLD_ADD = 5.5; // 2→3(三塁打)時の追加閾値(三塁打を稀にする)
 export const EXTRA_BASE_DECISION_NOISE = 0.4;    // 判断ノイズσ(baseRunning=0時)
 
 // タッチアップ判断
