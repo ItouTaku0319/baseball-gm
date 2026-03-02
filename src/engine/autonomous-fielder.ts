@@ -91,6 +91,9 @@ const CHASE_ARRIVAL_MARGIN_CAP = 0.3;
 /** ゴロ時のカバースコア減衰。追跡が最優先で、カバーは補助的行動 */
 const GROUND_BALL_COVER_DAMPING = 0.5;
 
+/** CFのフライ追跡ボーナス。実際の野球ではCFが外野フライの優先権を持ち守備機会が最多 */
+const CF_FLY_PURSUIT_BONUS = 0.08;
+
 // ====================================================================
 // 型定義
 // ====================================================================
@@ -409,8 +412,11 @@ function calcPursuitScore(
     }
   }
 
+  // CFはフライ追跡で優先権ボーナス（実際の野球ではCFが最広の守備範囲を持つ）
+  const cfBonus = (agent.pos === 8 && !trajectory.isGroundBall) ? CF_FLY_PURSUIT_BONUS : 0;
+
   const score = clamp(
-    proximity * 0.3 + mobility * 0.2 + arrivalMargin * 0.4 - coordPenalty,
+    proximity * 0.3 + mobility * 0.2 + arrivalMargin * 0.4 + cfBonus - coordPenalty,
     -1,
     1
   );
