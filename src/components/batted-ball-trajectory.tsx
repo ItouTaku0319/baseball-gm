@@ -630,6 +630,9 @@ const AGENT_STATE_COLOR: Record<AgentState, string> = {
   HOLDING: "rgba(100,180,255,0.55)",
   SECURING: "#22c55e",
   RECEIVING: "#a855f7",
+  RETRIEVING: "#f97316",
+  RELAYING: "#a855f7",
+  RETURNING: "rgba(100,180,255,0.55)",
 };
 
 // 最終フレーム以降: COVERING/BACKING_UP/PURSUING野手を目標に向かって外挿

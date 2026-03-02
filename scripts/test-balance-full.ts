@@ -45,42 +45,6 @@ interface AggregatedStats {
   totalFlyBallOuts: number;
 }
 
-function aggregate(results: GameResult[]): AggregatedStats {
-  const stats: AggregatedStats = {
-    totalGames: results.length,
-    totalAB: 0,
-    totalHits: 0,
-    totalHR: 0,
-    totalK: 0,
-    totalBB: 0,
-    totalSF: 0,
-    totalPA: 0,
-    totalGroundBallOuts: 0,
-    totalFlyBallOuts: 0,
-  };
-
-  for (const result of results) {
-    for (const ps of result.playerStats) {
-      stats.totalAB += ps.atBats;
-      stats.totalHits += ps.hits;
-      stats.totalHR += ps.homeRuns;
-      stats.totalK += ps.strikeouts;
-      stats.totalBB += ps.walks;
-      const sf = ps.sacrificeFlies ?? 0;
-      stats.totalSF += sf;
-      // PA = AB + BB + SF + HBP
-      const hbp = ps.hitByPitch ?? 0;
-      stats.totalPA += ps.atBats + ps.walks + sf + hbp;
-    }
-    for (const pg of result.pitcherStats) {
-      stats.totalGroundBallOuts += pg.groundBallOuts ?? 0;
-      stats.totalFlyBallOuts += pg.flyBallOuts ?? 0;
-    }
-  }
-
-  return stats;
-}
-
 // 異常パターン
 interface Anomaly {
   type: string;
@@ -380,20 +344,61 @@ function main() {
   console.log(`⚾ ${NUM_GAMES}試合バランステスト開始...`);
   const start = Date.now();
 
-  const results: GameResult[] = [];
+  // ストリーミング集計: GameResultを蓄積せず即座に処理してメモリ解放
+  const stats: AggregatedStats = {
+    totalGames: 0, totalAB: 0, totalHits: 0, totalHR: 0,
+    totalK: 0, totalBB: 0, totalSF: 0, totalPA: 0,
+    totalGroundBallOuts: 0, totalFlyBallOuts: 0,
+  };
+  const allLogs: AtBatLog[] = [];
+  const poByPos: Record<number, number> = {};
+  const aByPos: Record<number, number> = {};
+  const eByPos: Record<number, number> = {};
+
   const step = Math.max(1, Math.floor(NUM_GAMES / 10));
-  const ROTATE_EVERY = 100; // チームを100試合ごとにローテーション
+  const ROTATE_EVERY = 100;
 
   let teamA = createTestTeam("team-a", "テストA");
   let teamB = createTestTeam("team-b", "テストB");
 
   for (let i = 0; i < NUM_GAMES; i++) {
-    // チームローテーション: 100試合ごとに新チーム生成
     if (i > 0 && i % ROTATE_EVERY === 0) {
       teamA = createTestTeam("team-a", "テストA");
       teamB = createTestTeam("team-b", "テストB");
     }
-    results.push(simulateGame(teamA, teamB, { collectAtBatLogs: true }));
+    const result = simulateGame(teamA, teamB, { collectAtBatLogs: true });
+
+    // 即座に集計してresultの参照を手放す
+    stats.totalGames++;
+    for (const ps of result.playerStats) {
+      stats.totalAB += ps.atBats;
+      stats.totalHits += ps.hits;
+      stats.totalHR += ps.homeRuns;
+      stats.totalK += ps.strikeouts;
+      stats.totalBB += ps.walks;
+      const sf = ps.sacrificeFlies ?? 0;
+      stats.totalSF += sf;
+      const hbp = ps.hitByPitch ?? 0;
+      stats.totalPA += ps.atBats + ps.walks + sf + hbp;
+
+      // 守備指標集計
+      const pos = ps.fieldingPosition;
+      if (pos && pos >= 1 && pos <= 9) {
+        poByPos[pos] = (poByPos[pos] ?? 0) + (ps.putOuts ?? 0);
+        aByPos[pos] = (aByPos[pos] ?? 0) + (ps.assists ?? 0);
+        eByPos[pos] = (eByPos[pos] ?? 0) + (ps.errors ?? 0);
+      }
+    }
+    for (const pg of result.pitcherStats) {
+      stats.totalGroundBallOuts += pg.groundBallOuts ?? 0;
+      stats.totalFlyBallOuts += pg.flyBallOuts ?? 0;
+    }
+    if (result.atBatLogs) {
+      for (const log of result.atBatLogs) {
+        allLogs.push(log);
+      }
+    }
+
     if ((i + 1) % step === 0) {
       const pct = Math.round(((i + 1) / NUM_GAMES) * 100);
       process.stdout.write(`  進捗: ${pct}% (${i + 1}/${NUM_GAMES}試合)\n`);
@@ -402,10 +407,7 @@ function main() {
 
   const elapsed = Date.now() - start;
 
-  const stats = aggregate(results);
-  const allLogs = results.flatMap((r) => r.atBatLogs ?? []);
   const anomalies = detectAnomalies(allLogs);
-
   const passed = printResults(stats, anomalies, elapsed);
 
   // 打球タイプ別ヒット率
@@ -414,8 +416,10 @@ function main() {
   // ファウル指標
   printFoulMetrics(allLogs, stats.totalGames);
 
-  // 守備分布チェック
-  const fieldingPassed = printFieldingDistribution(allLogs, stats.totalGames, results);
+  // 守備分布チェック（事前集計済みの poByPos/aByPos/eByPos を渡す）
+  const fieldingPassed = printFieldingDistributionFromAgg(
+    allLogs, stats.totalGames, poByPos, aByPos, eByPos
+  );
 
   // 品質ゲート: exit codeで合否を返す
   if (!passed || !fieldingPassed) {
@@ -462,8 +466,13 @@ function printBattedBallBreakdown(logs: AtBatLog[]) {
   console.log("");
 }
 
-/** 回収野手分布 + ポジション別TC/Gの表示とチェック */
-function printFieldingDistribution(logs: AtBatLog[], totalGames: number, results: GameResult[]): boolean {
+/** 回収野手分布 + ポジション別TC/Gの表示とチェック（事前集計版） */
+function printFieldingDistributionFromAgg(
+  logs: AtBatLog[], totalGames: number,
+  poByPos: Record<number, number>,
+  aByPos: Record<number, number>,
+  eByPos: Record<number, number>
+): boolean {
   // 回収野手分布: ヒット打球の fielderPosition を集計
   const HIT_RESULTS = new Set(["single", "double", "triple", "infieldHit"]);
   const retrieverDist: Record<number, number> = {};
@@ -508,20 +517,6 @@ function printFieldingDistribution(logs: AtBatLog[], totalGames: number, results
   console.log(`  ${mark(cOk)} C回収率 (2):      ${cPct.toFixed(1)}%  (< 5%)`);
   console.log(`  ${mark(pOk)} P回収率 (1):      ${pPct.toFixed(1)}%  (< 3%)`);
   console.log("");
-
-  // ポジション別守備指標: PlayerGameStats の PO/A/E をポジション別に集計（NPB準拠）
-  const poByPos: Record<number, number> = {};
-  const aByPos: Record<number, number> = {};
-  const eByPos: Record<number, number> = {};
-  for (const result of results) {
-    for (const ps of result.playerStats) {
-      const pos = ps.fieldingPosition;
-      if (!pos || pos < 1 || pos > 9) continue;
-      poByPos[pos] = (poByPos[pos] ?? 0) + (ps.putOuts ?? 0);
-      aByPos[pos] = (aByPos[pos] ?? 0) + (ps.assists ?? 0);
-      eByPos[pos] = (eByPos[pos] ?? 0) + (ps.errors ?? 0);
-    }
-  }
 
   // NPB参考値（per team per game = 1人分）
   const fieldingBenchmarks: Record<number, { name: string; npbPO: number; npbA: number; npbTC: number; min: number; max: number }> = {

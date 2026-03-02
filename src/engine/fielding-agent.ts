@@ -70,6 +70,8 @@ import {
   TAGUP_THROW_MARGIN_AWARENESS_SCALE,
   POPUP_LAUNCH_ANGLE,
   LINER_LAUNCH_ANGLE_MAX,
+  UNIFIED_DT,
+  FIELDER_DECISION_INTERVAL,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -90,6 +92,7 @@ import type {
   RunnerSnapshot,
   ThrowBallSnapshot,
   RunnerResult,
+  UnifiedBallState,
 } from "./fielding-agent-types";
 import {
   BASE_POSITIONS,
@@ -103,6 +106,8 @@ import {
 import type { FielderAction } from "../models/league";
 import { calcAndStorePursuitScore, autonomousDecide } from "./autonomous-fielder";
 import type { CoverSnapshot } from "./autonomous-fielder";
+import { initRunnersAtBatStart } from "./runner-agent";
+import { createUnifiedBallState, updateBallPosition, transitionBallPhase } from "./ball-state";
 
 // ====================================================================
 // BattedBall / BaseRunners — simulation.ts 内部型のミラー
@@ -146,216 +151,526 @@ export function resolvePlayWithAgents(
   const agents = createAgents(fielderMap, trajectory);
   const timeline: AgentTimelineEntry[] = [];
 
-  const dt = AGENT_DT;
-  const maxTime = trajectory.isGroundBall
+  // ランナー早期初期化（統一ループ準備: Phase 1中はHOLDINGのまま）
+  const earlyRunners = initRunnersAtBatStart(bases);
+
+  // 統一ボール状態（Stage 2: Phase 1/2で並行追跡）
+  const restPosForBall = options?.fenceDistance !== undefined
+    ? capRestPositionToFence(trajectory, options.fenceDistance)
+    : estimateRestPosition(trajectory);
+  const unifiedBall = createUnifiedBallState(trajectory, restPosForBall);
+
+  // === 統一ループ状態 ===
+  const unifiedDt = UNIFIED_DT;
+  const maxPreCatchTime = trajectory.isGroundBall
     ? AGENT_MAX_TIME_GROUND
     : AGENT_MAX_TIME_FLY;
+  const maxTotalTime = maxPreCatchTime + MAX_PHASE2_TIME;
+
+  // 捕球前状態
   let catcherAgent: FielderAgent | null = null;
   let catchResult: CatchResult | null = null;
-  // GC圧力削減: ballPosバッファを1回だけ確保して毎ティック再利用
-  const ballPosBuf: Vec2 = { x: 0, y: 0 };
-  let prevBallPos: Vec2 = { x: 0, y: 0 };
   let catchTime = 0;
-  let finalT = 0;
+  let postCatchStarted = false;
+  let fielderDecisionTick = FIELDER_DECISION_INTERVAL - 1; // 初回ティックで即座に知覚・判断を実行
 
-  // === Phase 1: ティックループ ===
-  for (let t = 0; t <= maxTime; t = round(t + dt)) {
+  // 捕球後状態（postCatchStarted = true で初期化）
+  let catchSuccess = false;
+  let catchError = false;
+  let catchErrorPos: FielderPosition | undefined;
+  let runners: RunnerAgent[] = [];
+  let ballHolder: FielderAgent | null = null;
+  let throwBall: ThrowBallState | null = null;
+  const throwPlays: ThrowPlay[] = [];
+  let pendingThrowPlay: ThrowPlay | null = null;
+  let outsAdded = 0;
+  let securingTimer = 0;
+  let retrieverAgent: FielderAgent | null = null;
+  let batterStartTimer = 0;
+  let tagupTimer = 0;
+
+  // GC圧力削減: バッファを1回だけ確保して毎ティック再利用
+  const ballPosBuf: Vec2 = { x: 0, y: 0 };
+  const prevBallPos: Vec2 = { x: 0, y: 0 };
+
+  // === 統一ティックループ ===
+  for (let t = 0; t <= maxTotalTime; t = round(t + unifiedDt)) {
+    // Step 1: ボール位置更新
     const ballPos = trajectory.getPositionAt(t, ballPosBuf);
     const ballH = trajectory.getHeightAt(t);
     const ballOnGround = trajectory.isOnGround(t);
+    updateBallPosition(unifiedBall, t, ballPosBuf);
 
-    // --- Step 1: 知覚更新 ---
-    for (const agent of agents) {
-      if (agent.state === "READY") {
-        (agent as { state: AgentState }).state = "REACTING";
-      }
-      if (agent.state === "REACTING") {
-        (agent as { reactionRemaining: number }).reactionRemaining -= dt;
-        if (agent.reactionRemaining <= 0) {
-          (agent as { reactionRemaining: number }).reactionRemaining = 0;
+    // ===== 捕球前フェーズ =====
+    if (!postCatchStarted) {
+      // 毎ティック: 状態遷移（軽量、GC影響なし）
+      for (const agent of agents) {
+        if (agent.state === "READY") {
+          (agent as { state: AgentState }).state = "REACTING";
         }
       }
-      updatePerception(agent, trajectory, t, noiseScale, rng);
-    }
 
-    // --- Step 1.5: REACTING中の初動目標設定 ---
-    for (const agent of agents) {
-      if (agent.state === "REACTING" && agent.reactionRemaining > 0) {
-        (agent as { targetPos: Vec2 }).targetPos = {
-          x: agent.perceivedLanding.position.x,
-          y: agent.perceivedLanding.position.y,
-        };
-      }
-    }
+      // 知覚・判断（2ティックごと = 0.1秒相当、旧Phase1と同等）
+      // GC圧力削減: updatePerception, autonomousDecide 等の
+      // 配列アロケーションを0.1秒間隔に抑制する
+      fielderDecisionTick++;
+      let isDecisionTick = false;
+      if (fielderDecisionTick >= FIELDER_DECISION_INTERVAL) {
+        fielderDecisionTick = 0;
+        isDecisionTick = true;
 
-    // --- Step 2: 自律行動決定（2パス: 順序非依存） ---
-    // Pass 1: 全員の raw pursuit score を計算（他者のスコアに依存しない）
-    for (const agent of agents) {
-      calcAndStorePursuitScore(agent, agents, trajectory, t);
-    }
-    // カバー割当スナップショット: 前tickの状態を保持し処理順序非依存にする
-    const coverSnapshot = snapshotCoverAssignments(agents);
-    // Pass 2: 全員のスコアを見て最終行動決定
-    for (const agent of agents) {
-      autonomousDecide(agent, agents, trajectory, t, bases, outs, coverSnapshot);
-    }
-
-    // --- Step 3: カバー衝突解決 ---
-    // 同じベースを複数エージェントがカバーしている場合、最も近いエージェントだけ残す
-    deconflictBaseCoverage(agents);
-
-    // --- Step 4: 移動 ---
-    for (const agent of agents) {
-      moveAgent(agent, dt);
-    }
-
-    // --- Step 5: 捕球チェック ---
-    if (trajectory.isGroundBall && t > 0) {
-      const result = checkGroundBallIntercept(
-        agents,
-        prevBallPos,
-        ballPos,
-        trajectory,
-        t,
-        rng
-      );
-      if (result) {
-        catcherAgent = result.agent;
-        catchResult = result.catchResult;
-        catchTime = t;
-        // 捕球フレームをタイムラインに記録してからbreak
-        if (collectTimeline) {
-          timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
-        }
-        break;
-      }
-    }
-
-    if (!trajectory.isGroundBall && ballOnGround && t > 0) {
-      const result = checkFlyCatchAtLanding(agents, trajectory, t, rng);
-      if (result) {
-        catcherAgent = result.agent;
-        catchResult = result.catchResult;
-        catchTime = t;
-        // 捕球フレームをタイムラインに記録してからbreak
-        if (collectTimeline) {
-          timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
-        }
-        break;
-      }
-    }
-
-    // --- Step 6: タイムライン記録 ---
-    if (collectTimeline) {
-      timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
-    }
-
-    // --- Step 7: 早期終了 ---
-    // GC圧力削減: filter/everyの代わりにforループでインラインチェック
-    // ゴロ: isOnGround が常に true なので、ボール停止後のみ判定
-    // フライ: 着地後に全PURSUINGが目標到着済みなら終了
-    if (trajectory.isGroundBall) {
-      if (t >= trajectory.flightTime) {
-        // ゴロ: ボール停止 + 全追跡者が目標に到達、または追跡者なし
-        // 距離0.5m^2=0.25 で比較（sqrt不要）
-        let hasPursuer = false;
-        let allSettled = true;
-        for (let ai = 0; ai < agents.length; ai++) {
-          const a = agents[ai];
-          if (a.state !== "PURSUING") continue;
-          hasPursuer = true;
-          if (vec2DistanceSq(a.currentPos, a.targetPos) >= 0.25) {
-            allSettled = false;
-            break;
+        // 反応カウントダウン（AGENT_DT=0.1sで減算 = 旧Phase1と同じタイミング）
+        // autonomousDecide と同じゲートブロック内で実行し、
+        // reaction=0到達とPURSUING遷移が同一ティックで起こることを保証する
+        for (const agent of agents) {
+          if (agent.state === "REACTING") {
+            (agent as { reactionRemaining: number }).reactionRemaining -= AGENT_DT;
+            if (agent.reactionRemaining <= 0) {
+              (agent as { reactionRemaining: number }).reactionRemaining = 0;
+            }
           }
         }
-        if (!hasPursuer || allSettled) break;
+
+        // 知覚更新
+        for (const agent of agents) {
+          updatePerception(agent, trajectory, t, noiseScale, rng);
+        }
+
+        // REACTING中の初動目標設定（in-place mutation でGC圧力削減）
+        for (const agent of agents) {
+          if (agent.state === "REACTING" && agent.reactionRemaining > 0) {
+            agent.targetPos.x = agent.perceivedLanding.position.x;
+            agent.targetPos.y = agent.perceivedLanding.position.y;
+          }
+        }
+
+        // 自律行動決定
+        for (const agent of agents) {
+          calcAndStorePursuitScore(agent, agents, trajectory, t);
+        }
+        const coverSnapshot = snapshotCoverAssignments(agents);
+        for (const agent of agents) {
+          autonomousDecide(agent, agents, trajectory, t, bases, outs, coverSnapshot);
+        }
+        deconflictBaseCoverage(agents);
       }
-    } else if (ballOnGround) {
-      // フライ着地後: 距離0.5m^2=0.25 で比較（sqrt不要）
-      let allSettled = true;
-      for (let ai = 0; ai < agents.length; ai++) {
-        const a = agents[ai];
-        if (a.state === "PURSUING" && vec2DistanceSq(a.currentPos, a.targetPos) >= 0.25) {
-          allSettled = false;
-          break;
+
+      // 捕球前フェーズ: 判断・移動・捕球チェック（2ティックごと = dt=0.1sの旧Phase1と完全同等）
+      // NOTE: 移動もAGENT_DT=0.1sで実行。0.05sステップでは旧コードと位置がずれるため、
+      // 捕球前フェーズでは旧Phase1の時間進行を正確に再現する。
+      if (isDecisionTick) {
+        // 移動（判断の後、catch checkの前 = 旧Phase1と同じ順序）
+        for (const agent of agents) {
+          moveAgent(agent, AGENT_DT);
+        }
+        // 捕球チェック: ゴロ
+        if (trajectory.isGroundBall && t > 0) {
+          const result = checkGroundBallIntercept(
+            agents, prevBallPos, ballPos, trajectory, t, rng
+          );
+          if (result) {
+            catcherAgent = result.agent;
+            catchResult = result.catchResult;
+            catchTime = t;
+            if (result.catchResult.success) {
+              transitionBallPhase(unifiedBall, "HELD", {
+                holder: result.agent, catchResult: result.catchResult,
+                catchTime: t, catcherAgent: result.agent,
+              });
+            } else {
+              transitionBallPhase(unifiedBall, "ON_GROUND");
+              unifiedBall.catchResult = result.catchResult;
+              unifiedBall.catchTime = t;
+              unifiedBall.catcherAgent = result.agent;
+            }
+          }
+        }
+
+        // 捕球チェック: フライ
+        if (!catcherAgent && !trajectory.isGroundBall && ballOnGround && t > 0) {
+          const result = checkFlyCatchAtLanding(agents, trajectory, t, rng);
+          if (result) {
+            catcherAgent = result.agent;
+            catchResult = result.catchResult;
+            catchTime = t;
+            if (result.catchResult.success) {
+              transitionBallPhase(unifiedBall, "HELD", {
+                holder: result.agent, catchResult: result.catchResult,
+                catchTime: t, catcherAgent: result.agent,
+              });
+            } else {
+              transitionBallPhase(unifiedBall, "ON_GROUND");
+              unifiedBall.catchResult = result.catchResult;
+              unifiedBall.catchTime = t;
+              unifiedBall.catcherAgent = result.agent;
+            }
+          }
+        }
+
+        // 捕球前フェーズの終了判定
+        let shouldEndPreCatch = false;
+        if (catcherAgent) {
+          shouldEndPreCatch = true;
+        } else if (trajectory.isGroundBall && t >= trajectory.flightTime) {
+          let hasPursuer = false;
+          let allSettled = true;
+          for (let ai = 0; ai < agents.length; ai++) {
+            const a = agents[ai];
+            if (a.state !== "PURSUING") continue;
+            hasPursuer = true;
+            if (vec2DistanceSq(a.currentPos, a.targetPos) >= 0.25) {
+              allSettled = false;
+              break;
+            }
+          }
+          if (!hasPursuer || allSettled) shouldEndPreCatch = true;
+        } else if (!trajectory.isGroundBall && ballOnGround) {
+          let allSettled = true;
+          for (let ai = 0; ai < agents.length; ai++) {
+            const a = agents[ai];
+            if (a.state === "PURSUING" && vec2DistanceSq(a.currentPos, a.targetPos) >= 0.25) {
+              allSettled = false;
+              break;
+            }
+          }
+          if (allSettled) shouldEndPreCatch = true;
+        }
+
+        if (shouldEndPreCatch) {
+          // 捕球フレームをタイムラインに記録（捕球前状態のスナップショット）
+          if (collectTimeline) {
+            timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
+          }
+
+          postCatchStarted = true;
+
+          // --- フェーズ遷移: 捕球後状態の初期化 ---
+
+          // エラーフラグ
+          if (catchResult && !catchResult.success && catcherAgent && trajectory.isGroundBall) {
+            const ballSpeedAtCatch = trajectory.getSpeedAt(catcherAgent.arrivalTime);
+            if (ballSpeedAtCatch < GROUND_BALL_HARD_HIT_SPEED) {
+              catchError = true;
+              catchErrorPos = catcherAgent.pos;
+            }
+          }
+
+          // フェンス直撃
+          const fenceDistance = options?.fenceDistance;
+          if (fenceDistance !== undefined) {
+            catchResult = null;
+          }
+
+          catchSuccess = !!(catchResult && catchResult.success && catcherAgent);
+
+          // 回収者選定
+          const groundBallThroughFielder = !catchSuccess && !catchError && catcherAgent
+            && trajectory.isGroundBall && catchResult && !catchResult.success;
+          const retrieverCandidates = groundBallThroughFielder
+            ? agents.filter(a => a !== catcherAgent)
+            : agents;
+          const effectiveCatcher = catchSuccess ? catcherAgent : (
+            catchError ? catcherAgent : findNearestAgent(retrieverCandidates, restPosForBall)
+          );
+
+          if (!effectiveCatcher) {
+            return {
+              result: "single",
+              fielderPos: 8 as FielderPosition,
+              agentTimeline: collectTimeline ? timeline : undefined,
+            };
+          }
+
+          // ランナー初期化
+          runners = initRunners(batter, bases, trajectory, catchSuccess);
+
+          // ボール保持者 / 回収者の設定
+          ballHolder = catchSuccess && effectiveCatcher ? effectiveCatcher : null;
+          if (!catchSuccess && effectiveCatcher) {
+            retrieverAgent = effectiveCatcher;
+            retrieverAgent.state = "PURSUING";
+            retrieverAgent.targetPos.x = restPosForBall.x;
+            retrieverAgent.targetPos.y = restPosForBall.y;
+            retrieverAgent.currentSpeed = retrieverAgent.maxSpeed * RETRIEVER_APPROACH_FACTOR;
+          }
+
+          // 打者走者スタート遅延
+          batterStartTimer = catchSuccess && trajectory.isGroundBall ? BATTER_START_DELAY : 0;
+
+          // 捕球成功: SECURING状態
+          if (ballHolder) {
+            ballHolder.state = "SECURING";
+            securingTimer = calcSecuringTime(ballHolder);
+            if (!trajectory.isGroundBall) {
+              const distFromHome = Math.sqrt(
+                ballHolder.currentPos.x ** 2 + ballHolder.currentPos.y ** 2
+              );
+              if (distFromHome > OUTFIELD_DEPTH_THRESHOLD) {
+                securingTimer += SF_CATCH_TO_THROW_OVERHEAD;
+              }
+            }
+          }
+
+          // タッチアップ遅延
+          tagupTimer = catchSuccess && !trajectory.isGroundBall ? TAGUP_DELAY : 0;
+
+          // COVERING → RECEIVING
+          for (const a of agents) {
+            if (a.state === "COVERING" && a.action === "cover_base") {
+              a.state = "RECEIVING";
+            }
+          }
+
+          // 捕球者以外のPURSUING → HOLDING
+          for (const a of agents) {
+            if (a !== effectiveCatcher && a.state === "PURSUING") {
+              a.state = "HOLDING";
+              a.action = "hold";
+            }
+          }
+        }
+
+        // prevBallPos更新（catch checkと同期: 0.1秒間隔）
+        prevBallPos.x = ballPos.x;
+        prevBallPos.y = ballPos.y;
+      }
+    }
+
+    // ===== 捕球後フェーズ =====
+    if (postCatchStarted) {
+      // 打者走者スタート遅延
+      if (batterStartTimer > 0) {
+        batterStartTimer -= unifiedDt;
+      }
+
+      // タッチアップ遅延
+      if (tagupTimer > 0) {
+        tagupTimer -= unifiedDt;
+        if (tagupTimer <= 0) {
+          for (const runner of runners) {
+            if (runner.state === "WAITING_TAG") {
+              runner.state = "DECIDING";
+            }
+          }
         }
       }
-      if (allSettled) break;
+
+      // タッチアップ判断
+      for (const runner of runners) {
+        if (runner.state === "DECIDING" && catcherAgent) {
+          runner.state = decideTagup(runner, catcherAgent, rng) ? "TAGGED_UP" : "HOLDING";
+        } else if (runner.state === "DECIDING") {
+          runner.state = "HOLDING";
+        }
+      }
+
+      // ランナー移動
+      for (const runner of runners) {
+        if (runner.state === "RUNNING" || runner.state === "TAGGED_UP") {
+          if (runner.isBatter && batterStartTimer > 0) continue;
+          moveRunner(runner, unifiedDt, catchSuccess);
+        }
+      }
+
+      // ROUNDING → エキストラベース判断
+      for (const runner of runners) {
+        if (runner.state === "ROUNDING") {
+          runner.roundingTimer = (runner.roundingTimer ?? 0) - unifiedDt;
+          if (runner.roundingTimer <= 0) {
+            if (decideExtraBase(runner, ballHolder, retrieverAgent, throwBall, t, trajectory, restPosForBall, rng)) {
+              runner.fromBase = runner.targetBase;
+              runner.targetBase += 1;
+              runner.progress = 0;
+              runner.state = "RUNNING";
+              runner.isForced = false;
+            } else {
+              runner.state = "SAFE";
+            }
+          }
+        }
+      }
+
+      // ボール回収
+      if (!ballHolder && retrieverAgent && retrieverAgent.state === "PURSUING") {
+        const ballInfo = getPhase2BallGroundPos(trajectory, restPosForBall, t, ballPosBuf);
+        retrieverAgent.targetPos.x = ballPosBuf.x;
+        retrieverAgent.targetPos.y = ballPosBuf.y;
+        moveAgent(retrieverAgent, unifiedDt);
+
+        const distToBall = vec2Distance(retrieverAgent.currentPos, ballPosBuf);
+        if (distToBall < RETRIEVER_PICKUP_RADIUS && ballInfo.speed < RETRIEVER_PICKUP_SPEED) {
+          ballHolder = retrieverAgent;
+          ballHolder.state = "SECURING";
+          securingTimer = calcSecuringTime(ballHolder) + RETRIEVER_PICKUP_TIME;
+          retrieverAgent = null;
+        }
+      }
+
+      // 送球判定
+      if (ballHolder && ballHolder.state === "SECURING") {
+        securingTimer -= unifiedDt;
+        if (securingTimer <= 0) {
+          const target = decideThrowTarget(ballHolder, runners, agents, outs + outsAdded, rng);
+          if (target) {
+            throwBall = createThrow(ballHolder, target, t);
+            const baseName = BASE_NAMES[target.baseNum] ?? "first";
+            pendingThrowPlay = {
+              from: ballHolder.pos,
+              to: target.receiverAgent.pos,
+              base: baseName as keyof typeof BASE_POSITIONS,
+            };
+            target.receiverAgent.state = "RECEIVING";
+            ballHolder.state = "THROWING";
+            ballHolder = null;
+          } else {
+            ballHolder.state = "HOLDING";
+            ballHolder = null;
+          }
+        }
+      }
+
+      // 送球到達判定
+      if (throwBall && t >= throwBall.arrivalTime) {
+        const receiverPos = throwBall.receiverPos;
+        const receiver = receiverPos ? agents.find(a => a.pos === receiverPos) : null;
+        const receiverFielding = receiver?.skill.fielding ?? 50;
+        const { isOut } = resolveBasePlay(throwBall, runners, rng, receiverFielding);
+
+        if (isOut) {
+          outsAdded++;
+          if (pendingThrowPlay) {
+            throwPlays.push(pendingThrowPlay);
+            pendingThrowPlay = null;
+          }
+          const canContinue = outsAdded < 3 && (outs + outsAdded) < 3 &&
+            runners.some(r => r.isForced && (r.state === "RUNNING" || r.state === "TAGGED_UP"));
+          if (canContinue && receiver) {
+            ballHolder = receiver;
+            receiver.state = "SECURING";
+            securingTimer = PIVOT_TIME;
+            throwBall = null;
+          } else {
+            throwBall = null;
+          }
+        } else {
+          pendingThrowPlay = null;
+          throwBall = null;
+          if (receiver) {
+            ballHolder = receiver;
+            receiver.state = "SECURING";
+            securingTimer = PIVOT_TIME;
+          }
+        }
+      }
+
+      // カバー野手移動
+      for (const agent of agents) {
+        if (agent.state === "RECEIVING" || agent.state === "COVERING") {
+          moveAgent(agent, unifiedDt);
+        }
+      }
+
+      // ゴロ非フォース走者の進塁判断
+      if (catchSuccess && trajectory.isGroundBall && throwBall) {
+        for (const runner of runners) {
+          if (runner.state === "HOLDING" && !runner.isForced) {
+            if (decideGroundAdvance(runner, throwBall, t, rng)) {
+              runner.targetBase = runner.fromBase + 1;
+              runner.progress = 0;
+              runner.state = "RUNNING";
+            }
+          }
+        }
+      }
+
+      // 終了判定
+      const hasActiveRunners = runners.some(r =>
+        r.state === "RUNNING" || r.state === "ROUNDING" ||
+        r.state === "TAGGED_UP" || r.state === "WAITING_TAG" || r.state === "DECIDING"
+      );
+      const retrieverPending = hasActiveRunners && !ballHolder && retrieverAgent != null;
+      if (isPhase2Complete(runners, throwBall, ballHolder, retrieverPending)) break;
     }
 
-    prevBallPos.x = ballPos.x;
-    prevBallPos.y = ballPos.y;
-    finalT = t;
-  }
-
-  // === Phase 2: 捕球後ティックベースシミュレーション ===
-
-  // エラーフラグ（ゴロ捕球失敗: Phase 2で結果解決）
-  let catchError = false;
-  let catchErrorPos: FielderPosition | undefined;
-  if (catchResult && !catchResult.success && catcherAgent && trajectory.isGroundBall) {
-    const ballSpeedAtCatch = trajectory.getSpeedAt(catcherAgent.arrivalTime);
-    if (ballSpeedAtCatch < GROUND_BALL_HARD_HIT_SPEED) {
-      catchError = true;
-      catchErrorPos = catcherAgent.pos;
+    // タイムライン記録
+    if (collectTimeline) {
+      if (!postCatchStarted) {
+        // 捕球前: 野手+ボールのスナップショット
+        timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
+      } else {
+        // 捕球後: ランナー・送球を含むスナップショット
+        let timelineBallPos: Vec2;
+        if (throwBall) {
+          timelineBallPos = interpolateThrowBall(throwBall, t);
+        } else if (ballHolder) {
+          timelineBallPos = ballHolder.currentPos;
+        } else {
+          const tmpBuf: Vec2 = { x: 0, y: 0 };
+          getPhase2BallGroundPos(trajectory, restPosForBall, t, tmpBuf);
+          timelineBallPos = tmpBuf;
+        }
+        const entry: AgentTimelineEntry = {
+          t,
+          ballPos: { ...timelineBallPos },
+          ballHeight: throwBall ? 2.0 : 0.5,
+          agents: agents.map(a => ({
+            pos: a.pos,
+            state: a.state,
+            x: a.currentPos.x,
+            y: a.currentPos.y,
+            targetX: a.targetPos.x,
+            targetY: a.targetPos.y,
+            speed: a.currentSpeed,
+            action: a.action,
+          })),
+          runners: runners.map(r => ({
+            fromBase: r.fromBase,
+            targetBase: r.targetBase,
+            x: r.currentPos.x,
+            y: r.currentPos.y,
+            state: r.state,
+          })),
+          throwBall: throwBall ? {
+            fromX: throwBall.fromPos.x,
+            fromY: throwBall.fromPos.y,
+            toX: throwBall.toPos.x,
+            toY: throwBall.toPos.y,
+            targetBase: throwBall.targetBase,
+            progress: clamp(
+              (t - throwBall.startTime) / (throwBall.arrivalTime - throwBall.startTime),
+              0, 1
+            ),
+          } : undefined,
+        };
+        timeline.push(entry);
+      }
     }
-    // いずれの場合もPhase 2に流す（returnしない）
+
   }
 
-  // フェンス直撃: 捕球不可（ボールはフェンスに当たって跳ねるため）
-  const fenceDistance = options?.fenceDistance;
-  if (fenceDistance !== undefined) {
-    catchResult = null;
-  }
-
-  // 捕球成功 / 捕球失敗(フライ落球) / 未到達 → Phase 2 ティックループ
-  const catchSuccess = !!(catchResult && catchResult.success && catcherAgent);
-
-  // フェンス直撃時はボール静止位置をフェンス付近にキャップ
-  const restPos = fenceDistance !== undefined
-    ? capRestPositionToFence(trajectory, fenceDistance)
-    : estimateRestPosition(trajectory);
-  // 捕球成功 → 捕球者がretriever
-  // ゴロ捕球失敗（ファンブル） → 捕球者がretriever（その場で拾う）
-  // ゴロ通過（高速球） → 捕球者を除外して後方の野手が回収
-  // フライ/ライナー落球 → 捕球者がretriever（その場で拾う）
-  const groundBallThroughFielder = !catchSuccess && !catchError && catcherAgent && trajectory.isGroundBall
-    && catchResult && !catchResult.success;
-  const retrieverCandidates = groundBallThroughFielder
-    ? agents.filter(a => a !== catcherAgent)
-    : agents;
-  const effectiveCatcher = catchSuccess ? catcherAgent : (
-    catchError ? catcherAgent : findNearestAgent(retrieverCandidates, restPos)
-  );
-
-  if (!effectiveCatcher) {
-    const collectedTimeline = collectTimeline ? timeline : undefined;
+  // === 結果構築 ===
+  if (!postCatchStarted) {
     return {
       result: "single",
       fielderPos: 8 as FielderPosition,
-      agentTimeline: collectedTimeline,
+      agentTimeline: collectTimeline ? timeline : undefined,
     };
   }
 
-  const phase2Result = resolvePhase2WithTicks(
-    effectiveCatcher,
+  const finalResult = buildPhase2Result(
+    catcherAgent,
     catchSuccess,
-    ball,
     trajectory,
-    batter,
-    bases,
+    runners,
+    throwPlays,
+    outsAdded,
     outs,
     agents,
-    catchTime,
     rng,
-    collectTimeline,
-    timeline,
-    fenceDistance,
     catchError,
     catchErrorPos
   );
-  return { ...phase2Result, agentTimeline: collectTimeline ? timeline : undefined };
+  return { ...finalResult, agentTimeline: collectTimeline ? timeline : undefined };
 }
 
 // ====================================================================
@@ -1794,11 +2109,14 @@ function resolvePhase2WithTicks(
   existingTimeline: AgentTimelineEntry[],
   fenceDistance?: number,
   catchError?: boolean,
-  catchErrorPos?: FielderPosition
+  catchErrorPos?: FielderPosition,
+  earlyRunners?: RunnerAgent[],
+  unifiedBall?: UnifiedBallState
 ): AgentFieldingResult {
   const dt = PHASE2_DT;
 
   // 1. ランナー初期化
+  // earlyRunnersがある場合は既存のinitRunnersで上書き（Stage 1: 早期初期化→Phase 2変換）
   const runners = initRunners(batter, bases, trajectory, catchSuccess);
 
   let ballHolder: FielderAgent | null = catchSuccess && catcherAgent ? catcherAgent : null;

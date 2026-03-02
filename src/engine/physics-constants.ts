@@ -1,5 +1,6 @@
 // 打球物理の共通定数
 export const GRAVITY = 9.8;                // 重力加速度 (m/s²)
+// bat_heightは投球の高さによって可変になるはず。修正必要
 export const BAT_HEIGHT = 1.2;             // 打点高さ (m)
 export const DRAG_FACTOR = 0.63;           // 空気抵抗による飛距離減衰
 export const FLIGHT_TIME_FACTOR = 0.85;    // 空気抵抗による飛行時間短縮
@@ -11,12 +12,14 @@ export const FENCE_HEIGHT = 4.0;           // フェンス高さ (m)、NPB平均
 
 // ゴロ物理
 export const GROUND_BALL_ANGLE_THRESHOLD = 10; // ゴロ判定角度上限 (度)
+// MAXとかは設定しない
 export const GROUND_BALL_MAX_DISTANCE = 55;    // ゴロ最大到達距離 (m)
 export const GROUND_BALL_SPEED_FACTOR = 1.2;   // ゴロ距離変換係数
 export const GROUND_BALL_AVG_SPEED_RATIO = 0.5; // ゴロ平均速度比（等減速モデル: 平均=初速/2）
 export const GROUND_BALL_BOUNCE_ANGLE_SCALE = 30; // 叩きつけ減衰スケール (度, この角度で全エネルギー損失)
 
 // 打球方向拡張（フェア/ファウル連続分布）
+// ここもMAXとかは設定しない。打球方向はフェア/ファウルの連続分布で生成されるため、物理的な最大値は存在しない。
 export const DIRECTION_MIN = -45;              // 方向角の下限（左ファウル奥）
 export const DIRECTION_MAX = 135;              // 方向角の上限（右ファウル奥）
 export const DIRECTION_SIGMA_BASE = 38;        // ファウル判定用σの基本値
@@ -28,6 +31,7 @@ export const FAIR_ZONE_MAX = 90;               // フェアゾーン上限
 // ファウルフライアウト
 export const FOUL_FLY_MIN_LAUNCH_ANGLE = 25;   // ファウルフライの最低打球角度
 export const FOUL_FLY_CATCHABLE_ANGLE = 20;    // ファウルラインからの捕球可能角度幅
+// 成功率とかは物理シミュレーションの結果に依存するため、定数としては設定しない。
 export const FOUL_FLY_BASE_CATCH_RATE = 0.70;  // 基本捕球成功率
 
 // ファウルチップ三振
@@ -327,6 +331,16 @@ export const HIT_BY_PITCH_CONTROL_FACTOR = 0.00005;
 // 理由: fielding/100 スケールへ変更(fielding=50: 50/100*0.50=0.25 で元と同じ、fielding=100: +50%)
 // 変更前: +0.25固定(fielding=50想定ハードコード) → 変更後: (fielding/100)*0.50
 export const FOUL_FLY_FIELDING_SCALE = 0.50;  // fielding/100スケール係数 (fielding=100で+50%、fielding=50で+25%)
+
+// ============================================================
+// 統一ティックループ用定数
+// ============================================================
+
+export const UNIFIED_DT = 0.05;                   // 統一タイムステップ(秒)
+export const FIELDER_DECISION_INTERVAL = 2;        // 野手判断間引き（2ティック=0.1秒相当）
+export const RUNNER_LEAD_DISTANCE = 3.0;           // 通常リード距離(m)
+export const RUNNER_LEAD_SPEED = 3.0;              // リード時移動速度(m/s)
+export const RUNNER_RETREAT_SPEED_RATIO = 0.9;     // 帰塁速度比率
 
 // アウト結果の打球角度判定（ballType文字列の置換）
 // ballType === "popup" → launchAngle >= 50°、ballType === "line_drive" → launchAngle < 20°

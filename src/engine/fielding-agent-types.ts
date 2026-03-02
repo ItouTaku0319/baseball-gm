@@ -56,7 +56,10 @@ export type AgentState =
   | "FIELDING"
   | "THROWING"
   | "SECURING"    // 捕球→送球準備中（transfer time）
-  | "RECEIVING";  // ベースで送球を待っている
+  | "RECEIVING"   // ベースで送球を待っている
+  | "RETRIEVING"  // ボール回収中（統一ループ用）
+  | "RELAYING"    // 中継位置移動中（統一ループ用）
+  | "RETURNING";  // 定位置復帰中（統一ループ用）
 
 export interface FielderAgent {
   readonly pos: FielderPosition;
@@ -142,6 +145,8 @@ export type RunnerState =
   | "TAGGED_UP"    // タッチアップ開始
   | "ROUNDING"     // 塁を回っている（エキストラベース判断中）
   | "DECIDING"     // タッチアップ判断中
+  | "LEADING"      // リード中（打球飛行中、統一ループ用）
+  | "RETREATING"   // 帰塁中（フライ捕球時、統一ループ用）
   | "SAFE"         // セーフ（塁到達）
   | "OUT";         // アウト
 
@@ -193,6 +198,28 @@ export interface ThrowBallSnapshot {
   toY: number;
   targetBase: number;
   progress: number;         // 0.0~1.0（飛行進捗）
+}
+
+// --- ボールフェーズ（統一ループ用） ---
+
+export type BallPhase = "IN_FLIGHT" | "ON_GROUND" | "HELD" | "THROWN";
+
+export interface UnifiedBallState {
+  phase: BallPhase;
+  trajectory: BallTrajectory;
+  holder: FielderAgent | null;
+  throwState: ThrowBallState | null;
+  currentPos: Vec2;
+  currentHeight: number;
+  currentSpeed: number;
+  /** 捕球が発生した時刻 */
+  catchTime?: number;
+  /** 捕球結果 */
+  catchResult?: CatchResult;
+  /** 捕球した野手 */
+  catcherAgent?: FielderAgent;
+  /** ボール静止位置（ロールアウト後） */
+  restPos?: Vec2;
 }
 
 // --- シミュレーションオプション ---
