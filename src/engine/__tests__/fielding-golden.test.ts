@@ -210,7 +210,7 @@ describe("ゴールデンテスト: ゴロ", () => {
     logStats("G03", stats);
     const pos6Rate = stats.fielderDistribution[6] ?? 0;
     expect(pos6Rate).toBeGreaterThan(0.85);
-    expect(stats.outRate).toBeGreaterThan(0.9);
+    expect(stats.outRate).toBeGreaterThan(0.85);
   });
 
   test("G04: SSやや二遊間寄りゴロ → 6番(SS)が処理", () => {

@@ -49,6 +49,9 @@ import {
   BATTER_START_DELAY,
   TAGUP_DELAY,
   BASE_TAG_TIME,
+  THROW_ERROR_BASE,
+  THROW_ERROR_SKILL_SCALE,
+  THROW_ERROR_DISTANCE_SCALE,
   RETRIEVER_APPROACH_FACTOR,
   RETRIEVER_PICKUP_TIME,
   RETRIEVER_PICKUP_RADIUS,
@@ -313,9 +316,17 @@ export function resolvePlayWithAgents(
   const restPos = fenceDistance !== undefined
     ? capRestPositionToFence(trajectory, fenceDistance)
     : estimateRestPosition(trajectory);
+  // 捕球成功 → 捕球者がretriever
+  // ゴロ捕球失敗（ファンブル） → 捕球者がretriever（その場で拾う）
+  // ゴロ通過（高速球） → 捕球者を除外して後方の野手が回収
+  // フライ/ライナー落球 → 捕球者がretriever（その場で拾う）
+  const groundBallThroughFielder = !catchSuccess && !catchError && catcherAgent && trajectory.isGroundBall
+    && catchResult && !catchResult.success;
+  const retrieverCandidates = groundBallThroughFielder
+    ? agents.filter(a => a !== catcherAgent)
+    : agents;
   const effectiveCatcher = catchSuccess ? catcherAgent : (
-    // 未到達時: ボール停止位置に最も早く到達できる野手を回収者に
-    findNearestAgent(agents, restPos)
+    catchError ? catcherAgent : findNearestAgent(retrieverCandidates, restPos)
   );
 
   if (!effectiveCatcher) {
@@ -662,7 +673,7 @@ function checkGroundBallIntercept(
       const reachRatio = distSq / (interceptReach * interceptReach);
       const reachPenalty = reachRatio * GROUND_BALL_REACH_PENALTY;
       const catchRate = clamp(
-        0.97 + fieldingRate * 0.04 - speedPenalty - reachPenalty,
+        0.90 + fieldingRate * 0.10 - speedPenalty - reachPenalty,
         GROUND_BALL_CATCH_FLOOR,
         0.995
       );
@@ -751,8 +762,8 @@ function checkFlyCatchAtLanding(
         1
       );
       const catchRate = clamp(
-        0.9 + marginFactor * 0.07 + fieldingRate * 0.03,
-        0.9,
+        0.85 + marginFactor * 0.07 + fieldingRate * 0.08,
+        0.82,
         0.99
       );
       const success = rng() < catchRate;
@@ -1005,12 +1016,32 @@ function findNearestAgent(
   agents: FielderAgent[],
   pos: Vec2
 ): FielderAgent | null {
-  // 推定到達時間ベースで回収野手を決定（全野手が回収候補）
+  // 1. PURSUING状態の野手から最速到達を探す（打球を追っていた野手が自然な回収者）
   let best: FielderAgent | null = null;
   let bestTime = Infinity;
   for (const a of agents) {
+    if (a.state !== "PURSUING") continue;
     const dist = vec2Distance(a.currentPos, pos);
     const arrivalTime = a.maxSpeed > 0 ? dist / a.maxSpeed : Infinity;
+    if (arrivalTime < bestTime) {
+      bestTime = arrivalTime;
+      best = a;
+    }
+  }
+  if (best) return best;
+
+  // 2. フォールバック: 移動方向＋位置関係を考慮した到達時間で選択
+  const ballHomeDist = Math.sqrt(pos.x * pos.x + pos.y * pos.y);
+  for (const a of agents) {
+    const dist = vec2Distance(a.currentPos, pos);
+    const targetToBall = vec2Distance(a.targetPos, pos);
+    // targetがボールより近い → ボールに向かって移動中 → 距離ボーナス
+    const approachBonus = targetToBall < dist ? (dist - targetToBall) * 1.0 : 0;
+    // ボールより本塁側にいる野手 → 追いかける必要がある → ペナルティ
+    const agentHomeDist = Math.sqrt(a.currentPos.x * a.currentPos.x + a.currentPos.y * a.currentPos.y);
+    const chasePenalty = agentHomeDist < ballHomeDist ? (ballHomeDist - agentHomeDist) * 1.0 : 0;
+    const effectiveDist = Math.max(dist - approachBonus + chasePenalty, 1);
+    const arrivalTime = a.maxSpeed > 0 ? effectiveDist / a.maxSpeed : Infinity;
     if (arrivalTime < bestTime) {
       bestTime = arrivalTime;
       best = a;
@@ -1590,7 +1621,7 @@ function decideThrowTarget(
   // DP狙い: 2アウト未満 & フォース走者が2人以上 → 先頭の塁（2塁）から処理
   if (currentOuts < 2 && forceCandidates.length >= 2) {
     // 2塁フォースから処理してDP狙い
-    const dpTarget = forceCandidates.find(c => c.baseNum === 2 && c.margin > 0);
+    const dpTarget = forceCandidates.find(c => c.baseNum === 2 && c.margin > 0.3);
     if (dpTarget) {
       const receiver = findReceiverForBase(dpTarget.baseNum, agents, holder.pos);
       if (receiver) {
@@ -1703,7 +1734,8 @@ function createThrow(
 function resolveBasePlay(
   throwBall: ThrowBallState,
   runners: RunnerAgent[],
-  _rng: () => number
+  rng: () => number,
+  receiverFielding: number = 50
 ): { isOut: boolean; runner: RunnerAgent | null } {
   // この塁を目標にしている走者を探す
   const targetRunner = runners.find(
@@ -1717,7 +1749,6 @@ function resolveBasePlay(
       r => r.targetBase === throwBall.targetBase && r.state === "SAFE"
     );
     if (safeRunner && safeRunner.isForced) {
-      // 走者が先に到着 → セーフ確定
       return { isOut: false, runner: safeRunner };
     }
     return { isOut: false, runner: null };
@@ -1727,10 +1758,23 @@ function resolveBasePlay(
   if (targetRunner.progress >= 1.0) {
     targetRunner.state = "SAFE";
     return { isOut: false, runner: targetRunner };
-  } else {
-    targetRunner.state = "OUT";
-    return { isOut: true, runner: targetRunner };
   }
+
+  // 送球エラー判定: 捕球側スキルと送球距離で確率が変わる
+  const throwDist = vec2Distance(throwBall.fromPos, throwBall.toPos);
+  const errorRate = clamp(
+    THROW_ERROR_BASE - (receiverFielding / 100) * THROW_ERROR_SKILL_SCALE
+      + (throwDist / 100) * THROW_ERROR_DISTANCE_SCALE,
+    0,
+    0.15
+  );
+  if (rng() < errorRate) {
+    targetRunner.state = "SAFE";
+    return { isOut: false, runner: targetRunner };
+  }
+
+  targetRunner.state = "OUT";
+  return { isOut: true, runner: targetRunner };
 }
 
 // --- Phase 2 メインループ ---
@@ -1923,7 +1967,8 @@ function resolvePhase2WithTicks(
       const receiverPos = throwBall.receiverPos;
       const receiver = receiverPos ? agents.find(a => a.pos === receiverPos) : null;
 
-      const { isOut, runner: playRunner } = resolveBasePlay(throwBall, runners, rng);
+      const receiverFielding = receiver?.skill.fielding ?? 50;
+      const { isOut, runner: playRunner } = resolveBasePlay(throwBall, runners, rng, receiverFielding);
 
       if (isOut) {
         outsAdded++;
