@@ -805,8 +805,8 @@ function AnimatedFieldView({ log, currentTime, totalTime, trailPoints, distScale
     for (const frame of agentTimeline) {
       if (frame.agents.some(a => a.state === "FIELDING")) return frame.t;
     }
-    // ヒット時: FIELDINGフレームがないためタイムライン終了時点を回収時刻として使用
-    return agentTimeline[agentTimeline.length - 1].t;
+    // ヒット時: FIELDINGフレームがない → 捕球なしとしてInfinityを返す
+    return Infinity;
   }, [agentTimeline]);
 
   // 捕球した野手の位置（捕球時のSVG座標）

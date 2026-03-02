@@ -174,9 +174,11 @@ export function calcAndStorePursuitScore(
     }
   }
 
-  // 高い打球で既にPURSUING → 現在のスコアを維持
+  // 高い打球で既にPURSUING → スコアを再計算（coordination re-checkのため）
+  // 以前は早期リターンしていたが、autonomousDecide側のcoordinationチェックを
+  // バイパスしてしまい、複数野手が同時追跡し続ける問題があった
   if (agent.state === "PURSUING" && trajectory.maxHeight > HIGH_BALL_THRESHOLD) {
-    return;
+    // fall through してスコアを再計算する
   }
 
   const observation = observeTeammates(agent, allAgents, trajectory);
@@ -212,10 +214,25 @@ export function autonomousDecide(
     }
   }
 
-  // 高い打球で既にPURSUING → 知覚更新のみ
+  // 高い打球で既にPURSUING → coordination re-check
+  // 自分より高スコアのpursuerがいたら yieldして再評価にフォールスルー
   if (agent.state === "PURSUING" && trajectory.maxHeight > HIGH_BALL_THRESHOLD) {
-    agent.targetPos = agent.perceivedLanding.position;
-    return;
+    let betterCount = 0;
+    for (const other of allAgents) {
+      if (other === agent) continue;
+      const otherScore = other.pursuitScore ?? -1;
+      if (otherScore > (agent.pursuitScore ?? -1)) {
+        betterCount++;
+      }
+    }
+    if (betterCount >= 1) {
+      // 自分より強いpursuerがいる → pursuitをやめて再評価へ
+      (agent as { pursuitScore?: number }).pursuitScore = -1;
+      // fall through to full decision logic below
+    } else {
+      agent.targetPos = agent.perceivedLanding.position;
+      return;
+    }
   }
 
   // pursuit スコアは Pass 1 の結果を使用（順序非依存にするため再計算しない）

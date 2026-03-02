@@ -650,8 +650,11 @@ export function resolvePlayWithAgents(
     // タイムライン記録
     if (collectTimeline) {
       if (!postCatchStarted) {
-        // 捕球前: 野手+ボールのスナップショット
-        timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
+        // 捕球前: 野手+ボールのスナップショット（decisionTick時のみ記録）
+        // 野手移動が2ティックごとのため、中間フレームの停止状態記録を避ける
+        if (fielderDecisionTick === 0) {
+          timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
+        }
       } else {
         // 捕球後: ランナー・送球を含むスナップショット
         let timelineBallPos: Vec2;
