@@ -413,7 +413,7 @@ export function resolvePlayWithAgents(
           ballHolder = catchSuccess && effectiveCatcher ? effectiveCatcher : null;
           if (!catchSuccess && effectiveCatcher) {
             retrieverAgent = effectiveCatcher;
-            retrieverAgent.state = "PURSUING";
+            retrieverAgent.state = "RETRIEVING";
             retrieverAgent.targetPos.x = restPosForBall.x;
             retrieverAgent.targetPos.y = restPosForBall.y;
             retrieverAgent.currentSpeed = retrieverAgent.maxSpeed * RETRIEVER_APPROACH_FACTOR;
@@ -446,10 +446,16 @@ export function resolvePlayWithAgents(
             }
           }
 
-          // 捕球者以外のPURSUING → HOLDING
+          // 捕球者以外のPURSUING → RETURNING（デフォルト位置に復帰）
           for (const a of agents) {
             if (a !== effectiveCatcher && a.state === "PURSUING") {
-              a.state = "HOLDING";
+              if (a.homePos) {
+                a.state = "RETURNING";
+                a.targetPos.x = a.homePos.x;
+                a.targetPos.y = a.homePos.y;
+              } else {
+                a.state = "HOLDING";
+              }
               a.action = "hold";
             }
           }
@@ -532,7 +538,7 @@ export function resolvePlayWithAgents(
       }
 
       // ボール回収
-      if (!ballHolder && retrieverAgent && retrieverAgent.state === "PURSUING") {
+      if (!ballHolder && retrieverAgent && retrieverAgent.state === "RETRIEVING") {
         const ballInfo = getPhase2BallGroundPos(trajectory, restPosForBall, t, ballPosBuf);
         retrieverAgent.targetPos.x = ballPosBuf.x;
         retrieverAgent.targetPos.y = ballPosBuf.y;
@@ -604,9 +610,9 @@ export function resolvePlayWithAgents(
         }
       }
 
-      // カバー野手移動
+      // カバー・復帰野手移動
       for (const agent of agents) {
-        if (agent.state === "RECEIVING" || agent.state === "COVERING") {
+        if (agent.state === "RECEIVING" || agent.state === "COVERING" || agent.state === "RETURNING") {
           moveAgent(agent, unifiedDt);
         }
       }
