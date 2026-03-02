@@ -11,7 +11,7 @@ import type { Player } from "@/models/player";
 import { POSITION_NAMES } from "@/models/player";
 import { PlayerAbilityCard } from "@/components/player-ability-card";
 import { BattedBallPopup } from "@/components/batted-ball-trajectory";
-import { ScenarioTester } from "@/components/scenario-tester";
+import { ScenarioPanel } from "@/components/play-viewer";
 
 // ---- 共有定数・ユーティリティ ----
 
@@ -77,10 +77,12 @@ function AtBatLogTable({
   logs,
   getName,
   maxRows = 500,
+  onSelectForPlayViewer,
 }: {
   logs: AtBatLog[];
   getName: (id: string) => string;
   maxRows?: number;
+  onSelectForPlayViewer?: (log: AtBatLog, index: number) => void;
 }) {
   const [selectedLog, setSelectedLog] = useState<AtBatLog | null>(null);
   const [resultFilter, setResultFilter] = useState<string>("all");
@@ -228,6 +230,7 @@ function AtBatLogTable({
                 飛距離{sortArrow("estimatedDistance")}
               </th>
               <th className="text-center py-2 px-2">守備</th>
+              <th className="text-center py-2 px-1 w-8"></th>
             </tr>
           </thead>
           <tbody>
@@ -268,6 +271,17 @@ function AtBatLogTable({
                       ? (posNamesJa[log.fielderPosition] ?? log.fielderPosition)
                       : "-"}
                 </td>
+                <td className="py-1 px-1 text-center">
+                  {log.battedBallType && onSelectForPlayViewer && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onSelectForPlayViewer(log, i); }}
+                      className="text-blue-400 hover:text-blue-300 text-xs"
+                      title="プレービューアで再生"
+                    >
+                      ▶
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -292,7 +306,7 @@ function AtBatLogTable({
 
 // ---- シーズンデータタブ ----
 
-function SeasonDataTab() {
+function SeasonDataTab({ onSelectForPlayViewer }: { onSelectForPlayViewer?: (log: AtBatLog, index: number) => void }) {
   const { game } = useGameStore();
 
   const [leagueFilter, setLeagueFilter] = useState<string>("all");
@@ -730,7 +744,7 @@ function SeasonDataTab() {
                         : "該当する打席データがありません"}
                     </p>
                   ) : (
-                    <AtBatLogTable logs={filteredLogs} getName={getName} />
+                    <AtBatLogTable logs={filteredLogs} getName={getName} onSelectForPlayViewer={onSelectForPlayViewer} />
                   )}
                 </>
               );
@@ -780,7 +794,7 @@ interface FieldingTotals {
   [pos: number]: { po: number; a: number; e: number; tc: number };
 }
 
-function DiagnosticTab() {
+function DiagnosticTab({ onSelectForPlayViewer }: { onSelectForPlayViewer?: (log: AtBatLog, index: number) => void }) {
   const { game } = useGameStore();
 
   const allTeams = useMemo(() => game ? Object.values(game.teams) : [], [game]);
@@ -1329,7 +1343,7 @@ function DiagnosticTab() {
                 </button>
               </div>
             </div>
-            <AtBatLogTable logs={atBatLogs} getName={getName} />
+            <AtBatLogTable logs={atBatLogs} getName={getName} onSelectForPlayViewer={onSelectForPlayViewer} />
           </div>
         </>
       )}
@@ -1502,11 +1516,25 @@ export default function AnalyticsPage() {
   const params = useParams();
   const id = params.id as string;
 
-  const [tab, setTab] = useState<"season" | "diagnostic" | "runexp" | "scenario">("season");
+  const [tab, setTab] = useState<"season" | "diagnostic" | "runexp" | "play-viewer">("season");
+  const [selectedPlayLog, setSelectedPlayLog] = useState<AtBatLog | null>(null);
+  const [selectedPlayIndex, setSelectedPlayIndex] = useState(-1);
 
   useEffect(() => {
     if (!game && params.id) loadGame(params.id as string);
   }, [game, params.id, loadGame]);
+
+  const playerMap = useMemo(() => {
+    if (!game) return new Map<string, Player>();
+    const map = new Map<string, Player>();
+    for (const team of Object.values(game.teams))
+      for (const p of team.roster) map.set(p.id, p);
+    return map;
+  }, [game]);
+
+  const getName = useCallback((id: string) => {
+    return playerMap.get(id)?.name ?? id;
+  }, [playerMap]);
 
   if (!game) {
     return (
@@ -1515,6 +1543,12 @@ export default function AnalyticsPage() {
       </div>
     );
   }
+
+  const handleSelectForPlayViewer = (log: AtBatLog, index: number) => {
+    setSelectedPlayLog(log);
+    setSelectedPlayIndex(index);
+    setTab("play-viewer");
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -1563,22 +1597,44 @@ export default function AnalyticsPage() {
             得点期待値
           </button>
           <button
-            onClick={() => setTab("scenario")}
+            onClick={() => setTab("play-viewer")}
             className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
-              tab === "scenario"
+              tab === "play-viewer"
                 ? "bg-blue-600 text-white"
                 : "bg-gray-700 text-gray-300 hover:bg-gray-600"
             }`}
           >
-            シナリオテスト
+            プレービューア
           </button>
         </div>
 
         {/* タブ内容 */}
-        {tab === "season" && <SeasonDataTab />}
-        {tab === "diagnostic" && <DiagnosticTab />}
+        {tab === "season" && (
+          <SeasonDataTab onSelectForPlayViewer={handleSelectForPlayViewer} />
+        )}
+        {tab === "diagnostic" && (
+          <DiagnosticTab onSelectForPlayViewer={handleSelectForPlayViewer} />
+        )}
         {tab === "runexp" && <RunExpectancySection game={game} />}
-        {tab === "scenario" && <ScenarioTester />}
+        {tab === "play-viewer" && (
+          <ScenarioPanel
+            externalLog={selectedPlayLog}
+            batterName={selectedPlayLog ? getName(selectedPlayLog.batterId) : undefined}
+            pitcherName={selectedPlayLog ? getName(selectedPlayLog.pitcherId) : undefined}
+            onPrev={() => {
+              if (selectedPlayIndex > 0) {
+                setSelectedPlayIndex(prev => prev - 1);
+              }
+            }}
+            onNext={() => {
+              if (selectedPlayIndex >= 0) {
+                setSelectedPlayIndex(prev => prev + 1);
+              }
+            }}
+            hasPrev={selectedPlayIndex > 0}
+            hasNext={selectedPlayIndex >= 0}
+          />
+        )}
       </div>
     </div>
   );
