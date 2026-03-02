@@ -29,6 +29,7 @@ import {
   RUNNER_LEAD_DISTANCE,
   RUNNER_LEAD_SPEED,
   RUNNER_RETREAT_SPEED_RATIO,
+  RUNNER_LEAD_REACTION_TIME,
 } from "./physics-constants";
 
 // --- ヘルパー ---
@@ -137,20 +138,20 @@ export function updateRunnerPerception(
 /**
  * ランナーの毎ティック自律判断。
  * 現在の状態・ボール状況・野手配置に基づいて次のアクションを決定する。
- *
- * 現在はstub（Stage 4で実装）。
  */
 export function runnerAutonomousDecide(
-  _runner: RunnerAgent,
-  _ball: UnifiedBallState,
+  runner: RunnerAgent,
+  ball: UnifiedBallState,
   _agents: readonly FielderAgent[],
-  _t: number,
+  t: number,
   _rng: () => number
 ): void {
-  // Stage 4で実装:
-  // - HOLDING中のリード拡大（LEADING遷移）
-  // - フライ捕球時の帰塁（RETREATING遷移）
-  // - ゴロ時のフォース走塁開始判断
+  // フライ飛行中: 反応遅延後にリード拡大開始
+  if (ball.phase === "IN_FLIGHT" && !ball.trajectory.isGroundBall) {
+    if (runner.state === "HOLDING" && t > RUNNER_LEAD_REACTION_TIME) {
+      startLeading(runner, ball.trajectory);
+    }
+  }
 }
 
 /**

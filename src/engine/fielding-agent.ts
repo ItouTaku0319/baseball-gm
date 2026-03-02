@@ -106,7 +106,13 @@ import {
 import type { FielderAction } from "../models/league";
 import { calcAndStorePursuitScore, autonomousDecide } from "./autonomous-fielder";
 import type { CoverSnapshot } from "./autonomous-fielder";
-import { initRunnersAtBatStart } from "./runner-agent";
+import {
+  initRunnersAtBatStart,
+  runnerAutonomousDecide,
+  startRetreating,
+  moveLeadingRunner,
+  moveRetreatingRunner,
+} from "./runner-agent";
 import { createUnifiedBallState, updateBallPosition, transitionBallPhase } from "./ball-state";
 
 // ====================================================================
@@ -363,6 +369,13 @@ export function resolvePlayWithAgents(
 
           catchSuccess = !!(catchResult && catchResult.success && catcherAgent);
 
+          // フライ捕球: リード中のearlyRunnersを帰塁開始
+          if (catchSuccess && !trajectory.isGroundBall) {
+            for (const runner of earlyRunners) {
+              startRetreating(runner);
+            }
+          }
+
           // 回収者選定
           const groundBallThroughFielder = !catchSuccess && !catchError && catcherAgent
             && trajectory.isGroundBall && catchResult && !catchResult.success;
@@ -383,6 +396,18 @@ export function resolvePlayWithAgents(
 
           // ランナー初期化
           runners = initRunners(batter, bases, trajectory, catchSuccess);
+
+          // フライ捕球: earlyRunnerのリード位置をPhase 2ランナーに転写
+          if (catchSuccess && !trajectory.isGroundBall) {
+            for (const runner of runners) {
+              const early = earlyRunners.find(er => er.player === runner.player);
+              if (early && (early.state === "RETREATING" || early.state === "LEADING")) {
+                runner.currentPos.x = early.currentPos.x;
+                runner.currentPos.y = early.currentPos.y;
+                runner.state = "RETREATING";
+              }
+            }
+          }
 
           // ボール保持者 / 回収者の設定
           ballHolder = catchSuccess && effectiveCatcher ? effectiveCatcher : null;
@@ -434,6 +459,14 @@ export function resolvePlayWithAgents(
         prevBallPos.x = ballPos.x;
         prevBallPos.y = ballPos.y;
       }
+
+      // ランナーリード行動（毎ティック, Stage 4: フライ時のみ）
+      if (!trajectory.isGroundBall) {
+        for (const runner of earlyRunners) {
+          runnerAutonomousDecide(runner, unifiedBall, agents, t, rng);
+          moveLeadingRunner(runner, unifiedDt);
+        }
+      }
     }
 
     // ===== 捕球後フェーズ =====
@@ -443,14 +476,22 @@ export function resolvePlayWithAgents(
         batterStartTimer -= unifiedDt;
       }
 
+      // 帰塁中ランナーの移動（Stage 4: リードからの帰塁 → WAITING_TAG）
+      for (const runner of runners) {
+        if (runner.state === "RETREATING") {
+          moveRetreatingRunner(runner, unifiedDt);
+        }
+      }
+
       // タッチアップ遅延
       if (tagupTimer > 0) {
         tagupTimer -= unifiedDt;
-        if (tagupTimer <= 0) {
-          for (const runner of runners) {
-            if (runner.state === "WAITING_TAG") {
-              runner.state = "DECIDING";
-            }
+      }
+      // 継続チェック: タイマー満了後にWAITING_TAGになったランナー（帰塁完了後）も処理
+      if (tagupTimer <= 0 && catchSuccess && !trajectory.isGroundBall) {
+        for (const runner of runners) {
+          if (runner.state === "WAITING_TAG") {
+            runner.state = "DECIDING";
           }
         }
       }
@@ -585,7 +626,7 @@ export function resolvePlayWithAgents(
 
       // 終了判定
       const hasActiveRunners = runners.some(r =>
-        r.state === "RUNNING" || r.state === "ROUNDING" ||
+        r.state === "RUNNING" || r.state === "ROUNDING" || r.state === "RETREATING" ||
         r.state === "TAGGED_UP" || r.state === "WAITING_TAG" || r.state === "DECIDING"
       );
       const retrieverPending = hasActiveRunners && !ballHolder && retrieverAgent != null;
@@ -2440,7 +2481,8 @@ function isPhase2Complete(
       r.state === "TAGGED_UP" ||
       r.state === "WAITING_TAG" ||
       r.state === "ROUNDING" ||
-      r.state === "DECIDING"
+      r.state === "DECIDING" ||
+      r.state === "RETREATING"
     ) {
       return false;
     }
