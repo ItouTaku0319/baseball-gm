@@ -29,7 +29,7 @@ import {
   CONTACT_PEAK_ANGLE, CONTACT_ANGLE_SPREAD, CONTACT_DIRECTION_SPREAD, CONTACT_DIRECTION_NOISE_SIGMA,
   PLAYER_MAX_EV_BASE, PLAYER_MAX_EV_POWER_SCALE,
   EFFICIENCY_PEAK_ANGLE, EFFICIENCY_ANGLE_RANGE, EFFICIENCY_DROP_FACTOR,
-  POPUP_EV_CAP,
+  POPUP_EV_CAP, POPUP_ANGLE_START, POPUP_ANGLE_FULL, POPUP_EV_CLASSIFY_THRESHOLD,
   OFFSET_TRAJECTORY_SCALE, OFFSET_SIGMA_BASE, OFFSET_SIGMA_CONTACT_SCALE, OFFSET_SIGMA_PITCH_SCALE,
   TIMING_SIGMA_BASE, TIMING_SIGMA_CONTACT_SCALE, TIMING_SIGMA_PITCH_SCALE,
   ZONE_RATE_BASE, ZONE_RATE_CONTROL_SCALE, ZONE_RATE_COUNT_ADJUST,
@@ -378,6 +378,8 @@ function generatePitchLocation(
 /** 打球角度と速度から打球タイプを分類する */
 export function classifyBattedBallType(launchAngle: number, exitVelocity: number): BattedBallType {
   if (launchAngle >= 50) return "popup";
+  // 40-49°でも低EV(=内野フライ相当)ならpopup扱い
+  if (launchAngle >= 40 && exitVelocity <= POPUP_EV_CLASSIFY_THRESHOLD) return "popup";
   if (launchAngle < GROUND_BALL_ANGLE_THRESHOLD) return "ground_ball";
   // 10-19°: ライナー帯（低速・低角度の弱い打球はゴロ扱い）
   if (launchAngle < 20) {
@@ -460,9 +462,16 @@ export function generateBattedBall(batter: Player, pitcher: Player, rng: () => n
     baseEV * (1.0 + gaussianRandom(0, 0.05, rng)),
     60, 185
   );
-  // ポップフライ(50°+): 芯を外した不完全コンタクトで初速が大幅低下
-  if (launchAngle >= 50) {
-    exitVelocity = Math.min(exitVelocity, POPUP_EV_CAP);
+  // 高角度(40°+)の段階的EV減衰: 芯を外した打球ほどEVが低下
+  if (launchAngle >= POPUP_ANGLE_START) {
+    const popupProgress = clamp(
+      (launchAngle - POPUP_ANGLE_START) / (POPUP_ANGLE_FULL - POPUP_ANGLE_START),
+      0, 1
+    );
+    // 二次曲線: 角度が上がるほど急激にEVが低下（芯を外す影響）
+    const popupFactor = (1 - popupProgress) * (1 - popupProgress);
+    const cappedEV = POPUP_EV_CAP + (exitVelocity - POPUP_EV_CAP) * popupFactor;
+    exitVelocity = Math.min(exitVelocity, cappedEV);
   }
 
   // --- Step 4: timing → direction ---
