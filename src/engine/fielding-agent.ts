@@ -2044,6 +2044,14 @@ function decideThrowTarget(
 }
 
 /** 指定ベースで送球を受ける野手を探す */
+/** 各塁の担当ポジション（優先順） */
+const BASE_RESPONSIBLE_POSITIONS: Record<number, FielderPosition[]> = {
+  1: [3],       // 1塁: 1B
+  2: [4, 6],    // 2塁: 2B, SS
+  3: [5],       // 3塁: 3B
+  4: [2],       // 本塁: C
+};
+
 function findReceiverForBase(
   baseNum: number,
   agents: FielderAgent[],
@@ -2053,11 +2061,40 @@ function findReceiverForBase(
   if (!baseName) return null;
   const basePos = BASE_POSITIONS[baseName];
 
+  // 候補を収集（内野手優先）
+  const responsiblePositions = BASE_RESPONSIBLE_POSITIONS[baseNum] ?? [];
+
+  // まず担当内野手から探す（塁に近い順）
   let best: FielderAgent | null = null;
   let bestDist = Infinity;
   for (const a of agents) {
     if (a.pos === excludePos) continue;
-    // COVERING/RECEIVING/HOLDING の野手を候補にする
+    if (a.state !== "COVERING" && a.state !== "RECEIVING" && a.state !== "HOLDING") continue;
+    if (!responsiblePositions.includes(a.pos)) continue;
+    const d = vec2Distance(a.currentPos, basePos);
+    if (d < bestDist) {
+      bestDist = d;
+      best = a;
+    }
+  }
+  if (best) return best;
+
+  // 担当が見つからなければ内野手（pos 1-6）から最寄りを選ぶ
+  for (const a of agents) {
+    if (a.pos === excludePos) continue;
+    if (a.state !== "COVERING" && a.state !== "RECEIVING" && a.state !== "HOLDING") continue;
+    if (a.pos > 6) continue; // 外野手を除外
+    const d = vec2Distance(a.currentPos, basePos);
+    if (d < bestDist) {
+      bestDist = d;
+      best = a;
+    }
+  }
+  if (best) return best;
+
+  // 最終フォールバック: 外野手も含めて最寄り
+  for (const a of agents) {
+    if (a.pos === excludePos) continue;
     if (a.state !== "COVERING" && a.state !== "RECEIVING" && a.state !== "HOLDING") continue;
     const d = vec2Distance(a.currentPos, basePos);
     if (d < bestDist) {
