@@ -123,8 +123,7 @@ export function initRunnersAtBatStart(
 /**
  * ランナーの知覚状態を更新する。
  * ボールの位置・フェーズ・野手の動きを見て判断材料を更新する。
- *
- * 現在はstub（Stage 4で実装）。
+ * 現在は未使用（将来の拡張用）。
  */
 export function updateRunnerPerception(
   _runner: RunnerAgent,
@@ -132,7 +131,7 @@ export function updateRunnerPerception(
   _agents: readonly FielderAgent[],
   _t: number
 ): void {
-  // Stage 4で実装: ランナーがボール・野手の位置を知覚する
+  // 将来の拡張: ランナーがボール・野手の位置を知覚する
 }
 
 /**
@@ -156,7 +155,7 @@ export function runnerAutonomousDecide(
 
 /**
  * ランナーをリード状態に遷移させる（塁からリード距離分だけ前進）。
- * Stage 4で有効化される。
+ * フライ打球時にリード/帰塁で使用される。
  */
 export function startLeading(
   runner: RunnerAgent,
@@ -181,7 +180,7 @@ export function startLeading(
 
 /**
  * ランナーを帰塁状態に遷移させる（フライ捕球時）。
- * Stage 4で有効化される。
+ * フライ打球時にリード/帰塁で使用される。
  */
 export function startRetreating(runner: RunnerAgent): void {
   if (runner.state !== "LEADING") return;
@@ -196,7 +195,7 @@ export function startRetreating(runner: RunnerAgent): void {
 
 /**
  * リード中のランナーを移動させる。
- * Stage 4で使用される。
+ * 統一ティックループで使用される。
  */
 export function moveLeadingRunner(runner: RunnerAgent, dt: number): void {
   if (runner.state !== "LEADING") return;
@@ -233,7 +232,7 @@ export function moveLeadingRunner(runner: RunnerAgent, dt: number): void {
 
 /**
  * 帰塁中のランナーを移動させる。
- * Stage 4で使用される。
+ * 統一ティックループで使用される。
  */
 export function moveRetreatingRunner(runner: RunnerAgent, dt: number): void {
   if (runner.state !== "RETREATING") return;

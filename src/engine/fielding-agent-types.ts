@@ -57,10 +57,9 @@ export type AgentState =
   | "THROWING"
   | "SECURING"    // 捕球→送球準備中（transfer time）
   | "RECEIVING"   // ベースで送球を待っている
-  | "RETRIEVING"  // ボール回収中（統一ループ用）
-  | "RELAYING"    // 中継位置移動中（統一ループ用）
-  | "RETURNING";  // 定位置復帰中（統一ループ用）
-
+  | "RETRIEVING"  // ボール回収中
+  | "RELAYING"    // 中継位置移動中
+  | "RETURNING";  // 定位置復帰中
 export interface FielderAgent {
   readonly pos: FielderPosition;
   readonly player: Player;
@@ -145,8 +144,8 @@ export type RunnerState =
   | "TAGGED_UP"    // タッチアップ開始
   | "ROUNDING"     // 塁を回っている（エキストラベース判断中）
   | "DECIDING"     // タッチアップ判断中
-  | "LEADING"      // リード中（打球飛行中、統一ループ用）
-  | "RETREATING"   // 帰塁中（フライ捕球時、統一ループ用）
+  | "LEADING"      // リード中（打球飛行中）
+  | "RETREATING"   // 帰塁中（フライ捕球時）
   | "SAFE"         // セーフ（塁到達）
   | "OUT";         // アウト
 
@@ -200,7 +199,7 @@ export interface ThrowBallSnapshot {
   progress: number;         // 0.0~1.0（飛行進捗）
 }
 
-// --- ボールフェーズ（統一ループ用） ---
+// --- ボールフェーズ ---
 
 export type BallPhase = "IN_FLIGHT" | "ON_GROUND" | "HELD" | "THROWN";
 
