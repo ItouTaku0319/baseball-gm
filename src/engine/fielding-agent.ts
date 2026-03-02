@@ -534,6 +534,17 @@ export function resolvePlayWithAgents(
         }
       }
 
+      // ballHolder が HOLDING のまま待機中にランナーが走り始めたら再送球判断
+      if (ballHolder && ballHolder.state === "HOLDING" && !throwBall) {
+        const hasActiveRunner = runners.some(r =>
+          r.state === "RUNNING" || r.state === "TAGGED_UP"
+        );
+        if (hasActiveRunner) {
+          ballHolder.state = "SECURING";
+          securingTimer = SECURING_TIME_BASE;
+        }
+      }
+
       // ボール回収
       if (!ballHolder && retrieverAgent && retrieverAgent.state === "RETRIEVING") {
         const ballInfo = getPhase2BallGroundPos(trajectory, restPosForBall, t, ballPosBuf);
@@ -567,8 +578,8 @@ export function resolvePlayWithAgents(
             ballHolder.state = "THROWING";
             ballHolder = null;
           } else {
+            // 送球先がないがボールは保持し続ける（nullにするとランナーが認識できなくなる）
             ballHolder.state = "HOLDING";
-            ballHolder = null;
           }
         }
       }
@@ -1596,7 +1607,8 @@ function decideExtraBase(
     const throwDist = vec2Distance(tmpBuf, nextBasePos);
     estBallTime = pickupTime + RETRIEVER_PICKUP_TIME + SECURING_TIME_BASE + throwDist / throwSpeed;
   } else {
-    estBallTime = 10;
+    // ボール状態不明 — 安全側に倒して進塁しない（0秒=即送球可能扱い）
+    estBallTime = 0;
   }
 
   // 疲労: 2→3で+0.4s, 3→4で+0.8s（走るほど遅くなる）
