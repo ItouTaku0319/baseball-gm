@@ -59,11 +59,19 @@ export interface ScenarioParams {
   direction: number;       // 0-90° (0=レフト線, 45=センター, 90=ライト線)
   deterministic?: boolean; // true=ノイズ無し決定的実行 (デフォルトtrue)
   outs?: number;           // 0-2 (デフォルト0)
+  runners?: { first?: boolean; second?: boolean; third?: boolean };
 }
 
 export function generateScenarioLog(params: ScenarioParams): AtBatLog {
-  const { exitVelocity, launchAngle, direction, deterministic = true, outs: paramOuts = 0 } = params;
+  const { exitVelocity, launchAngle, direction, deterministic = true, outs: paramOuts = 0, runners: runnerFlags } = params;
   const outs = Math.min(2, Math.max(0, paramOuts));
+
+  const d50Runner = createD50Player(4); // ランナー用D50選手
+  const bases = {
+    first: runnerFlags?.first ? d50Runner : null,
+    second: runnerFlags?.second ? d50Runner : null,
+    third: runnerFlags?.third ? d50Runner : null,
+  };
 
   const ballType = classifyBattedBallType(launchAngle, exitVelocity);
   const landing = calcBallLanding(direction, launchAngle, exitVelocity);
@@ -75,7 +83,7 @@ export function generateScenarioLog(params: ScenarioParams): AtBatLog {
 
   // エージェントは常に実行（守備側の反応アニメーション表示のため）
   const agentResult: AgentFieldingResult = resolvePlayWithAgents(
-    ball, landing, fielderMap, d50Batter, emptyBases, outs,
+    ball, landing, fielderMap, d50Batter, bases, outs,
     {
       collectTimeline: true,
       perceptionNoise: deterministic ? 0 : 1.0,
@@ -99,7 +107,7 @@ export function generateScenarioLog(params: ScenarioParams): AtBatLog {
     exitVelocity,
     fielderPosition: finalFielderPos,
     estimatedDistance: Math.round(landing.distance * 10) / 10,
-    basesBeforePlay: [false, false, false],
+    basesBeforePlay: [!!runnerFlags?.first, !!runnerFlags?.second, !!runnerFlags?.third],
     outsBeforePlay: outs,
     fieldingTrace: agentResult.trace,
     agentTimeline: agentResult.agentTimeline,

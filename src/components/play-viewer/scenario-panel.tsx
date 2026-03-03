@@ -154,6 +154,9 @@ export function ScenarioPanel({
   const [launchAngle, setLaunchAngle] = useState(15);
   const [direction, setDirection] = useState(45);
   const [outs, setOuts] = useState(0);
+  const [runnerFirst, setRunnerFirst] = useState(false);
+  const [runnerSecond, setRunnerSecond] = useState(false);
+  const [runnerThird, setRunnerThird] = useState(false);
   const [scenarioLog, setScenarioLog] = useState<AtBatLog | null>(null);
   const [mode, setMode] = useState<"scenario" | "atbat">(externalLog ? "atbat" : "scenario");
 
@@ -239,10 +242,13 @@ export function ScenarioPanel({
 
   // 実行
   const handleExecute = useCallback(() => {
-    const log = generateScenarioLog({ exitVelocity, launchAngle, direction, outs });
+    const log = generateScenarioLog({
+      exitVelocity, launchAngle, direction, outs,
+      runners: { first: runnerFirst, second: runnerSecond, third: runnerThird },
+    });
     setScenarioLog(log);
     setMode("scenario");
-  }, [exitVelocity, launchAngle, direction, outs]);
+  }, [exitVelocity, launchAngle, direction, outs, runnerFirst, runnerSecond, runnerThird]);
 
   // ランダム
   const handleRandom = useCallback(() => {
@@ -414,6 +420,26 @@ export function ScenarioPanel({
                           outs === o ? "bg-blue-600 text-white" : "bg-gray-700 text-gray-400 hover:bg-gray-600"
                         }`}>
                         {o}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* ランナー */}
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-400">ランナー</span>
+                    <span className="text-white font-mono tabular-nums">
+                      {!runnerFirst && !runnerSecond && !runnerThird ? "なし" :
+                        [runnerFirst && "1B", runnerSecond && "2B", runnerThird && "3B"].filter(Boolean).join(",")}
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    {([["1B", runnerFirst, setRunnerFirst], ["2B", runnerSecond, setRunnerSecond], ["3B", runnerThird, setRunnerThird]] as const).map(([label, on, set]) => (
+                      <button key={label} onClick={() => (set as (v: boolean) => void)(!on)}
+                        className={`flex-1 py-1 rounded text-xs font-semibold transition-colors ${
+                          on ? "bg-green-600 text-white" : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+                        }`}>
+                        {label}
                       </button>
                     ))}
                   </div>
