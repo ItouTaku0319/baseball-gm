@@ -71,22 +71,6 @@ function calcTotalTime(log: AtBatLog): number {
   const lastAgentT = log.agentTimeline && log.agentTimeline.length > 0
     ? log.agentTimeline[log.agentTimeline.length - 1].t : 0;
 
-  // 野手到着推定
-  let agentSettleT = 0;
-  if (log.agentTimeline && log.agentTimeline.length > 0) {
-    const last = log.agentTimeline[log.agentTimeline.length - 1];
-    let maxExtra = 0;
-    for (const ag of last.agents) {
-      if (ag.state === "COVERING" || ag.state === "BACKING_UP" || ag.state === "PURSUING") {
-        const dx = ag.targetX - ag.x;
-        const dy = ag.targetY - ag.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > 0.3) maxExtra = Math.max(maxExtra, dist / 7.0);
-      }
-    }
-    agentSettleT = last.t + maxExtra;
-  }
-
   let ballTime: number;
   if (isGrounder) {
     const tl = buildGroundBallTimeline(exitVelocity, launchAngle, estimatedDist);
@@ -122,7 +106,7 @@ function calcTotalTime(log: AtBatLog): number {
     throwEndT = currentT + 0.3;
   }
 
-  return Math.max(ballTime, lastAgentT, throwEndT, agentSettleT);
+  return Math.max(ballTime, lastAgentT, throwEndT);
 }
 
 // ---- コンポーネント ----

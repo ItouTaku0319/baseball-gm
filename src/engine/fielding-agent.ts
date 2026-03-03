@@ -345,7 +345,27 @@ export function resolvePlayWithAgents(
         if (shouldEndPreCatch) {
           // 捕球フレームをタイムラインに記録（捕球前状態のスナップショット）
           if (collectTimeline) {
-            timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
+            const entry = snapshotAll(agents, ballPos, ballH, t, trajectory);
+            // 捕球フレームにもバッター走者と既存ランナーを表示
+            const phase1Runners: import("./fielding-agent-types").RunnerSnapshot[] = [];
+            if (t >= BATTER_SWING_TO_RUN_TIME) {
+              const batterRunT = t - BATTER_SWING_TO_RUN_TIME;
+              const batterSpeed = calcRunnerSpeed(batter);
+              const progress = Math.min(0.95, batterRunT * batterSpeed / BASE_LENGTH);
+              const pos = interpolateBasepath(0, 1, progress);
+              phase1Runners.push({
+                fromBase: 0, targetBase: 1,
+                x: pos.x, y: pos.y, state: "RUNNING",
+              });
+            }
+            for (const runner of earlyRunners) {
+              phase1Runners.push({
+                fromBase: runner.fromBase, targetBase: runner.fromBase,
+                x: runner.currentPos.x, y: runner.currentPos.y, state: runner.state,
+              });
+            }
+            if (phase1Runners.length > 0) entry.runners = phase1Runners;
+            timeline.push(entry);
           }
 
           postCatchStarted = true;
@@ -682,7 +702,27 @@ export function resolvePlayWithAgents(
         // 捕球前: 野手+ボールのスナップショット（decisionTick時のみ記録）
         // 野手移動が2ティックごとのため、中間フレームの停止状態記録を避ける
         if (fielderDecisionTick === 0) {
-          timeline.push(snapshotAll(agents, ballPos, ballH, t, trajectory));
+          const entry = snapshotAll(agents, ballPos, ballH, t, trajectory);
+          // Phase 1でもバッター走者と既存ランナーを表示
+          const phase1Runners: import("./fielding-agent-types").RunnerSnapshot[] = [];
+          if (t >= BATTER_SWING_TO_RUN_TIME) {
+            const batterRunT = t - BATTER_SWING_TO_RUN_TIME;
+            const batterSpeed = calcRunnerSpeed(batter);
+            const progress = Math.min(0.95, batterRunT * batterSpeed / BASE_LENGTH);
+            const pos = interpolateBasepath(0, 1, progress);
+            phase1Runners.push({
+              fromBase: 0, targetBase: 1,
+              x: pos.x, y: pos.y, state: "RUNNING",
+            });
+          }
+          for (const runner of earlyRunners) {
+            phase1Runners.push({
+              fromBase: runner.fromBase, targetBase: runner.fromBase,
+              x: runner.currentPos.x, y: runner.currentPos.y, state: runner.state,
+            });
+          }
+          if (phase1Runners.length > 0) entry.runners = phase1Runners;
+          timeline.push(entry);
         }
       } else {
         // 捕球後: ランナー・送球を含むスナップショット
@@ -914,8 +954,7 @@ function moveAgent(agent: FielderAgent, dt: number): void {
     agent.state === "HOLDING" ||
     agent.state === "FIELDING" ||
     agent.state === "THROWING" ||
-    agent.state === "SECURING" ||
-    agent.state === "RECEIVING"
+    agent.state === "SECURING"
   ) {
     (agent as { currentSpeed: number }).currentSpeed = 0;
     return;
