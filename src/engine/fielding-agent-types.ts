@@ -233,12 +233,13 @@ export interface AgentSimOptions {
 }
 
 // --- 塁位置定数 ---
-export const BASE_POSITIONS = {
-  home: { x: 0, y: 0 } as Vec2,
-  first: { x: 19.4, y: 19.4 } as Vec2,
-  second: { x: 0, y: 38.8 } as Vec2,
-  third: { x: -19.4, y: 19.4 } as Vec2,
-} as const;
+// Object.freeze で実行時の変異を防止（agent.targetPos = BASE_POSITIONS.home 経由の汚染防止）
+export const BASE_POSITIONS = Object.freeze({
+  home: Object.freeze({ x: 0, y: 0 } as Vec2),
+  first: Object.freeze({ x: 19.4, y: 19.4 } as Vec2),
+  second: Object.freeze({ x: 0, y: 38.8 } as Vec2),
+  third: Object.freeze({ x: -19.4, y: 19.4 } as Vec2),
+});
 
 export const BASE_LENGTH = 27.4; // 塁間距離(m)
 

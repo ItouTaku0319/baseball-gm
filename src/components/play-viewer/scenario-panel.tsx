@@ -153,6 +153,7 @@ export function ScenarioPanel({
   const [exitVelocity, setExitVelocity] = useState(130);
   const [launchAngle, setLaunchAngle] = useState(15);
   const [direction, setDirection] = useState(45);
+  const [outs, setOuts] = useState(0);
   const [scenarioLog, setScenarioLog] = useState<AtBatLog | null>(null);
   const [mode, setMode] = useState<"scenario" | "atbat">(externalLog ? "atbat" : "scenario");
 
@@ -238,10 +239,10 @@ export function ScenarioPanel({
 
   // 実行
   const handleExecute = useCallback(() => {
-    const log = generateScenarioLog({ exitVelocity, launchAngle, direction });
+    const log = generateScenarioLog({ exitVelocity, launchAngle, direction, outs });
     setScenarioLog(log);
     setMode("scenario");
-  }, [exitVelocity, launchAngle, direction]);
+  }, [exitVelocity, launchAngle, direction, outs]);
 
   // ランダム
   const handleRandom = useCallback(() => {
@@ -399,6 +400,23 @@ export function ScenarioPanel({
                   </div>
                   <input type="range" min={0} max={90} value={direction}
                     onChange={e => setDirection(Number(e.target.value))} className="w-full accent-blue-500" />
+                </div>
+                {/* アウトカウント */}
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-400">アウト</span>
+                    <span className="text-white font-mono tabular-nums">{outs}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    {[0, 1, 2].map(o => (
+                      <button key={o} onClick={() => setOuts(o)}
+                        className={`flex-1 py-1 rounded text-xs font-semibold transition-colors ${
+                          outs === o ? "bg-blue-600 text-white" : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+                        }`}>
+                        {o}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 

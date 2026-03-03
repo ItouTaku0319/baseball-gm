@@ -246,9 +246,9 @@ export const SECURING_TIME_SKILL_SCALE = 0.15;   // fielding/100 あたりの準
 export const PIVOT_TIME = 0.70;                  // DP ピボット時の追加準備時間(秒) NPB実測0.8-1.2s考慮
 export const THROW_SPEED_BASE = 30;              // 送球速度の基本値(m/s)
 export const THROW_SPEED_ARM_SCALE = 20;         // arm/100 あたりの送球速度追加(m/s)
-export const RUNNER_SPEED_BASE = 6.5;            // 走者の基本走速(m/s)
-export const RUNNER_SPEED_SCALE = 2.5;           // speed/100 あたりの走速追加(m/s)
-export const BATTER_START_DELAY = 0.65;          // 打者走者のスタート遅延(秒)
+export const RUNNER_SPEED_BASE = 6.2;            // 走者の基本走速(m/s) — NPB平均一塁到達4.0-4.3s基準
+export const RUNNER_SPEED_SCALE = 2.35;          // speed/100 あたりの走速追加(m/s)
+export const BATTER_SWING_TO_RUN_TIME = 0.40;    // バットコンタクト→走り出しまでの時間(秒)
 export const TAGUP_DELAY = 0.3;                  // タッチアップ反応遅延(秒)
 export const BASE_TAG_TIME = 0.15;               // ベースタッチ所要時間(秒)
 export const THROW_ERROR_BASE = 0.05;            // 送球エラーの基本確率
@@ -276,7 +276,7 @@ export const EXTRA_BASE_DECISION_NOISE = 0.4;    // 判断ノイズσ(baseRunnin
 
 // タッチアップ判断
 export const TAGUP_ARM_PERCEPTION_NOISE = 20;    // 肩力知覚ノイズσ(baseRunning=0時)
-export const TAGUP_GO_THRESHOLD = -0.5;          // タッチアップGO閾値(負=積極的にタッチアップ)
+export const TAGUP_GO_THRESHOLD = -0.7;          // タッチアップGO閾値(負=積極的にタッチアップ)
 export const TAGUP_DECISION_NOISE = 0.3;         // 判断ノイズσ(baseRunning=0時)
 
 // ゴロ時非フォース走者の進塁判断
@@ -343,6 +343,23 @@ export const RUNNER_LEAD_DISTANCE = 3.0;           // 通常リード距離(m)
 export const RUNNER_LEAD_SPEED = 3.0;              // リード時移動速度(m/s)
 export const RUNNER_RETREAT_SPEED_RATIO = 0.9;     // 帰塁速度比率
 export const RUNNER_LEAD_REACTION_TIME = 0.3;      // フライ時リード開始までの反応遅延(秒)
+
+// 遅いゴロ複数追跡
+export const SLOW_GROUNDER_DISTANCE_THRESHOLD = 20;   // 3人追跡可能なゴロ距離閾値(m)
+export const SLOW_GROUNDER_CHASE_BOOST_RANGE = 25;    // 追跡マージンブースト有効距離(m)
+export const SLOW_GROUNDER_CHASE_MARGIN_BOOST = 0.4;  // 追跡マージンキャップ追加量
+
+// HOLDING野手ドリフト
+export const HOLD_DRIFT_MIN_DISTANCE = 10;            // ドリフト開始最小距離(m)
+export const HOLD_DRIFT_RATIO_BASE = 0.05;            // 基本ドリフト率
+export const HOLD_DRIFT_AWARENESS_SCALE = 0.10;       // awareness依存追加率
+export const HOLD_DRIFT_RATIO_MAX = 0.15;             // ドリフト率上限
+export const HOLDING_DRIFT_SPEED_RATIO = 0.30;        // HOLDING移動速度割合
+
+// レシーバー到達チェック
+export const RECEIVER_BASE_PROXIMITY_THRESHOLD = 3.0; // 近接判定距離(m)
+export const RECEIVER_WAIT_TOLERANCE = 0.2;            // 送球OK余裕時間(秒)
+export const RECEIVER_MAX_WAIT_TIME = 0.5;             // 最大待機時間(秒)
 
 // アウト結果の打球角度判定（ballType文字列の置換）
 // ballType === "popup" → launchAngle >= 50°、ballType === "line_drive" → launchAngle < 20°

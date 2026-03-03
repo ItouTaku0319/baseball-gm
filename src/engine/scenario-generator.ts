@@ -58,10 +58,12 @@ export interface ScenarioParams {
   launchAngle: number;     // -15 ~ 70°
   direction: number;       // 0-90° (0=レフト線, 45=センター, 90=ライト線)
   deterministic?: boolean; // true=ノイズ無し決定的実行 (デフォルトtrue)
+  outs?: number;           // 0-2 (デフォルト0)
 }
 
 export function generateScenarioLog(params: ScenarioParams): AtBatLog {
-  const { exitVelocity, launchAngle, direction, deterministic = true } = params;
+  const { exitVelocity, launchAngle, direction, deterministic = true, outs: paramOuts = 0 } = params;
+  const outs = Math.min(2, Math.max(0, paramOuts));
 
   const ballType = classifyBattedBallType(launchAngle, exitVelocity);
   const landing = calcBallLanding(direction, launchAngle, exitVelocity);
@@ -73,7 +75,7 @@ export function generateScenarioLog(params: ScenarioParams): AtBatLog {
 
   // エージェントは常に実行（守備側の反応アニメーション表示のため）
   const agentResult: AgentFieldingResult = resolvePlayWithAgents(
-    ball, landing, fielderMap, d50Batter, emptyBases, 0,
+    ball, landing, fielderMap, d50Batter, emptyBases, outs,
     {
       collectTimeline: true,
       perceptionNoise: deterministic ? 0 : 1.0,
@@ -98,7 +100,7 @@ export function generateScenarioLog(params: ScenarioParams): AtBatLog {
     fielderPosition: finalFielderPos,
     estimatedDistance: Math.round(landing.distance * 10) / 10,
     basesBeforePlay: [false, false, false],
-    outsBeforePlay: 0,
+    outsBeforePlay: outs,
     fieldingTrace: agentResult.trace,
     agentTimeline: agentResult.agentTimeline,
     throwPlays: agentResult.throwPlays,

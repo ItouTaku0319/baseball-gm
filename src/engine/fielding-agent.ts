@@ -45,7 +45,7 @@ import {
   THROW_SPEED_ARM_SCALE,
   RUNNER_SPEED_BASE,
   RUNNER_SPEED_SCALE,
-  BATTER_START_DELAY,
+  BATTER_SWING_TO_RUN_TIME,
   TAGUP_DELAY,
   BASE_TAG_TIME,
   THROW_ERROR_BASE,
@@ -71,6 +71,9 @@ import {
   LINER_LAUNCH_ANGLE_MAX,
   UNIFIED_DT,
   FIELDER_DECISION_INTERVAL,
+  RECEIVER_BASE_PROXIMITY_THRESHOLD,
+  RECEIVER_WAIT_TOLERANCE,
+  RECEIVER_MAX_WAIT_TIME,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -391,8 +394,8 @@ export function resolvePlayWithAgents(
             };
           }
 
-          // ランナー初期化
-          runners = initRunners(batter, bases, trajectory, catchSuccess);
+          // ランナー初期化（tを渡してバッターのヘッドスタートを計算）
+          runners = initRunners(batter, bases, trajectory, catchSuccess, t);
 
           // フライ捕球: earlyRunnerのリード位置をPhase 2ランナーに転写
           if (catchSuccess && !trajectory.isGroundBall) {
@@ -416,8 +419,8 @@ export function resolvePlayWithAgents(
             retrieverAgent.currentSpeed = retrieverAgent.maxSpeed * RETRIEVER_APPROACH_FACTOR;
           }
 
-          // 打者走者スタート遅延
-          batterStartTimer = catchSuccess && trajectory.isGroundBall ? BATTER_START_DELAY : 0;
+          // 打者走者スタート遅延: ヘッドスタートで初期進捗を付与済みなので遅延なし
+          batterStartTimer = 0;
 
           // 捕球成功: SECURING状態
           if (ballHolder) {
@@ -567,16 +570,42 @@ export function resolvePlayWithAgents(
         if (securingTimer <= 0) {
           const target = decideThrowTarget(ballHolder, runners, agents, outs + outsAdded, rng);
           if (target) {
-            throwBall = createThrow(ballHolder, target, t);
-            const baseName = BASE_NAMES[target.baseNum] ?? "first";
-            pendingThrowPlay = {
-              from: ballHolder.pos,
-              to: target.receiverAgent.pos,
-              base: baseName as keyof typeof BASE_POSITIONS,
-            };
-            target.receiverAgent.state = "RECEIVING";
-            ballHolder.state = "THROWING";
-            ballHolder = null;
+            // レシーバーのベース到達確認
+            // DP機会（フォースランナー2人以上 or pivot中）はタイミング最重要→スキップ
+            const basePos = getBasePosition(target.baseNum);
+            const receiverDist = vec2Distance(target.receiverAgent.currentPos, basePos);
+            const forceRunnerCount = runners.filter(r =>
+              r.isForced && (r.state === "RUNNING" || r.state === "TAGGED_UP")
+            ).length;
+            const isDpOpportunity = forceRunnerCount >= 2 || outsAdded > 0;
+            let shouldWait = false;
+            if (!isDpOpportunity && receiverDist > RECEIVER_BASE_PROXIMITY_THRESHOLD) {
+              const throwSpeed = calcThrowSpeed(ballHolder);
+              const throwFlightTime = target.throwDist / throwSpeed;
+              const receiverTimeToBase = receiverDist / target.receiverAgent.maxSpeed;
+              if (receiverTimeToBase > throwFlightTime + RECEIVER_WAIT_TOLERANCE) {
+                // レシーバーがまだ遠い → 少し待機してベースへ誘導
+                securingTimer = Math.min(receiverTimeToBase - throwFlightTime, RECEIVER_MAX_WAIT_TIME);
+                target.receiverAgent.targetPos = { x: basePos.x, y: basePos.y };
+                if (target.receiverAgent.state !== "PURSUING") {
+                  target.receiverAgent.state = "COVERING";
+                  target.receiverAgent.action = "cover_base";
+                }
+                shouldWait = true;
+              }
+            }
+            if (!shouldWait) {
+              throwBall = createThrow(ballHolder, target, t);
+              const baseName = BASE_NAMES[target.baseNum] ?? "first";
+              pendingThrowPlay = {
+                from: ballHolder.pos,
+                to: target.receiverAgent.pos,
+                base: baseName as keyof typeof BASE_POSITIONS,
+              };
+              target.receiverAgent.state = "RECEIVING";
+              ballHolder.state = "THROWING";
+              ballHolder = null;
+            }
           } else {
             // 送球先がないがボールは保持し続ける（nullにするとランナーが認識できなくなる）
             ballHolder.state = "HOLDING";
@@ -657,6 +686,10 @@ export function resolvePlayWithAgents(
         }
       } else {
         // 捕球後: ランナー・送球を含むスナップショット
+        // 同一タイムスタンプの捕球前フレームを上書き（UI補間の連続性を保証）
+        if (timeline.length > 0 && timeline[timeline.length - 1].t === t && !timeline[timeline.length - 1].runners) {
+          timeline.pop();
+        }
         let timelineBallPos: Vec2;
         if (throwBall) {
           timelineBallPos = interpolateThrowBall(throwBall, t);
@@ -1489,7 +1522,6 @@ function deconflictBaseCoverage(agents: FielderAgent[]): void {
     // このベースをカバー中のエージェントを収集
     let first: FielderAgent | null = null;
     let firstDist = Infinity;
-    let hasConflict = false;
     for (const a of agents) {
       if (a.state !== "COVERING" || a.action !== "cover_base") continue;
       const d = vec2Distance(a.targetPos, basePos);
@@ -1498,18 +1530,17 @@ function deconflictBaseCoverage(agents: FielderAgent[]): void {
         first = a;
         firstDist = vec2Distance(a.currentPos, basePos);
       } else {
-        hasConflict = true;
         const aDist = vec2Distance(a.currentPos, basePos);
         if (aDist < firstDist) {
-          // 現在のwinnerより近い → winnerをevict
-          first.state = "HOLDING";
-          first.action = "hold";
+          // 現在のwinnerより近い → winnerをevict → カバーリング（バックアップ走り）
+          first.state = "BACKING_UP";
+          first.action = "backup";
           first = a;
           firstDist = aDist;
         } else {
-          // 遠い → evict
-          a.state = "HOLDING";
-          a.action = "hold";
+          // 遠い → evict → カバーリング（バックアップ走り）
+          a.state = "BACKING_UP";
+          a.action = "backup";
         }
       }
     }
@@ -1687,20 +1718,29 @@ function initRunners(
   batter: Player,
   bases: BaseRunners,
   trajectory: BallTrajectory,
-  catchSuccess: boolean
+  catchSuccess: boolean,
+  catchTime: number = 0
 ): RunnerAgent[] {
   const runners: RunnerAgent[] = [];
 
+  // バッターのヘッドスタート: コンタクト後 BATTER_SWING_TO_RUN_TIME で走り始めている
+  const batterSpeed = calcRunnerSpeed(batter);
+  const headStartTime = Math.max(0, catchTime - BATTER_SWING_TO_RUN_TIME);
+  const batterInitialProgress = Math.min(0.95, headStartTime * batterSpeed / BASE_LENGTH);
+
   if (catchSuccess && trajectory.isGroundBall) {
     // ゴロ捕球: 打者→1塁走塁、フォース走者は強制走塁
+    const initPos = batterInitialProgress > 0
+      ? interpolateBasepath(0, 1, batterInitialProgress)
+      : { ...BASE_POSITIONS.home };
     runners.push({
       player: batter,
       state: "RUNNING",
-      currentPos: { ...BASE_POSITIONS.home },
+      currentPos: initPos,
       fromBase: 0,
       targetBase: 1,
-      speed: calcRunnerSpeed(batter),
-      progress: 0,
+      speed: batterSpeed,
+      progress: batterInitialProgress,
       isBatter: true,
       isForced: true,
       skill: makeRunnerSkill(batter),
@@ -1849,14 +1889,17 @@ function initRunners(
     }
   } else {
     // 捕球失敗 / 未到達ヒット: 全員走塁
+    const hitInitPos = batterInitialProgress > 0
+      ? interpolateBasepath(0, 1, batterInitialProgress)
+      : { ...BASE_POSITIONS.home };
     runners.push({
       player: batter,
       state: "RUNNING",
-      currentPos: { ...BASE_POSITIONS.home },
+      currentPos: hitInitPos,
       fromBase: 0,
       targetBase: 1,
-      speed: calcRunnerSpeed(batter),
-      progress: 0,
+      speed: batterSpeed,
+      progress: batterInitialProgress,
       isBatter: true,
       isForced: true,
       skill: makeRunnerSkill(batter),
