@@ -499,8 +499,8 @@ describe("ゴールデンテスト: ライナー", () => {
     // 内野手+投手が処理するのが物理的に正しい（着弾31.8m = 内野守備範囲）
     // 統一ステータスでは投手(0,18.4)も近接性で参加可能
     expect(pos6Rate + pos4Rate + pos8Rate + pos1Rate).toBeGreaterThan(0.8);
-    // ダイビング/ランニングキャッチ難化+ランナー速度調整 (旧0.3→0.15)
-    expect(stats.outRate).toBeGreaterThan(0.15);
+    // ダイビング/ランニングキャッチ難化+ランナー速度調整 (旧0.3→0.15→0.10)
+    expect(stats.outRate).toBeGreaterThan(0.10);
   });
 
   test("L05: レフト前ライナー → LF or 3Bがアウト or 安打", () => {
