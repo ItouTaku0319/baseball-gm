@@ -540,15 +540,20 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
               <g key={`runner-${i}`}>
                 {isOut && (
                   <>
-                    <circle cx={p.x} cy={p.y} r={13} fill="none" stroke="#ef4444" strokeWidth="1.5" opacity="0.35" />
-                    <circle cx={p.x} cy={p.y} r={9} fill="none" stroke="#ef4444" strokeWidth="2.5" opacity="0.6" />
+                    <circle cx={p.x} cy={p.y} r={15} fill="none" stroke="#ef4444" strokeWidth="1.5" opacity="0.25" />
+                    <circle cx={p.x} cy={p.y} r={10} fill="none" stroke="#ef4444" strokeWidth="2.5" opacity="0.6" />
                     {/* ×マーク */}
-                    <line x1={p.x - 4} y1={p.y - 4} x2={p.x + 4} y2={p.y + 4} stroke="#ef4444" strokeWidth="2" opacity="0.8" />
-                    <line x1={p.x + 4} y1={p.y - 4} x2={p.x - 4} y2={p.y + 4} stroke="#ef4444" strokeWidth="2" opacity="0.8" />
+                    <line x1={p.x - 5} y1={p.y - 5} x2={p.x + 5} y2={p.y + 5} stroke="#ef4444" strokeWidth="2" opacity="0.8" />
+                    <line x1={p.x + 5} y1={p.y - 5} x2={p.x - 5} y2={p.y + 5} stroke="#ef4444" strokeWidth="2" opacity="0.8" />
+                    <text x={p.x} y={p.y - 14} textAnchor="middle" fill="#ef4444" fontSize="9" fontWeight="bold">OUT</text>
                   </>
                 )}
                 {isSafe && (
-                  <circle cx={p.x} cy={p.y} r={9} fill="none" stroke="#3b82f6" strokeWidth="2" opacity="0.5" />
+                  <>
+                    <circle cx={p.x} cy={p.y} r={14} fill="none" stroke="#3b82f6" strokeWidth="1.5" opacity="0.25" />
+                    <circle cx={p.x} cy={p.y} r={10} fill="none" stroke="#3b82f6" strokeWidth="2" opacity="0.55" />
+                    <text x={p.x} y={p.y - 14} textAnchor="middle" fill="#3b82f6" fontSize="9" fontWeight="bold">SAFE</text>
+                  </>
                 )}
                 <circle cx={p.x} cy={p.y} r={7} fill={color} stroke="white" strokeWidth="1.5" opacity={isOut ? 0.7 : 1.0} />
                 <text x={p.x} y={p.y + 3} textAnchor="middle" fill="white" fontSize="7" fontWeight="bold">R</text>

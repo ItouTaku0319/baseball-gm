@@ -147,6 +147,18 @@ export function ScenarioPanel({
   const [scenarioLog, setScenarioLog] = useState<AtBatLog | null>(null);
   const [mode, setMode] = useState<"scenario" | "atbat">(externalLog ? "atbat" : "scenario");
 
+  // 選手能力値
+  const [fSpeed, setFSpeed] = useState(50);
+  const [fFielding, setFFielding] = useState(50);
+  const [fCatching, setFCatching] = useState(50);
+  const [fArm, setFArm] = useState(50);
+  const [fAwareness, setFAwareness] = useState(50);
+  const [bSpeed, setBSpeed] = useState(50);
+  const [bBaseRunning, setBBaseRunning] = useState(50);
+  const [rSpeed, setRSpeed] = useState(50);
+  const [rBaseRunning, setRBaseRunning] = useState(50);
+  const [statsOpen, setStatsOpen] = useState(false);
+
   // 外部ログが変わったらモード切替
   useEffect(() => {
     if (externalLog) setMode("atbat");
@@ -214,12 +226,7 @@ export function ScenarioPanel({
     return Infinity;
   }, [activeLog]);
 
-  // 再生速度
-  const playbackSpeed = useMemo(() => {
-    if (!activeLog) return 1;
-    const ev = activeLog.exitVelocity ?? 120;
-    return 0.7 + (clampNum(ev, 80, 180) - 80) / 100 * 0.7;
-  }, [activeLog]);
+  const playbackSpeed = 1.0;
 
   const animDuration = totalTime > 0 ? totalTime / playbackSpeed : 0;
   const anim = usePlayAnimation(animDuration);
@@ -232,10 +239,14 @@ export function ScenarioPanel({
     const log = generateScenarioLog({
       exitVelocity, launchAngle, direction, outs,
       runners: { first: runnerFirst, second: runnerSecond, third: runnerThird },
+      fielderStats: { speed: fSpeed, fielding: fFielding, catching: fCatching, arm: fArm, awareness: fAwareness },
+      batterStats: { speed: bSpeed, baseRunning: bBaseRunning },
+      runnerStats: { speed: rSpeed, baseRunning: rBaseRunning },
     });
     setScenarioLog(log);
     setMode("scenario");
-  }, [exitVelocity, launchAngle, direction, outs, runnerFirst, runnerSecond, runnerThird]);
+  }, [exitVelocity, launchAngle, direction, outs, runnerFirst, runnerSecond, runnerThird,
+      fSpeed, fFielding, fCatching, fArm, fAwareness, bSpeed, bBaseRunning, rSpeed, rBaseRunning]);
 
   // ランダム
   const handleRandom = useCallback(() => {
@@ -431,6 +442,65 @@ export function ScenarioPanel({
                     ))}
                   </div>
                 </div>
+              </div>
+
+              {/* 選手能力値 */}
+              <div className="mt-3">
+                <button
+                  onClick={() => setStatsOpen(!statsOpen)}
+                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+                >
+                  <span className="text-[10px]">{statsOpen ? "▼" : "▶"}</span>
+                  <span>選手能力値 (デフォルト: 50)</span>
+                </button>
+                {statsOpen && (
+                  <div className="mt-2 space-y-3">
+                    <div>
+                      <div className="text-[10px] text-gray-500 font-semibold mb-1">野手</div>
+                      <div className="space-y-1.5">
+                        {([["走力", fSpeed, setFSpeed], ["守備", fFielding, setFFielding], ["捕球", fCatching, setFCatching], ["肩力", fArm, setFArm], ["意識", fAwareness, setFAwareness]] as const).map(([label, val, set]) => (
+                          <div key={label} className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-500 w-6 shrink-0">{label}</span>
+                            <input type="range" min={1} max={100} value={val}
+                              onChange={e => (set as (v: number) => void)(Number(e.target.value))}
+                              className="flex-1 accent-blue-500 h-1" />
+                            <span className="text-[10px] text-white font-mono tabular-nums w-5 text-right">{val}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-gray-500 font-semibold mb-1">打者走者</div>
+                      <div className="space-y-1.5">
+                        {([["走力", bSpeed, setBSpeed], ["走塁", bBaseRunning, setBBaseRunning]] as const).map(([label, val, set]) => (
+                          <div key={label} className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-500 w-6 shrink-0">{label}</span>
+                            <input type="range" min={1} max={100} value={val}
+                              onChange={e => (set as (v: number) => void)(Number(e.target.value))}
+                              className="flex-1 accent-blue-500 h-1" />
+                            <span className="text-[10px] text-white font-mono tabular-nums w-5 text-right">{val}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    {(runnerFirst || runnerSecond || runnerThird) && (
+                      <div>
+                        <div className="text-[10px] text-gray-500 font-semibold mb-1">ランナー</div>
+                        <div className="space-y-1.5">
+                          {([["走力", rSpeed, setRSpeed], ["走塁", rBaseRunning, setRBaseRunning]] as const).map(([label, val, set]) => (
+                            <div key={label} className="flex items-center gap-2">
+                              <span className="text-[10px] text-gray-500 w-6 shrink-0">{label}</span>
+                              <input type="range" min={1} max={100} value={val}
+                                onChange={e => (set as (v: number) => void)(Number(e.target.value))}
+                                className="flex-1 accent-blue-500 h-1" />
+                              <span className="text-[10px] text-white font-mono tabular-nums w-5 text-right">{val}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* プレビュー */}
