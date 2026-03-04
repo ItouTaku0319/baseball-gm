@@ -227,8 +227,11 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
   const isFenceHit = !isHomerun && !isGrounder && !isCaughtFly && estimatedDist > fenceDistForDir;
 
   // 送球タイムライン
+  // agentTimelineにthrowBallスナップショットがある場合はリアルタイム描画で送球を表示するため
+  // throwSegments(タイムライン後の再アニメーション)はスキップ → 二重送球防止
   const throwSegments = useMemo(() => {
     if (!log.throwPlays || !agentTimeline || agentTimeline.length === 0) return [];
+    if (agentTimeline.some(f => f.throwBall)) return [];
     return buildThrowTimeline(log.throwPlays, agentTimeline);
   }, [log.throwPlays, agentTimeline]);
 
@@ -565,58 +568,71 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
       {/* 捕球後: ボール + 送球アニメーション */}
       {isAnimating && ballCaught && (() => {
         const elements: React.ReactNode[] = [];
-        const firstThrowStart = throwSegments.length > 0 ? throwSegments[0].startTime : Infinity;
-        const lastThrowEnd = throwSegments.length > 0 ? throwSegments[throwSegments.length - 1].endTime : -1;
-        const isHoldingBall = currentTime >= catchTime && currentTime < firstThrowStart;
-        const throwDone = throwSegments.length > 0 && currentTime >= lastThrowEnd;
-        const noThrow = throwSegments.length === 0;
+        const tb = (frame as AgentTimelineEntry & { throwBall?: ThrowBallSnapshot })?.throwBall;
 
-        if ((isHoldingBall || noThrow) && catcherSvgPos) {
-          elements.push(
-            <circle key="held-ball" cx={catcherSvgPos.x} cy={catcherSvgPos.y} r={4} fill="white" stroke="#22c55e" strokeWidth="1.2" opacity="0.95" />
-          );
-        }
+        if (throwSegments.length > 0) {
+          // 旧パス: throwSegmentsベースのアニメーション（throwBallスナップショットがないログ用）
+          const firstThrowStart = throwSegments[0].startTime;
+          const lastThrowEnd = throwSegments[throwSegments.length - 1].endTime;
+          const isHoldingBall = currentTime >= catchTime && currentTime < firstThrowStart;
+          const throwDone = currentTime >= lastThrowEnd;
 
-        for (let si = 0; si < throwSegments.length; si++) {
-          const seg = throwSegments[si];
-          if (currentTime >= seg.endTime) {
-            // 送球弧（完了済み）
-            const midX = (seg.fromSvg.x + seg.toSvg.x) / 2;
-            const midY = (seg.fromSvg.y + seg.toSvg.y) / 2 - 8;
+          if (isHoldingBall && catcherSvgPos) {
             elements.push(
-              <path key={`throw-arc-${si}`}
-                d={`M ${seg.fromSvg.x} ${seg.fromSvg.y} Q ${midX} ${midY} ${seg.toSvg.x} ${seg.toSvg.y}`}
-                fill="none" stroke="#ef4444" strokeWidth="1.2" strokeDasharray="4,3" opacity="0.4"
-              />
+              <circle key="held-ball" cx={catcherSvgPos.x} cy={catcherSvgPos.y} r={4} fill="white" stroke="#22c55e" strokeWidth="1.2" opacity="0.95" />
             );
-            if (currentTime < seg.endTime + 0.3) {
+          }
+
+          for (let si = 0; si < throwSegments.length; si++) {
+            const seg = throwSegments[si];
+            if (currentTime >= seg.endTime) {
+              const midX = (seg.fromSvg.x + seg.toSvg.x) / 2;
+              const midY = (seg.fromSvg.y + seg.toSvg.y) / 2 - 8;
               elements.push(
-                <circle key={`throw-arrive-${si}`} cx={seg.toSvg.x} cy={seg.toSvg.y} r={8} fill="none" stroke="#ef4444" strokeWidth="1.8" opacity={0.6} />
+                <path key={`throw-arc-${si}`}
+                  d={`M ${seg.fromSvg.x} ${seg.fromSvg.y} Q ${midX} ${midY} ${seg.toSvg.x} ${seg.toSvg.y}`}
+                  fill="none" stroke="#ef4444" strokeWidth="1.2" strokeDasharray="4,3" opacity="0.4"
+                />
+              );
+              if (currentTime < seg.endTime + 0.3) {
+                elements.push(
+                  <circle key={`throw-arrive-${si}`} cx={seg.toSvg.x} cy={seg.toSvg.y} r={8} fill="none" stroke="#ef4444" strokeWidth="1.8" opacity={0.6} />
+                );
+              }
+            }
+            if (currentTime >= seg.startTime && currentTime < seg.endTime) {
+              const ratio = (currentTime - seg.startTime) / (seg.endTime - seg.startTime);
+              const midX = (seg.fromSvg.x + seg.toSvg.x) / 2;
+              const midY = (seg.fromSvg.y + seg.toSvg.y) / 2 - 8;
+              const bx = (1 - ratio) * (1 - ratio) * seg.fromSvg.x + 2 * (1 - ratio) * ratio * midX + ratio * ratio * seg.toSvg.x;
+              const by = (1 - ratio) * (1 - ratio) * seg.fromSvg.y + 2 * (1 - ratio) * ratio * midY + ratio * ratio * seg.toSvg.y;
+              elements.push(
+                <circle key={`throw-ball-${si}`} cx={bx} cy={by} r={4} fill="#ef4444" stroke="white" strokeWidth="1" opacity="0.95" />
+              );
+              elements.push(
+                <circle key={`throw-target-${si}`} cx={seg.toSvg.x} cy={seg.toSvg.y} r={6} fill="none" stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.5" />
               );
             }
           }
-          if (currentTime >= seg.startTime && currentTime < seg.endTime) {
-            const ratio = (currentTime - seg.startTime) / (seg.endTime - seg.startTime);
-            // 弧を描くアニメーション
-            const midX = (seg.fromSvg.x + seg.toSvg.x) / 2;
-            const midY = (seg.fromSvg.y + seg.toSvg.y) / 2 - 8;
-            const bx = (1 - ratio) * (1 - ratio) * seg.fromSvg.x + 2 * (1 - ratio) * ratio * midX + ratio * ratio * seg.toSvg.x;
-            const by = (1 - ratio) * (1 - ratio) * seg.fromSvg.y + 2 * (1 - ratio) * ratio * midY + ratio * ratio * seg.toSvg.y;
+
+          if (throwDone) {
+            const lastSeg = throwSegments[throwSegments.length - 1];
             elements.push(
-              <circle key={`throw-ball-${si}`} cx={bx} cy={by} r={4} fill="#ef4444" stroke="white" strokeWidth="1" opacity="0.95" />
-            );
-            // ターゲットマーカー
-            elements.push(
-              <circle key={`throw-target-${si}`} cx={seg.toSvg.x} cy={seg.toSvg.y} r={6} fill="none" stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.5" />
+              <circle key="arrived-ball" cx={lastSeg.toSvg.x} cy={lastSeg.toSvg.y} r={4} fill="white" stroke="#ef4444" strokeWidth="1.2" opacity="0.9" />
             );
           }
-        }
-
-        if (throwDone) {
-          const lastSeg = throwSegments[throwSegments.length - 1];
-          elements.push(
-            <circle key="arrived-ball" cx={lastSeg.toSvg.x} cy={lastSeg.toSvg.y} r={4} fill="white" stroke="#ef4444" strokeWidth="1.2" opacity="0.9" />
-          );
+        } else if (!tb) {
+          // throwBallスナップショットモード: 送球中でないとき、frame.ballPosにボール表示
+          if (frame) {
+            const bp = xyToSvg(frame.ballPos.x, frame.ballPos.y);
+            elements.push(
+              <circle key="held-ball" cx={bp.x} cy={bp.y} r={4} fill="white" stroke="#22c55e" strokeWidth="1.2" opacity="0.95" />
+            );
+          } else if (catcherSvgPos) {
+            elements.push(
+              <circle key="held-ball" cx={catcherSvgPos.x} cy={catcherSvgPos.y} r={4} fill="white" stroke="#22c55e" strokeWidth="1.2" opacity="0.95" />
+            );
+          }
         }
         return elements;
       })()}
@@ -635,13 +651,17 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
       {(() => {
         const tb = (frame as AgentTimelineEntry & { throwBall?: ThrowBallSnapshot })?.throwBall;
         if (!tb || !isAnimating) return null;
-        // 送球中のボールを描画
         const fromP = xyToSvg(tb.fromX, tb.fromY);
         const toP = xyToSvg(tb.toX, tb.toY);
         const bx = fromP.x + (toP.x - fromP.x) * tb.progress;
         const by = fromP.y + (toP.y - fromP.y) * tb.progress;
         return (
-          <circle cx={bx} cy={by} r={4} fill="#ef4444" stroke="white" strokeWidth="1" opacity="0.95" />
+          <g>
+            {/* ターゲットマーカー */}
+            <circle cx={toP.x} cy={toP.y} r={6} fill="none" stroke="#ef4444" strokeWidth="1" strokeDasharray="2,2" opacity="0.5" />
+            {/* 送球ボール */}
+            <circle cx={bx} cy={by} r={4} fill="#ef4444" stroke="white" strokeWidth="1" opacity="0.95" />
+          </g>
         );
       })()}
     </svg>

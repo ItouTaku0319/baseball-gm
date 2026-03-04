@@ -230,6 +230,8 @@ export interface AgentSimOptions {
   random?: () => number;
   /** フェンス直撃時のフェンス距離(m)。設定時は捕球不可+静止位置をフェンス付近にキャップ */
   fenceDistance?: number;
+  /** デバッグ: 送球判定ログ出力 */
+  debugThrow?: boolean;
 }
 
 // --- 塁位置定数 ---
