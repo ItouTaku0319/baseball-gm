@@ -74,6 +74,7 @@ import {
   RECEIVER_BASE_PROXIMITY_THRESHOLD,
   RECEIVER_WAIT_TOLERANCE,
   RECEIVER_MAX_WAIT_TIME,
+  GROUND_BALL_APPROACH_WAIT_DIST,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -320,16 +321,23 @@ export function resolvePlayWithAgents(
         } else if (trajectory.isGroundBall && t >= trajectory.flightTime) {
           let hasPursuer = false;
           let allSettled = true;
+          let hasNearbyApproacher = false;
           for (let ai = 0; ai < agents.length; ai++) {
             const a = agents[ai];
-            if (a.state !== "PURSUING") continue;
-            hasPursuer = true;
-            if (vec2DistanceSq(a.currentPos, a.targetPos) >= 0.25) {
-              allSettled = false;
-              break;
+            if (a.state === "PURSUING") {
+              hasPursuer = true;
+              if (vec2DistanceSq(a.currentPos, a.targetPos) >= 0.25) {
+                allSettled = false;
+              }
+            } else if (a.state === "BACKING_UP" || a.state === "REACTING") {
+              // PURSUING以外でもボールに接近中の野手がいれば捕球チャンスを待つ
+              const distToBallSq = vec2DistanceSq(a.currentPos, restPosForBall);
+              if (distToBallSq < GROUND_BALL_APPROACH_WAIT_DIST * GROUND_BALL_APPROACH_WAIT_DIST) {
+                hasNearbyApproacher = true;
+              }
             }
           }
-          if (!hasPursuer || allSettled) shouldEndPreCatch = true;
+          if ((!hasPursuer && !hasNearbyApproacher) || (hasPursuer && allSettled)) shouldEndPreCatch = true;
         } else if (!trajectory.isGroundBall && ballOnGround) {
           let allSettled = true;
           for (let ai = 0; ai < agents.length; ai++) {
@@ -589,6 +597,10 @@ export function resolvePlayWithAgents(
         securingTimer -= unifiedDt;
         if (securingTimer <= 0) {
           const target = decideThrowTarget(ballHolder, runners, agents, outs + outsAdded, rng);
+          if (options?.debugThrow) {
+            const activeR = runners.filter(r => r.state === "RUNNING" || r.state === "TAGGED_UP");
+            console.log(`[THROW] t=${t.toFixed(2)} target=${target ? `base${target.baseNum} recv=${target.receiverAgent.pos}` : "null"} activeRunners=${activeR.length} states=[${runners.map(r=>r.state).join(",")}]`);
+          }
           if (target) {
             // レシーバーのベース到達確認
             // DP機会（フォースランナー2人以上 or pivot中）はタイミング最重要→スキップ
@@ -599,6 +611,9 @@ export function resolvePlayWithAgents(
             ).length;
             const isDpOpportunity = forceRunnerCount >= 2 || outsAdded > 0;
             let shouldWait = false;
+            if (options?.debugThrow) {
+              console.log(`  receiverDist=${receiverDist.toFixed(2)} threshold=${RECEIVER_BASE_PROXIMITY_THRESHOLD} isDp=${isDpOpportunity}`);
+            }
             if (!isDpOpportunity && receiverDist > RECEIVER_BASE_PROXIMITY_THRESHOLD) {
               const throwSpeed = calcThrowSpeed(ballHolder);
               const throwFlightTime = target.throwDist / throwSpeed;
