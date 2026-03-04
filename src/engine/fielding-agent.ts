@@ -396,7 +396,6 @@ export function resolvePlayWithAgents(
           }
 
           catchSuccess = !!(catchResult && catchResult.success && catcherAgent);
-
           // フライ捕球: リード中のearlyRunnersを帰塁開始
           if (catchSuccess && !trajectory.isGroundBall) {
             for (const runner of earlyRunners) {
@@ -796,9 +795,14 @@ export function resolvePlayWithAgents(
 
   // === 結果構築 ===
   if (!postCatchStarted) {
+    // 誰も処理できなかった場合、最寄りの野手をfielderPosにする
+    const nearestPos = agents.reduce((best, a) => {
+      const d = vec2DistanceSq(a.currentPos, restPosForBall);
+      return d < best.d ? { d, pos: a.pos } : best;
+    }, { d: Infinity, pos: 8 as FielderPosition }).pos;
     return {
       result: "single",
-      fielderPos: 8 as FielderPosition,
+      fielderPos: nearestPos,
       agentTimeline: collectTimeline ? timeline : undefined,
     };
   }
@@ -1566,7 +1570,7 @@ function snapshotCoverAssignments(agents: readonly FielderAgent[]): CoverSnapsho
 
 /**
  * カバー衝突解決: 同じベースを複数エージェントがCOVERINGしている場合、
- * 最も近いエージェントだけ残し、他はHOLDINGに戻す。
+ * 最も近いエージェントだけ残し、他はHOLDINGに戻す（その場で停止→次tickで再判断）。
  * これにより、Pass 2 のエージェント処理順序に依存しない公平なカバー割当を実現する。
  */
 function deconflictBaseCoverage(agents: FielderAgent[]): void {
@@ -1586,15 +1590,19 @@ function deconflictBaseCoverage(agents: FielderAgent[]): void {
       } else {
         const aDist = vec2Distance(a.currentPos, basePos);
         if (aDist < firstDist) {
-          // 現在のwinnerより近い → winnerをevict → カバーリング（バックアップ走り）
-          first.state = "BACKING_UP";
-          first.action = "backup";
+          // 現在のwinnerより近い → winnerをevict → その場停止（次tickで再判断）
+          first.state = "HOLDING";
+          first.action = "hold";
+          first.targetPos.x = first.currentPos.x;
+          first.targetPos.y = first.currentPos.y;
           first = a;
           firstDist = aDist;
         } else {
-          // 遠い → evict → カバーリング（バックアップ走り）
-          a.state = "BACKING_UP";
-          a.action = "backup";
+          // 遠い → evict → その場停止（次tickで再判断）
+          a.state = "HOLDING";
+          a.action = "hold";
+          a.targetPos.x = a.currentPos.x;
+          a.targetPos.y = a.currentPos.y;
         }
       }
     }
@@ -2331,7 +2339,12 @@ function buildPhase2Result(
   catchError?: boolean,
   catchErrorPos?: FielderPosition
 ): AgentFieldingResult {
-  const fielderPos = catcherAgent?.pos ?? (8 as FielderPosition);
+  // catcherAgentがnull（誰もインターセプトしなかった）場合、
+  // 送球を行った野手 or 最後にボールを処理した野手のposを使う
+  const fielderPos = catcherAgent?.pos
+    ?? (throwPlays.length > 0 ? throwPlays[0].from : null)
+    ?? agents.find(a => a.state === "THROWING" || a.state === "HOLDING" || a.state === "SECURING")?.pos
+    ?? (8 as FielderPosition);
 
   // --- ゴロ捕球成功 ---
   if (catchSuccess && trajectory.isGroundBall) {
