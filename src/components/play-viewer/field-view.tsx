@@ -87,6 +87,17 @@ const RUNNER_STATE_COLOR: Record<string, string> = {
 // ---- 野手外挿 ----
 const POST_CATCH_SPEED = 7.0;
 
+// REACTINGリーン（身を乗り出し）を座標に反映
+function withReactingLean(ag: AgentTimelineEntry["agents"][0]): AgentTimelineEntry["agents"][0] {
+  if (ag.state !== "REACTING" || ag.perceivedX == null || ag.perceivedY == null) return ag;
+  const pdx = ag.perceivedX - ag.x;
+  const pdy = ag.perceivedY - ag.y;
+  const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+  if (pdist <= 0.1) return ag;
+  const lean = Math.min(1.5, pdist * 0.03);
+  return { ...ag, x: ag.x + (pdx / pdist) * lean, y: ag.y + (pdy / pdist) * lean };
+}
+
 function extrapolateAgent(ag: AgentTimelineEntry["agents"][0], dt: number): AgentTimelineEntry["agents"][0] {
   if (ag.state !== "COVERING" && ag.state !== "BACKING_UP" && ag.state !== "PURSUING") return ag;
   const dx = ag.targetX - ag.x;
@@ -99,15 +110,15 @@ function extrapolateAgent(ag: AgentTimelineEntry["agents"][0], dt: number): Agen
 
 function getAgentFrameAtTime(timeline: AgentTimelineEntry[], t: number) {
   if (timeline.length === 0) return null;
-  if (t <= timeline[0].t) return timeline[0];
+  if (t <= timeline[0].t) return { ...timeline[0], agents: timeline[0].agents.map(withReactingLean) };
   if (t >= timeline[timeline.length - 1].t) {
     const last = timeline[timeline.length - 1];
     const elapsed = t - last.t;
-    if (elapsed <= 0) return last;
+    if (elapsed <= 0) return { ...last, agents: last.agents.map(withReactingLean) };
     return {
       ...last,
       t,
-      agents: last.agents.map(ag => extrapolateAgent(ag, elapsed)),
+      agents: last.agents.map(ag => withReactingLean(extrapolateAgent(ag, elapsed))),
     };
   }
   for (let i = 0; i < timeline.length - 1; i++) {
@@ -119,11 +130,17 @@ function getAgentFrameAtTime(timeline: AgentTimelineEntry[], t: number) {
         t,
         ballPos: { x: a.ballPos.x + (b.ballPos.x - a.ballPos.x) * ratio, y: a.ballPos.y + (b.ballPos.y - a.ballPos.y) * ratio },
         ballHeight: a.ballHeight + (b.ballHeight - a.ballHeight) * ratio,
-        agents: b.agents.map((ag, j) => ({
-          ...ag,
-          x: a.agents[j] ? a.agents[j].x + (ag.x - a.agents[j].x) * ratio : ag.x,
-          y: a.agents[j] ? a.agents[j].y + (ag.y - a.agents[j].y) * ratio : ag.y,
-        })),
+        agents: b.agents.map((ag, j) => {
+          const prev = a.agents[j];
+          if (!prev) return withReactingLean(ag);
+          const pLean = withReactingLean(prev);
+          const nLean = withReactingLean(ag);
+          return {
+            ...ag,
+            x: pLean.x + (nLean.x - pLean.x) * ratio,
+            y: pLean.y + (nLean.y - pLean.y) * ratio,
+          };
+        }),
         runners: b.runners ? b.runners.map((r, j) => {
           const prev = a.runners?.[j];
           if (!prev) return r;
@@ -298,8 +315,8 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
 
   const bounceHeightRatio = bounceFirstMaxH > 0 ? clampNum(ballHeight / bounceFirstMaxH, 0, 1) : 0;
   const ballRadius = isBouncePhase
-    ? 3 + bounceHeightRatio * 5
-    : Math.max(3, 3 + (maxHeight > 0 ? (ballHeight / maxHeight) * 6 : 0));
+    ? 4 + bounceHeightRatio * 7
+    : Math.max(4, 4 + (maxHeight > 0 ? (ballHeight / maxHeight) * 8 : 0));
 
   // ---- 軌跡 ----
   const trailPoints = useMemo(() => {
@@ -374,65 +391,99 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
     return xyToSvg(fielder.x, fielder.y);
   }, [agentTimeline, catchTime]);
 
+  // フィールド構造用の座標計算
+  const moundPos = toSvg(18.44, 45); // ピッチャーマウンド
+  const dirtRadius = 30 * SCALE; // 内野ダートエリア半径(30m)
+
+  // ファウルライン終点（フェンスまで）
+  const foulLine1End = toSvg(getFenceDistance(90), 90); // 1塁側
+  const foulLine3End = toSvg(getFenceDistance(0), 0);   // 3塁側
+
+  // ウォーニングトラック（フェンス内側5m）
+  const warningTrackPoints = Array.from({ length: 19 }, (_, i) => {
+    const deg = i * 5;
+    const dist = getFenceDistance(deg) - 5;
+    return toSvg(Math.max(dist, 50), deg);
+  });
+  const warningTrackPath = warningTrackPoints.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+
   return (
     <svg viewBox={`0 0 ${VIEW_SIZE} ${VIEW_SIZE}`} className={`bg-gray-900 rounded-lg border border-gray-700 ${className ?? ""}`}>
+      <defs>
+        {/* 芝ストライプパターン */}
+        <pattern id="grassStripe" patternUnits="userSpaceOnUse" width="12" height="12" patternTransform="rotate(45)">
+          <rect width="12" height="12" fill="transparent" />
+          <rect width="12" height="6" fill="rgba(255,255,255,0.06)" />
+        </pattern>
+        {/* ウォーニングトラック用クリップ */}
+        <clipPath id="fieldClip">
+          <path d={fencePath + ` L ${HOME.x} ${HOME.y} Z`} />
+        </clipPath>
+      </defs>
+
       <rect x="0" y="0" width={VIEW_SIZE} height={VIEW_SIZE} fill="#111827" />
 
-      {/* フィールド */}
-      <path d={fencePath + ` L ${HOME.x} ${HOME.y} Z`} fill="#14532d" opacity="0.45" />
-      <path d={diamondPath} fill="#92400e" opacity="0.35" />
-      <path d={fencePath} fill="none" stroke="#6b7280" strokeWidth="1.5" />
+      {/* フィールド芝 */}
+      <path d={fencePath + ` L ${HOME.x} ${HOME.y} Z`} fill="#14532d" opacity="0.50" />
+      <path d={fencePath + ` L ${HOME.x} ${HOME.y} Z`} fill="url(#grassStripe)" />
+
+      {/* ウォーニングトラック（フェンス内側5mの帯） */}
+      <path d={fencePath + ` L ${HOME.x} ${HOME.y} Z`} fill="none" />
+      <g clipPath="url(#fieldClip)">
+        <path
+          d={fencePath + ` L ${HOME.x} ${HOME.y} Z`}
+          fill="#78350f" opacity="0.15"
+        />
+        <path
+          d={warningTrackPath + ` L ${HOME.x} ${HOME.y} Z`}
+          fill="#14532d" opacity="0.50"
+        />
+        <path d={warningTrackPath + ` L ${HOME.x} ${HOME.y} Z`} fill="url(#grassStripe)" />
+      </g>
+
+      {/* 内野ダートエリア（半円弧） */}
+      <circle cx={HOME.x} cy={HOME.y} r={dirtRadius} fill="#92400e" opacity="0.18" clipPath="url(#fieldClip)" />
+
+      {/* ベースパス（土色ライン） */}
+      <line x1={HOME.x} y1={HOME.y} x2={FIRST.x} y2={FIRST.y} stroke="#92400e" strokeWidth="3" opacity="0.30" />
+      <line x1={FIRST.x} y1={FIRST.y} x2={SECOND.x} y2={SECOND.y} stroke="#92400e" strokeWidth="3" opacity="0.30" />
+      <line x1={SECOND.x} y1={SECOND.y} x2={THIRD.x} y2={THIRD.y} stroke="#92400e" strokeWidth="3" opacity="0.30" />
+      <line x1={THIRD.x} y1={THIRD.y} x2={HOME.x} y2={HOME.y} stroke="#92400e" strokeWidth="3" opacity="0.30" />
+
+      {/* ダイヤモンド */}
+      <path d={diamondPath} fill="#92400e" opacity="0.25" />
+
+      {/* ファウルライン（白線、フェンスまで） */}
+      <line x1={HOME.x} y1={HOME.y} x2={foulLine1End.x} y2={foulLine1End.y} stroke="rgba(255,255,255,0.35)" strokeWidth="1.2" />
+      <line x1={HOME.x} y1={HOME.y} x2={foulLine3End.x} y2={foulLine3End.y} stroke="rgba(255,255,255,0.35)" strokeWidth="1.2" />
+
+      {/* マウンド */}
+      <circle cx={moundPos.x} cy={moundPos.y} r={5} fill="#92400e" opacity="0.40" />
+      <circle cx={moundPos.x} cy={moundPos.y} r={5} fill="none" stroke="#a16207" strokeWidth="0.8" opacity="0.30" />
+
+      {/* フェンス・ダイヤモンド枠線 */}
+      <path d={fencePath} fill="none" stroke="#6b7280" strokeWidth="1.8" />
       <path d={diamondPath} fill="none" stroke="#9ca3af" strokeWidth="1.2" />
 
-      {/* 塁 */}
-      {[HOME, FIRST, SECOND, THIRD].map((p, i) => (
-        <rect key={i} x={p.x - 4} y={p.y - 4} width="8" height="8" fill="#e5e7eb" transform={`rotate(45 ${p.x} ${p.y})`} />
-      ))}
-
-      {/* 走者（塁上の走者を静的表示 or agentTimeline.runnersから動的） */}
-      {(() => {
-        // タイムラインのランナー情報があれば動的表示
+      {/* 塁（ランナー状態で色変化） */}
+      {[HOME, FIRST, SECOND, THIRD].map((p, i) => {
         const runners = (frame as AgentTimelineEntry & { runners?: RunnerSnapshot[] })?.runners;
-        if (runners && runners.length > 0 && isAnimating) {
-          return runners.map((r, i) => {
-            const p = xyToSvg(r.x, r.y);
-            const color = RUNNER_STATE_COLOR[r.state] ?? "#86efac";
-            return (
-              <g key={`runner-${i}`}>
-                <circle cx={p.x} cy={p.y} r={5} fill={color} stroke="white" strokeWidth="1" opacity="0.9" />
-                <text x={p.x} y={p.y + 2.5} textAnchor="middle" fill="white" fontSize="6" fontWeight="bold">R</text>
-              </g>
-            );
-          });
+        let baseColor = "#e5e7eb";
+        let baseSize = 4;
+        if (runners && isAnimating) {
+          if (runners.some(r => r.targetBase === i && r.state === "SAFE")) { baseColor = "#3b82f6"; baseSize = 5; }
+          else if (runners.some(r => r.targetBase === i && r.state === "OUT")) { baseColor = "#ef4444"; baseSize = 5; }
         }
-        // フォールバック: 静的塁上表示
-        if (log.basesBeforePlay) {
-          return log.basesBeforePlay.map((occupied, baseIdx) => {
-            if (!occupied) return null;
-            const p = BASE_SVG[baseIdx + 1];
-            return <circle key={baseIdx} cx={p.x} cy={p.y} r={5} fill="#22c55e" stroke="white" strokeWidth="1" />;
-          });
-        }
-        return null;
-      })()}
+        return (
+          <rect key={i} x={p.x - baseSize} y={p.y - baseSize} width={baseSize * 2} height={baseSize * 2} fill={baseColor} transform={`rotate(45 ${p.x} ${p.y})`} />
+        );
+      })}
 
       {/* 野手 */}
       {(() => {
         if (frame) {
           return frame.agents.map((ag) => {
-            let drawX = ag.x;
-            let drawY = ag.y;
-            if (ag.state === "REACTING" && ag.perceivedX != null && ag.perceivedY != null) {
-              const pdx = ag.perceivedX - ag.x;
-              const pdy = ag.perceivedY - ag.y;
-              const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
-              if (pdist > 0.1) {
-                const lean = Math.min(1.5, pdist * 0.03);
-                drawX += (pdx / pdist) * lean;
-                drawY += (pdy / pdist) * lean;
-              }
-            }
-            const p = xyToSvg(drawX, drawY);
+            const p = xyToSvg(ag.x, ag.y);
             const color = AGENT_STATE_COLOR[ag.state] ?? "rgba(100,180,255,0.7)";
             const label = AGENT_STATE_LABEL_JA[ag.state] ?? "";
             return (
@@ -443,18 +494,18 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
                     x1={p.x} y1={p.y}
                     x2={xyToSvg(ag.targetX, ag.targetY).x}
                     y2={xyToSvg(ag.targetX, ag.targetY).y}
-                    stroke={color} strokeWidth="0.8" strokeDasharray="3,3" opacity="0.3"
+                    stroke={color} strokeWidth="1.0" strokeDasharray="3,3" opacity="0.45"
                   />
                 )}
                 {/* 野手ドット */}
-                <circle cx={p.x} cy={p.y} r={7} fill={color} stroke="white" strokeWidth="1" opacity="0.85" />
+                <circle cx={p.x} cy={p.y} r={9} fill={color} stroke="white" strokeWidth="1" opacity="0.85" />
                 {/* ポジション略称 */}
-                <text x={p.x} y={p.y + 3} textAnchor="middle" fill="white" fontSize="8" fontWeight="bold">
+                <text x={p.x} y={p.y + 3.5} textAnchor="middle" fill="white" fontSize="9" fontWeight="bold">
                   {POS_SHORT_JA[ag.pos] ?? ag.pos}
                 </text>
                 {/* 状態ラベル */}
                 {label && (
-                  <text x={p.x} y={p.y + 14} textAnchor="middle" fill={color} fontSize="7" opacity="0.8">
+                  <text x={p.x} y={p.y + 15} textAnchor="middle" fill={color} fontSize="8" opacity="0.9">
                     {label}
                   </text>
                 )}
@@ -467,13 +518,52 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
           const p = xyToSvg(coord.x, coord.y);
           return (
             <g key={pos}>
-              <circle cx={p.x} cy={p.y} r={7} fill="rgba(100,180,255,0.55)" stroke="rgba(100,180,255,0.9)" strokeWidth="1" />
-              <text x={p.x} y={p.y + 3} textAnchor="middle" fill="rgba(200,230,255,0.9)" fontSize="8" fontWeight="bold">
+              <circle cx={p.x} cy={p.y} r={9} fill="rgba(100,180,255,0.55)" stroke="rgba(100,180,255,0.9)" strokeWidth="1" />
+              <text x={p.x} y={p.y + 3.5} textAnchor="middle" fill="rgba(200,230,255,0.9)" fontSize="9" fontWeight="bold">
                 {POS_SHORT_JA[pos] ?? pos}
               </text>
             </g>
           );
         });
+      })()}
+
+      {/* 走者（最前面描画 — 野手より上） */}
+      {(() => {
+        const runners = (frame as AgentTimelineEntry & { runners?: RunnerSnapshot[] })?.runners;
+        if (runners && runners.length > 0 && isAnimating) {
+          return runners.map((r, i) => {
+            const p = xyToSvg(r.x, r.y);
+            const color = RUNNER_STATE_COLOR[r.state] ?? "#86efac";
+            const isOut = r.state === "OUT";
+            const isSafe = r.state === "SAFE";
+            return (
+              <g key={`runner-${i}`}>
+                {isOut && (
+                  <>
+                    <circle cx={p.x} cy={p.y} r={13} fill="none" stroke="#ef4444" strokeWidth="1.5" opacity="0.35" />
+                    <circle cx={p.x} cy={p.y} r={9} fill="none" stroke="#ef4444" strokeWidth="2.5" opacity="0.6" />
+                    {/* ×マーク */}
+                    <line x1={p.x - 4} y1={p.y - 4} x2={p.x + 4} y2={p.y + 4} stroke="#ef4444" strokeWidth="2" opacity="0.8" />
+                    <line x1={p.x + 4} y1={p.y - 4} x2={p.x - 4} y2={p.y + 4} stroke="#ef4444" strokeWidth="2" opacity="0.8" />
+                  </>
+                )}
+                {isSafe && (
+                  <circle cx={p.x} cy={p.y} r={9} fill="none" stroke="#3b82f6" strokeWidth="2" opacity="0.5" />
+                )}
+                <circle cx={p.x} cy={p.y} r={7} fill={color} stroke="white" strokeWidth="1.5" opacity={isOut ? 0.7 : 1.0} />
+                <text x={p.x} y={p.y + 3} textAnchor="middle" fill="white" fontSize="7" fontWeight="bold">R</text>
+              </g>
+            );
+          });
+        }
+        if (log.basesBeforePlay) {
+          return log.basesBeforePlay.map((occupied, baseIdx) => {
+            if (!occupied) return null;
+            const p = BASE_SVG[baseIdx + 1];
+            return <circle key={baseIdx} cx={p.x} cy={p.y} r={7} fill="#22c55e" stroke="white" strokeWidth="1.5" />;
+          });
+        }
+        return null;
       })()}
 
       {/* 軌跡 */}
@@ -482,9 +572,9 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
           points={trailPolyline}
           fill="none"
           stroke={dotColor(log.result)}
-          strokeWidth="1.2"
+          strokeWidth="1.8"
           strokeDasharray={isGrounder ? "3,3" : "none"}
-          opacity="0.45"
+          opacity="0.65"
         />
       )}
 
@@ -500,13 +590,28 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
         </>
       )}
 
+      {/* ボール残像（直近2-3フレームの薄い円） */}
+      {ballSvgPos && isAnimating && currentTime < totalTime && !ballCaught && trailEnd >= 3 && (
+        <>
+          {[3, 2, 1].map((offset, i) => {
+            const idx = trailEnd - offset;
+            if (idx < 0) return null;
+            const pt = trailPoints[idx];
+            if (!pt) return null;
+            const opacity = 0.12 + i * 0.08;
+            const r = ballRadius * (0.5 + i * 0.15);
+            return <circle key={`afterimage-${i}`} cx={pt.x} cy={pt.y} r={r} fill={dotColor(log.result)} opacity={opacity} />;
+          })}
+        </>
+      )}
+
       {/* ボール本体 */}
       {ballSvgPos && isAnimating && currentTime < totalTime && !ballCaught && (
         <>
           {isBouncePhase ? (
             <>
               {bounceOnGround && (
-                <circle cx={ballSvgPos.x} cy={ballSvgPos.y} r={7} fill="none" stroke={dotColor(log.result)} strokeWidth="1.2" opacity="0.5" />
+                <circle cx={ballSvgPos.x} cy={ballSvgPos.y} r={8} fill="none" stroke={dotColor(log.result)} strokeWidth="1.2" opacity="0.5" />
               )}
               <circle
                 cx={ballSvgPos.x} cy={ballSvgPos.y - bounceHeightRatio * 8}
@@ -531,7 +636,7 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
           ) : (
             <circle
               cx={ballSvgPos.x} cy={ballSvgPos.y}
-              r={ballRadius} fill={isGrounder ? "white" : dotColor(log.result)} stroke={isGrounder ? "#9ca3af" : "white"} strokeWidth="1" opacity="0.95"
+              r={ballRadius} fill={dotColor(log.result)} stroke="white" strokeWidth="1" opacity="0.95"
             />
           )}
         </>
@@ -645,6 +750,13 @@ export function LargeFieldView({ log, currentTime, totalTime, distScale = 1, cla
             <circle key={i} cx={14 + i * 14} cy={28} r={5} fill={i < outsBeforePlay ? "#6b7280" : "none"} stroke="#9ca3af" strokeWidth="1.2" />
           ))}
         </g>
+      )}
+
+      {/* 経過時間表示 */}
+      {isAnimating && (
+        <text x={VIEW_SIZE - 8} y={VIEW_SIZE - 8} textAnchor="end" fill="#9ca3af" fontSize="11" fontFamily="monospace">
+          {currentTime.toFixed(2)}s
+        </text>
       )}
 
       {/* 送球ボールスナップショット (Phase 2 ThrowBall) */}

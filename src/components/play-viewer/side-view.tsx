@@ -142,12 +142,18 @@ export function LargeSideView({ log, currentTime, totalFlightTime, isFenceHit, i
           return <line x1={sx1} y1={sy1} x2={sx2} y2={sy2} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 3" opacity={0.6} />;
         })()}
         {currentTime >= 0 && currentTime < groundBallTotalTime && (
-          <circle cx={ballSvgX} cy={ballSvgY} r={4} fill="#ef4444" stroke="white" strokeWidth={1} />
+          <circle cx={ballSvgX} cy={ballSvgY} r={5} fill="#ef4444" stroke="white" strokeWidth={1} />
         )}
         {totalDist > 0 && (() => {
           const { sx } = toSvg(totalDist, 0);
           return <text x={sx} y={groundY - 8} textAnchor="middle" fill="#22c55e" fontSize="11" fontWeight="bold">{Math.round(totalDist)}m</text>;
         })()}
+        {/* 経過時間表示 */}
+        {currentTime >= 0 && (
+          <text x={svgW - 8} y={svgH - 8} textAnchor="end" fill="#9ca3af" fontSize="10" fontFamily="monospace">
+            {currentTime.toFixed(2)}s
+          </text>
+        )}
       </svg>
     );
   }
@@ -270,14 +276,14 @@ export function LargeSideView({ log, currentTime, totalFlightTime, isFenceHit, i
       {fenceSx >= padLeft && fenceSx <= svgW - padRight && (
         <line x1={fenceSx} y1={fenceTopSy} x2={fenceSx} y2={fenceBottomSy} stroke="#f59e0b" strokeWidth="2" />
       )}
-      <path d={pathD} fill="none" stroke={color} strokeWidth="2" opacity={isAnimating ? 0.35 : 1} />
+      <path d={pathD} fill="none" stroke={color} strokeWidth="2" opacity={isAnimating ? 0.55 : 1} />
       {bouncePolyline && (
-        <polyline points={bouncePolyline} fill="none" stroke={color} strokeWidth="1.5" opacity={isAnimating ? 0.25 : 0.5} />
+        <polyline points={bouncePolyline} fill="none" stroke={color} strokeWidth="1.5" opacity={isAnimating ? 0.40 : 0.5} />
       )}
       {showRollLine && (() => {
         const { sx: sx1, sy: sy1 } = toSvgCoord(bounceEndX, 0);
         const { sx: sx2, sy: sy2 } = toSvgCoord(totalDist, 0);
-        return <line x1={sx1} y1={sy1} x2={sx2} y2={sy2} stroke={color} strokeWidth="1" strokeDasharray="4 3" opacity={isAnimating ? 0.2 : 0.4} />;
+        return <line x1={sx1} y1={sy1} x2={sx2} y2={sy2} stroke={color} strokeWidth="1" strokeDasharray="4 3" opacity={isAnimating ? 0.35 : 0.4} />;
       })()}
       <circle cx={peakSx} cy={peakSy} r="3" fill={color} opacity={isAnimating ? 0.35 : 1} />
       <text x={peakSx} y={peakSy - 6} textAnchor="middle" fill="#d1d5db" fontSize="9">{peak.y.toFixed(1)}m</text>
@@ -290,7 +296,13 @@ export function LargeSideView({ log, currentTime, totalFlightTime, isFenceHit, i
       <text x={padLeft - 5} y={groundSy + 3} textAnchor="end" fill="#9ca3af" fontSize="8">0</text>
       <text x={landSx} y={groundSy - 8} textAnchor="middle" fill="#d1d5db" fontSize="10" fontWeight="bold">{totalDist.toFixed(0)}m</text>
       {sideBallPos && (
-        <circle cx={sideBallPos.sx} cy={sideBallPos.sy} r={4} fill="white" stroke="#ef4444" strokeWidth="1" />
+        <circle cx={sideBallPos.sx} cy={sideBallPos.sy} r={5} fill="white" stroke="#ef4444" strokeWidth="1" />
+      )}
+      {/* 経過時間表示 */}
+      {isAnimating && (
+        <text x={svgW - 8} y={svgH - 8} textAnchor="end" fill="#9ca3af" fontSize="10" fontFamily="monospace">
+          {currentTime.toFixed(2)}s
+        </text>
       )}
     </svg>
   );
