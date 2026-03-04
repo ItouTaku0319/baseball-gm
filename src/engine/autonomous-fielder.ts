@@ -98,6 +98,9 @@ const CHASE_ARRIVAL_MARGIN_CAP = 0.3;
 /** ゴロ時のカバースコア減衰。追跡が最優先で、カバーは補助的行動 */
 const GROUND_BALL_COVER_DAMPING = 0.5;
 
+/** 追球ヒステリシス: PURSUING中の野手は、他アクションがこのマージン分上回らない限り追球を維持 */
+const PURSUIT_HYSTERESIS = 0.15;
+
 /** CFのフライ追跡ボーナス。実際の野球ではCFが外野フライの優先権を持ち守備機会が最多 */
 const CF_FLY_PURSUIT_BONUS = 0.08;
 
@@ -289,6 +292,14 @@ export function autonomousDecide(
   scores.push(...coverScores);
   scores.push(calcBackupScore(agent, observation, trajectory, bases));
   scores.push(calcHoldScore(agent, trajectory));
+
+  // 追球中の野手がbackupに直接遷移するのを防止（不自然な逆走を回避）
+  // → cover or hold に自然に流れる
+  if (agent.state === "PURSUING") {
+    for (const s of scores) {
+      if (s.action === "backup") s.score = -1;
+    }
+  }
 
   applyDecision(agent, scores, trajectory);
 }
@@ -653,6 +664,15 @@ function applyDecision(
   // 降順ソート
   const sorted = [...scores].sort((a, b) => b.score - a.score);
   const best = sorted[0];
+
+  // ヒステリシス: PURSUING中の野手は、他のアクションが明確に上回らない限り追球を維持
+  if (agent.state === "PURSUING" && best && best.action !== "pursuit") {
+    const pursuitScore = scores.find(s => s.action === "pursuit");
+    if (pursuitScore && pursuitScore.score > 0 && best.score < pursuitScore.score + PURSUIT_HYSTERESIS) {
+      applyPursuit(agent, pursuitScore, trajectory);
+      return;
+    }
+  }
 
   if (!best || best.score < 0) {
     // 全て score < 0（到達不可等） → hold にフォールバック
