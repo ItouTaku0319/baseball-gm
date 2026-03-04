@@ -461,6 +461,11 @@ function calcPursuitScore(
     }
   }
 
+  // 遅いゴロ（キャッチャーゴロ等）: 複数野手が収束すべき場面のためペナルティ軽減
+  if (trajectory.isGroundBall && trajectory.landingDistance < SLOW_GROUNDER_DISTANCE_THRESHOLD) {
+    coordPenalty = Math.min(coordPenalty, 0.15);
+  }
+
   // CFはフライ追跡で優先権ボーナス（実際の野球ではCFが最広の守備範囲を持つ）
   const cfBonus = (agent.pos === 8 && !trajectory.isGroundBall) ? CF_FLY_PURSUIT_BONUS : 0;
 
@@ -524,8 +529,8 @@ function calcCoverScores(
     const distToBase = vec2Distance(agent.currentPos, entry.pos);
     const coverProximity = clamp(1 - distToBase / COVER_PROXIMITY_NORM_DIST, 0, 1);
 
-    // ランナーなし時: ホームカバーは不要（走者が帰塁する場面がない）
-    if (entry.name === "home" && emptyBases) {
+    // ランナーなし時: ホーム・3塁カバーは不要（走者が帰塁する場面がない）
+    if ((entry.name === "home" || entry.name === "third") && emptyBases) {
       results.push({ action: "cover", score: 0, target: entry.pos, coverBase: entry.name });
       continue;
     }
@@ -590,9 +595,28 @@ function calcBackupScore(
   // 自分がバックアップ位置に近いかスコア化
   const distToBackup = vec2Distance(agent.currentPos, backupPos);
   const backupProximity = clamp(1 - distToBackup / COVER_PROXIMITY_NORM_DIST, 0, 1);
+  const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
+
+  // ゴロ→1塁送球: 1塁側(x>=0)の野手はオーバースロー備えバックアップ強化
+  // 2B・RFが1塁後方カバーに入る動きを再現
+  if (trajectory.isGroundBall && throwTarget === "first") {
+    const agentHome = agent.homePos ?? agent.currentPos;
+    if (agentHome.x >= 0) {
+      const wideProximity = clamp(1 - distToBackup / 70, 0, 1);
+      const score = wideProximity * 0.6 + 0.1;
+      if (distToLanding >= BACKUP_DRIFT_THRESHOLD) {
+        const driftRatio = DRIFT_RATIO_MIN + (agent.skill.fielding / 100) * (DRIFT_RATIO_MAX - DRIFT_RATIO_MIN);
+        const driftTarget = {
+          x: agent.currentPos.x + (backupPos.x - agent.currentPos.x) * driftRatio,
+          y: agent.currentPos.y + (backupPos.y - agent.currentPos.y) * driftRatio,
+        };
+        return { action: "backup", score, target: driftTarget };
+      }
+      return { action: "backup", score, target: backupPos };
+    }
+  }
 
   // 着地点から遠い場合はドリフト（全野手適用）
-  const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
   if (distToLanding >= BACKUP_DRIFT_THRESHOLD) {
     const driftRatio = DRIFT_RATIO_MIN + (agent.skill.fielding / 100) * (DRIFT_RATIO_MAX - DRIFT_RATIO_MIN);
     const driftTarget = {
