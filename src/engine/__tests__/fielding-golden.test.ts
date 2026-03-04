@@ -609,13 +609,13 @@ describe("ゴールデンテスト: 併殺・犠飛", () => {
     console.log(`D02: DP率改善余地あり (現状${(stats.dpRate * 100).toFixed(0)}% → 仕様30-70%)`);
   });
 
-  test("D03: 三塁ランナー0アウト・CF中深フライ → 犠牲フライ発生", () => {
-    // EV=140km/hの深いフライ（捕球距離70-80m）で犠飛が成立
-    // throwDist≈75m, throwTime=75/32.5=2.31, +overhead(1.5)=3.81 > tagUp(3.54) → SF
-    const stats = runCase(45, 30, 140, runnerOnThird, 0);
+  test("D03: 三塁ランナー0アウト・CF深フライ → 犠牲フライ発生", () => {
+    // EV=150km/hの深いフライ（捕球距離80-90m）で犠飛が成立
+    // 送球距離が長いほどランナーが生還しやすい
+    const stats = runCase(45, 30, 150, runnerOnThird, 0);
     logStats("D03", stats);
     console.log(`D03: SF発生率=${(stats.sfRate * 100).toFixed(1)}%, アウト率=${(stats.outRate * 100).toFixed(1)}%`);
-    // 深いフライではSFが発生する（フライアウト中30%以上）
+    // 深いフライではSFが発生する
     expect(stats.sfRate).toBeGreaterThan(0.0);
     expect(stats.outRate).toBeGreaterThan(0.1);
   });

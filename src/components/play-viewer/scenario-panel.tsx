@@ -90,8 +90,11 @@ function calcTotalTime(log: AtBatLog): number {
   }
 
   // 送球タイムライン
+  // agentTimelineにthrowBallデータがある場合は送球がタイムライン内で完結しているため
+  // throwEndTの追加パディングは不要（二重送球修正と連動）
   let throwEndT = 0;
-  if (log.throwPlays && log.agentTimeline && log.agentTimeline.length > 0) {
+  const hasTimelineThrow = log.agentTimeline?.some(f => f.throwBall);
+  if (log.throwPlays && log.agentTimeline && log.agentTimeline.length > 0 && !hasTimelineThrow) {
     const last = log.agentTimeline[log.agentTimeline.length - 1];
     let currentT = last.t + 0.35;
     for (const play of log.throwPlays) {

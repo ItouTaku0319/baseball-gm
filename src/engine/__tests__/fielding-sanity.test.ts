@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { calcBallLanding, evaluateFielders, DEFAULT_FIELDER_POSITIONS } from "../fielding-ai";
 import { classifyBattedBallType, estimateDistance, getFenceDistance } from "../simulation";
-import { GRAVITY, BAT_HEIGHT, FENCE_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR } from "../physics-constants";
+import { GRAVITY, BAT_HEIGHT, FENCE_HEIGHT, DRAG_FACTOR, FLIGHT_TIME_FACTOR, RUNNER_SPEED_BASE, RUNNER_SPEED_SCALE } from "../physics-constants";
 import type { Player } from "../../models/player";
 import type { BallLanding, FielderDecision } from "../fielding-ai";
 
@@ -138,7 +138,7 @@ beforeAll(() => {
           let caught = false;
           for (const f of interceptors) {
             if (f.timeToReach <= f.ballArrivalTime) {
-              const runnerSpeed = 6.5 + 50 / 100 * 2.5;
+              const runnerSpeed = RUNNER_SPEED_BASE + 50 / 100 * RUNNER_SPEED_SCALE;
               const timePerBase = BASE_LENGTH / runnerSpeed;
               const runnerTo1B = 0.7 + timePerBase;
               const secureTime = 0.2 + (1 - 50 / 100) * 0.2;
@@ -163,7 +163,7 @@ beforeAll(() => {
               if (dd < minDist) { minDist = dd; chaseF = d; }
             }
             if (chaseF) {
-              const runnerSpeed = 6.5 + 50 / 100 * 2.5;
+              const runnerSpeed = RUNNER_SPEED_BASE + 50 / 100 * RUNNER_SPEED_SCALE;
               const timePerBase = BASE_LENGTH / runnerSpeed;
               const runnerTo1B = 0.7 + timePerBase;
               const secureTime = 0.15 + (1 - 50 / 100) * 0.15;
