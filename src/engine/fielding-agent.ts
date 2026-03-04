@@ -2346,8 +2346,8 @@ function buildPhase2Result(
     ?? agents.find(a => a.state === "THROWING" || a.state === "HOLDING" || a.state === "SECURING")?.pos
     ?? (8 as FielderPosition);
 
-  // --- ゴロ捕球成功 ---
-  if (catchSuccess && trajectory.isGroundBall) {
+  // --- ゴロアウト判定（捕球成功 or リトリーバー送球アウト） ---
+  if (trajectory.isGroundBall && (catchSuccess || outsAdded > 0)) {
     // DP判定: 2アウト以上追加
     if (outsAdded >= 2) {
       return {
