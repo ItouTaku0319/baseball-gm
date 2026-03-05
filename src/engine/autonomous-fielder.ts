@@ -618,6 +618,15 @@ function calcBackupScore(
       return { action: "backup", score, target: backupPos };
     }
 
+    // キャッチャー(ホームプレート付近): ランナーなし時は1塁カバーに走る
+    const emptyBases = !bases.first && !bases.second && !bases.third;
+    if (agentHome.y < 5 && emptyBases) {
+      // 1塁ベース後方のファール側（オーバースロー備え）
+      const targetPos = { x: BASE_POSITIONS.first.x + 4, y: BASE_POSITIONS.first.y - 4 };
+      const score = 0.40;
+      return { action: "backup", score, target: targetPos };
+    }
+
     // 外野手(LF・CF): 内野方向へ前進バックアップ
     if (agentHome.y > 60) {
       const isLeftSide = agentHome.x < -10;
