@@ -597,18 +597,18 @@ function calcBackupScore(
   const backupProximity = clamp(1 - distToBackup / COVER_PROXIMITY_NORM_DIST, 0, 1);
   const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
 
-  // ゴロ→1塁送球: 1塁側(x>=0)の野手はオーバースロー備えバックアップ強化
-  // 2B・RFが1塁後方ファールゾーン付近のカバーに入る動きを再現
+  // ゴロ→1塁送球: フォーメーション別バックアップ
   if (trajectory.isGroundBall && throwTarget === "first") {
     const agentHome = agent.homePos ?? agent.currentPos;
-    if (agentHome.x >= 0) {
+    const backupDriftMin = 0.20;
+    const backupDriftMax = 0.45;
+    const driftRatio = backupDriftMin + (awareness / 100) * (backupDriftMax - backupDriftMin);
+
+    // 1塁側内野手(2B・RF): 1塁後方ファールゾーンのオーバースローカバー
+    if (agentHome.x > 5) {
       const wideProximity = clamp(1 - distToBackup / 70, 0, 1);
       const score = wideProximity * 0.6 + 0.1;
       if (distToLanding >= BACKUP_DRIFT_THRESHOLD) {
-        // 守備意識が高いほどバックアップ位置に深く入る（ファールゾーンまで）
-        const backupDriftMin = 0.20;
-        const backupDriftMax = 0.45;
-        const driftRatio = backupDriftMin + (awareness / 100) * (backupDriftMax - backupDriftMin);
         const driftTarget = {
           x: agent.currentPos.x + (backupPos.x - agent.currentPos.x) * driftRatio,
           y: agent.currentPos.y + (backupPos.y - agent.currentPos.y) * driftRatio,
@@ -616,6 +616,23 @@ function calcBackupScore(
         return { action: "backup", score, target: driftTarget };
       }
       return { action: "backup", score, target: backupPos };
+    }
+
+    // 外野手(LF・CF): 内野方向へ前進バックアップ
+    if (agentHome.y > 60) {
+      const isLeftSide = agentHome.x < -10;
+      // LF→3塁方面, CF→2塁方面
+      const targetPos = isLeftSide
+        ? { x: -19, y: 40 }
+        : { x: 0, y: 50 };
+      const distToTarget = vec2Distance(agent.currentPos, targetPos);
+      const proximity = clamp(1 - distToTarget / 70, 0, 1);
+      const score = proximity * 0.5 + 0.15;
+      const driftTarget = {
+        x: agent.currentPos.x + (targetPos.x - agent.currentPos.x) * driftRatio,
+        y: agent.currentPos.y + (targetPos.y - agent.currentPos.y) * driftRatio,
+      };
+      return { action: "backup", score, target: driftTarget };
     }
   }
 
