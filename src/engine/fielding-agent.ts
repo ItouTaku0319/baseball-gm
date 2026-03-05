@@ -158,8 +158,21 @@ export function resolvePlayWithAgents(
   const agents = createAgents(fielderMap, trajectory);
   const timeline: AgentTimelineEntry[] = [];
 
-  // ランナー早期初期化（統一ループ準備: Phase 1中はHOLDINGのまま）
+  // ランナー早期初期化
   const earlyRunners = initRunnersAtBatStart(bases);
+
+  // ゴロ時: フォースランナーをマーク（Phase 1中に走塁開始する）
+  if (trajectory.isGroundBall) {
+    let forced = true;
+    for (const runner of earlyRunners) {
+      if (!forced) break;
+      runner.isForced = true;
+      runner.targetBase = runner.fromBase + 1;
+      // フォース連鎖: 前の塁が埋まっている限り続く
+      if (runner.fromBase === 1 && !bases.second) forced = false;
+      if (runner.fromBase === 2 && !bases.third) forced = false;
+    }
+  }
 
   // 統一ボール状態
   const restPosForBall = options?.fenceDistance !== undefined
@@ -368,7 +381,7 @@ export function resolvePlayWithAgents(
             }
             for (const runner of earlyRunners) {
               phase1Runners.push({
-                fromBase: runner.fromBase, targetBase: runner.fromBase,
+                fromBase: runner.fromBase, targetBase: runner.targetBase,
                 x: runner.currentPos.x, y: runner.currentPos.y, state: runner.state,
               });
             }
@@ -424,8 +437,19 @@ export function resolvePlayWithAgents(
           // ランナー初期化（tを渡してバッターのヘッドスタートを計算）
           runners = initRunners(batter, bases, trajectory, catchSuccess, t);
 
-          // フライ捕球: earlyRunnerのリード位置をPhase 2ランナーに転写
-          if (catchSuccess && !trajectory.isGroundBall) {
+          // earlyRunnerの走塁進捗をPhase 2ランナーに転写
+          if (trajectory.isGroundBall) {
+            for (const runner of runners) {
+              if (runner.isBatter) continue;
+              const early = earlyRunners.find(er => er.player === runner.player);
+              if (early && early.progress > 0) {
+                runner.progress = early.progress;
+                runner.currentPos.x = early.currentPos.x;
+                runner.currentPos.y = early.currentPos.y;
+              }
+            }
+          } else if (catchSuccess) {
+            // フライ捕球: earlyRunnerのリード位置を転写
             for (const runner of runners) {
               const early = earlyRunners.find(er => er.player === runner.player);
               if (early && (early.state === "RETREATING" || early.state === "LEADING")) {
@@ -493,8 +517,23 @@ export function resolvePlayWithAgents(
         prevBallPos.y = ballPos.y;
       }
 
-      // ランナーリード行動（毎ティック、フライ時のみ）
-      if (!trajectory.isGroundBall) {
+      // ランナー行動（毎ティック）
+      if (trajectory.isGroundBall) {
+        // ゴロ: フォースランナーはコンタクト後に走塁開始
+        for (const runner of earlyRunners) {
+          if (runner.isForced && t >= BATTER_SWING_TO_RUN_TIME) {
+            if (runner.state === "HOLDING") runner.state = "RUNNING";
+            if (runner.state === "RUNNING") {
+              runner.progress += (runner.speed * unifiedDt) / BASE_LENGTH;
+              if (runner.progress >= 1.0) runner.progress = 1.0;
+              const pos = interpolateBasepath(runner.fromBase, runner.targetBase, runner.progress);
+              runner.currentPos.x = pos.x;
+              runner.currentPos.y = pos.y;
+            }
+          }
+        }
+      } else {
+        // フライ: リード行動
         for (const runner of earlyRunners) {
           runnerAutonomousDecide(runner, unifiedBall, agents, t, rng);
           moveLeadingRunner(runner, unifiedDt);
@@ -731,7 +770,7 @@ export function resolvePlayWithAgents(
           }
           for (const runner of earlyRunners) {
             phase1Runners.push({
-              fromBase: runner.fromBase, targetBase: runner.fromBase,
+              fromBase: runner.fromBase, targetBase: runner.targetBase,
               x: runner.currentPos.x, y: runner.currentPos.y, state: runner.state,
             });
           }
@@ -2359,19 +2398,7 @@ function buildPhase2Result(
       };
     }
 
-    // 打者走者がアウトになったか？
-    const batterRunner = runners.find(r => r.isBatter);
-
-    // FC判定: 打者走者はセーフだが他の走者がアウト
-    if (outsAdded > 0 && batterRunner && batterRunner.state === "SAFE") {
-      return {
-        result: "fieldersChoice",
-        fielderPos,
-        throwPlays: throwPlays.length > 0 ? throwPlays : undefined,
-      };
-    }
-
-    // 通常アウト
+    // ゴロでアウト取得 → groundout（フォースアウト含む）
     if (outsAdded > 0) {
       return {
         result: "groundout",
