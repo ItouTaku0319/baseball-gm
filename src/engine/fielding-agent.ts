@@ -162,15 +162,14 @@ export function resolvePlayWithAgents(
   const earlyRunners = initRunnersAtBatStart(bases);
 
   // ゴロ時: フォースランナーをマーク（Phase 1中に走塁開始する）
+  // フォース連鎖: 1塁から連続して埋まっている塁のみ強制走塁
   if (trajectory.isGroundBall) {
-    let forced = true;
+    const forceThrough = bases.first ? (bases.second ? (bases.third ? 3 : 2) : 1) : 0;
     for (const runner of earlyRunners) {
-      if (!forced) break;
-      runner.isForced = true;
-      runner.targetBase = runner.fromBase + 1;
-      // フォース連鎖: 前の塁が埋まっている限り続く
-      if (runner.fromBase === 1 && !bases.second) forced = false;
-      if (runner.fromBase === 2 && !bases.third) forced = false;
+      if (runner.fromBase <= forceThrough) {
+        runner.isForced = true;
+        runner.targetBase = runner.fromBase + 1;
+      }
     }
   }
 
