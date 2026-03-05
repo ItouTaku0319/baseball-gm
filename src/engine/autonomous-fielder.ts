@@ -598,14 +598,17 @@ function calcBackupScore(
   const distToLanding = vec2Distance(agent.currentPos, trajectory.landingPos);
 
   // ゴロ→1塁送球: 1塁側(x>=0)の野手はオーバースロー備えバックアップ強化
-  // 2B・RFが1塁後方カバーに入る動きを再現
+  // 2B・RFが1塁後方ファールゾーン付近のカバーに入る動きを再現
   if (trajectory.isGroundBall && throwTarget === "first") {
     const agentHome = agent.homePos ?? agent.currentPos;
     if (agentHome.x >= 0) {
       const wideProximity = clamp(1 - distToBackup / 70, 0, 1);
       const score = wideProximity * 0.6 + 0.1;
       if (distToLanding >= BACKUP_DRIFT_THRESHOLD) {
-        const driftRatio = DRIFT_RATIO_MIN + (agent.skill.fielding / 100) * (DRIFT_RATIO_MAX - DRIFT_RATIO_MIN);
+        // 守備意識が高いほどバックアップ位置に深く入る（ファールゾーンまで）
+        const backupDriftMin = 0.20;
+        const backupDriftMax = 0.45;
+        const driftRatio = backupDriftMin + (awareness / 100) * (backupDriftMax - backupDriftMin);
         const driftTarget = {
           x: agent.currentPos.x + (backupPos.x - agent.currentPos.x) * driftRatio,
           y: agent.currentPos.y + (backupPos.y - agent.currentPos.y) * driftRatio,
@@ -945,10 +948,10 @@ function estimateArrivalTime(
 /** バックアップ位置計算 */
 function calcBackupPos(trajectory: BallTrajectory, throwTarget: keyof typeof BASE_POSITIONS): Vec2 {
   const landingPos = trajectory.landingPos;
-  const backupDist = 8;
 
   if (trajectory.isGroundBall) {
-    // ゴロ: 送球先ベースの後方（オーバースロー備え）
+    // ゴロ: 送球先ベースの後方ファールゾーン付近（オーバースロー備え）
+    const backupDist = 15;
     const basePos = BASE_POSITIONS[throwTarget];
     const dx = basePos.x - landingPos.x;
     const dy = basePos.y - landingPos.y;
@@ -969,6 +972,7 @@ function calcBackupPos(trajectory: BallTrajectory, throwTarget: keyof typeof BAS
   }
 
   // フライ/ライナー: 着弾点の打球方向後方（落球備え）
+  const backupDist = 8;
   const angleRad = ((trajectory.direction - 45) * Math.PI) / 180;
   return {
     x: landingPos.x + backupDist * Math.sin(angleRad),
