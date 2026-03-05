@@ -342,6 +342,7 @@ export const UNIFIED_DT = 0.05;                   // 統一タイムステップ
 export const FIELDER_DECISION_INTERVAL = 2;        // 野手判断間引き（2ティック=0.1秒相当）
 export const RUNNER_LEAD_DISTANCE = 3.0;           // 通常リード距離(m)
 export const RUNNER_LEAD_SPEED = 3.0;              // リード時移動速度(m/s)
+export const RUNNER_GROUND_HESITATION_DIST = 5.0;  // ゴロ時非フォースランナー飛び出し距離(m)
 export const RUNNER_RETREAT_SPEED_RATIO = 0.9;     // 帰塁速度比率
 export const RUNNER_LEAD_REACTION_TIME = 0.3;      // フライ時リード開始までの反応遅延(秒)
 

@@ -75,6 +75,8 @@ import {
   RECEIVER_WAIT_TOLERANCE,
   RECEIVER_MAX_WAIT_TIME,
   GROUND_BALL_APPROACH_WAIT_DIST,
+  RUNNER_GROUND_HESITATION_DIST,
+  RUNNER_LEAD_SPEED,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -441,10 +443,17 @@ export function resolvePlayWithAgents(
             for (const runner of runners) {
               if (runner.isBatter) continue;
               const early = earlyRunners.find(er => er.player === runner.player);
-              if (early && early.progress > 0) {
+              if (!early) continue;
+              if (early.isForced && early.progress > 0) {
+                // フォースランナー: 走塁進捗を転写
                 runner.progress = early.progress;
                 runner.currentPos.x = early.currentPos.x;
                 runner.currentPos.y = early.currentPos.y;
+              } else if (!early.isForced && early.state === "LEADING") {
+                // 非フォースランナー: 飛び出し位置から帰塁開始
+                runner.currentPos.x = early.currentPos.x;
+                runner.currentPos.y = early.currentPos.y;
+                runner.state = "RETREATING";
               }
             }
           } else if (catchSuccess) {
@@ -518,9 +527,11 @@ export function resolvePlayWithAgents(
 
       // ランナー行動（毎ティック）
       if (trajectory.isGroundBall) {
-        // ゴロ: フォースランナーはコンタクト後に走塁開始
         for (const runner of earlyRunners) {
-          if (runner.isForced && t >= BATTER_SWING_TO_RUN_TIME) {
+          if (t < BATTER_SWING_TO_RUN_TIME) continue;
+
+          if (runner.isForced) {
+            // フォースランナー: 全力走塁
             if (runner.state === "HOLDING") runner.state = "RUNNING";
             if (runner.state === "RUNNING") {
               runner.progress += (runner.speed * unifiedDt) / BASE_LENGTH;
@@ -528,6 +539,37 @@ export function resolvePlayWithAgents(
               const pos = interpolateBasepath(runner.fromBase, runner.targetBase, runner.progress);
               runner.currentPos.x = pos.x;
               runner.currentPos.y = pos.y;
+            }
+          } else {
+            // 非フォースランナー: 飛び出し→帰塁（行けるか？→やめた）
+            if (runner.state === "HOLDING") {
+              runner.state = "LEADING";
+            }
+            if (runner.state === "LEADING") {
+              const nextBase = runner.fromBase + 1;
+              if (nextBase <= 4) {
+                const fromPos = getBasePosition(runner.fromBase);
+                const toPos = getBasePosition(nextBase);
+                const dx = toPos.x - fromPos.x;
+                const dy = toPos.y - fromPos.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const maxFraction = RUNNER_GROUND_HESITATION_DIST / dist;
+                const targetX = fromPos.x + dx * maxFraction;
+                const targetY = fromPos.y + dy * maxFraction;
+                const diffX = targetX - runner.currentPos.x;
+                const diffY = targetY - runner.currentPos.y;
+                const diffDist = Math.sqrt(diffX * diffX + diffY * diffY);
+                if (diffDist > 0.05) {
+                  const moveDist = RUNNER_LEAD_SPEED * unifiedDt;
+                  if (moveDist >= diffDist) {
+                    runner.currentPos.x = targetX;
+                    runner.currentPos.y = targetY;
+                  } else {
+                    runner.currentPos.x += (diffX / diffDist) * moveDist;
+                    runner.currentPos.y += (diffY / diffDist) * moveDist;
+                  }
+                }
+              }
             }
           }
         }
