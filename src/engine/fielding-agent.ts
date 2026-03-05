@@ -681,9 +681,9 @@ export function resolvePlayWithAgents(
         }
       }
 
-      // カバー・復帰野手移動
+      // カバー・復帰・バックアップ野手移動
       for (const agent of agents) {
-        if (agent.state === "RECEIVING" || agent.state === "COVERING" || agent.state === "RETURNING") {
+        if (agent.state === "RECEIVING" || agent.state === "COVERING" || agent.state === "RETURNING" || agent.state === "BACKING_UP") {
           moveAgent(agent, unifiedDt);
         }
       }
