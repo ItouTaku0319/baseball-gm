@@ -2126,24 +2126,42 @@ function decideThrowTarget(
     forceCandidates.push({ runner, baseNum: targetBase, margin });
   }
 
-  // マージンが大きい（アウトにしやすい）順にソート
-  forceCandidates.sort((a, b) => b.margin - a.margin);
+  // 守備意識に基づくDP閾値: 意識高→積極的(0.1s余裕でOK)、低→慎重(0.5s必要)
+  const awareness = (holder.skill as { awareness?: number }).awareness ?? 50;
+  const dpMarginThreshold = 0.5 - (awareness / 100) * 0.4;
 
-  // DP狙い: 2アウト未満 & フォース走者が2人以上 → 先頭の塁（2塁）から処理
+  // DP狙い: 2アウト未満 & フォース走者が2人以上 → リードランナーから処理
   if (currentOuts < 2 && forceCandidates.length >= 2) {
-    // 2塁フォースから処理してDP狙い
-    const dpTarget = forceCandidates.find(c => c.baseNum === 2 && c.margin > 0.3);
-    if (dpTarget) {
-      const receiver = findReceiverForBase(dpTarget.baseNum, agents, holder.pos);
-      if (receiver) {
-        return { baseNum: dpTarget.baseNum, receiverAgent: receiver, throwDist: vec2Distance(holder.currentPos, getBasePosition(dpTarget.baseNum)) };
+    // 先の塁（リードランナー）から順に評価: 3塁→2塁
+    const dpCandidates = [...forceCandidates]
+      .filter(c => c.baseNum >= 2)
+      .sort((a, b) => b.baseNum - a.baseNum);
+    for (const dpTarget of dpCandidates) {
+      if (dpTarget.margin > dpMarginThreshold) {
+        const receiver = findReceiverForBase(dpTarget.baseNum, agents, holder.pos);
+        if (receiver) {
+          return { baseNum: dpTarget.baseNum, receiverAgent: receiver, throwDist: vec2Distance(holder.currentPos, getBasePosition(dpTarget.baseNum)) };
+        }
       }
     }
   }
 
-  // 最もアウトにしやすいフォース塁を選択
+  // リードランナー優先: マージンに余裕がある先の塁を優先
+  // 塁番号降順にソートし、余裕があれば先の塁を選択
+  const leadFirst = [...forceCandidates].sort((a, b) => b.baseNum - a.baseNum);
+  for (const cand of leadFirst) {
+    if (cand.margin > dpMarginThreshold) {
+      const receiver = findReceiverForBase(cand.baseNum, agents, holder.pos);
+      if (receiver) {
+        return { baseNum: cand.baseNum, receiverAgent: receiver, throwDist: vec2Distance(holder.currentPos, getBasePosition(cand.baseNum)) };
+      }
+    }
+  }
+
+  // フォールバック: マージンが少なくても最もアウトにしやすい塁
+  forceCandidates.sort((a, b) => b.margin - a.margin);
   for (const cand of forceCandidates) {
-    if (cand.margin > -0.1) { // 若干間に合わなくても投げる
+    if (cand.margin > -0.1) {
       const receiver = findReceiverForBase(cand.baseNum, agents, holder.pos);
       if (receiver) {
         return { baseNum: cand.baseNum, receiverAgent: receiver, throwDist: vec2Distance(holder.currentPos, getBasePosition(cand.baseNum)) };
