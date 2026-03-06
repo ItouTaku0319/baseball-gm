@@ -60,13 +60,40 @@ export interface ScenarioParams {
   deterministic?: boolean; // true=ノイズ無し決定的実行 (デフォルトtrue)
   outs?: number;           // 0-2 (デフォルト0)
   runners?: { first?: boolean; second?: boolean; third?: boolean };
+  fielderStats?: { speed?: number; fielding?: number; catching?: number; arm?: number; awareness?: number };
+  runnerStats?: { speed?: number; baseRunning?: number };
+  batterStats?: { speed?: number; baseRunning?: number };
+}
+
+function applyStats(player: Player, stats: Record<string, number | undefined>): Player {
+  const p = { ...player, batting: { ...player.batting } };
+  for (const [key, val] of Object.entries(stats)) {
+    if (val != null && key in p.batting) {
+      (p.batting as Record<string, number>)[key] = val;
+    }
+  }
+  return p;
 }
 
 export function generateScenarioLog(params: ScenarioParams): AtBatLog {
   const { exitVelocity, launchAngle, direction, deterministic = true, outs: paramOuts = 0, runners: runnerFlags } = params;
   const outs = Math.min(2, Math.max(0, paramOuts));
 
-  const d50Runner = createD50Player(4); // ランナー用D50選手
+  // 能力値上書き
+  const fs = params.fielderStats;
+  const customFielderMap = new Map<FielderPosition, Player>();
+  for (const pos of [1, 2, 3, 4, 5, 6, 7, 8, 9] as FielderPosition[]) {
+    let p = createD50Player(pos);
+    if (fs) p = applyStats(p, fs);
+    customFielderMap.set(pos, p);
+  }
+
+  let batter = createD50Player(3);
+  if (params.batterStats) batter = applyStats(batter, params.batterStats);
+
+  let d50Runner = createD50Player(4);
+  if (params.runnerStats) d50Runner = applyStats(d50Runner, params.runnerStats);
+
   const bases = {
     first: runnerFlags?.first ? d50Runner : null,
     second: runnerFlags?.second ? d50Runner : null,
@@ -79,11 +106,11 @@ export function generateScenarioLog(params: ScenarioParams): AtBatLog {
   const ball = { direction, launchAngle, exitVelocity, type: ballType };
 
   // HR/フェンス直撃チェック（本番simulation.tsと同じロジックで事前判定）
-  const hrCheck = checkHomeRun(ball, landing, d50Batter);
+  const hrCheck = checkHomeRun(ball, landing, batter);
 
   // エージェントは常に実行（守備側の反応アニメーション表示のため）
   const agentResult: AgentFieldingResult = resolvePlayWithAgents(
-    ball, landing, fielderMap, d50Batter, bases, outs,
+    ball, landing, customFielderMap, batter, bases, outs,
     {
       collectTimeline: true,
       perceptionNoise: deterministic ? 0 : 1.0,
@@ -98,7 +125,7 @@ export function generateScenarioLog(params: ScenarioParams): AtBatLog {
   return {
     inning: 1,
     halfInning: "top",
-    batterId: d50Batter.id,
+    batterId: batter.id,
     pitcherId: "d50-P",
     result: finalResult,
     battedBallType: ballType,
