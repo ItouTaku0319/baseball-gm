@@ -2611,6 +2611,12 @@ function buildPhase2Result(
   if (catchError) {
     // ゴロ捕球可能球の捕球失敗 → エラー（走者進塁はrunnerResultsで反映）
     result = "error";
+  } else if (outsAdded > 0) {
+    // ランナーがアウト → ゴロアウト（FCアウト）
+    result = "groundout";
+  } else if (throwPlays.length > 0 && throwPlays.some(tp => tp.base !== "first")) {
+    // 1塁以外への送球ありだがアウト取れず → フィールダーズチョイス
+    result = "fieldersChoice";
   } else if (batterReachedBase >= 3) {
     result = "triple";
   } else if (batterReachedBase >= 2) {
