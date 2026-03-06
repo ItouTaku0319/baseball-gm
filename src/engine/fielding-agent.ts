@@ -353,15 +353,30 @@ export function resolvePlayWithAgents(
           }
           if ((!hasPursuer && !hasNearbyApproacher) || (hasPursuer && allSettled)) shouldEndPreCatch = true;
         } else if (!trajectory.isGroundBall && ballOnGround) {
-          let allSettled = true;
+          // フライ着地後：捕球圏内に追球者がいるかチェック
+          let hasCatchCandidate = false;
           for (let ai = 0; ai < agents.length; ai++) {
             const a = agents[ai];
-            if (a.state === "PURSUING" && vec2DistanceSq(a.currentPos, a.targetPos) >= 0.25) {
-              allSettled = false;
+            if (a.state !== "PURSUING" || a.hasYielded) continue;
+            const dist = vec2DistanceSq(a.currentPos, trajectory.landingPos);
+            if (dist <= (AGENT_DIVE_MAX_DIST * 1.5) * (AGENT_DIVE_MAX_DIST * 1.5)) {
+              hasCatchCandidate = true;
               break;
             }
           }
-          if (allSettled) shouldEndPreCatch = true;
+          if (!hasCatchCandidate) {
+            shouldEndPreCatch = true;
+          } else {
+            let allSettled = true;
+            for (let ai = 0; ai < agents.length; ai++) {
+              const a = agents[ai];
+              if (a.state === "PURSUING" && vec2DistanceSq(a.currentPos, a.targetPos) >= 0.25) {
+                allSettled = false;
+                break;
+              }
+            }
+            if (allSettled) shouldEndPreCatch = true;
+          }
         }
 
         if (shouldEndPreCatch) {

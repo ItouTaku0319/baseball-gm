@@ -428,6 +428,13 @@ function calcPursuitScore(
     }
   }
 
+  // フライ/ライナーで捕球不可でも、ボール回収のため走る（チェーシング）
+  if (!canReach && !trajectory.isGroundBall) {
+    const distToPerceived = vec2Distance(agent.currentPos, perceived);
+    arrivalMargin = clamp(1 - distToPerceived / 120, 0, 0.15);
+    canReach = true;
+  }
+
   if (!canReach) {
     return { action: "pursuit", score: -1, target: landingPos };
   }

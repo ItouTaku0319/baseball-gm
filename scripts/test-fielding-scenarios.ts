@@ -49,32 +49,32 @@ const runnerPlayer = createD50(4);
 /** 打球パターン: [名前, direction, launchAngle, exitVelocity] */
 const BALL_PATTERNS: [string, number, number, number][] = [
   // ゴロ系
-  ["遅いゴロ（正面）",   0, -15, 80],
-  ["速いゴロ（正面）",   0, -10, 130],
-  ["ゴロ（三遊間）",    -20, -12, 100],
-  ["ゴロ（一二間）",     20, -12, 100],
-  ["弱いゴロ（投前）",    5, -8, 60],
+  ["遅いゴロ（正面）",   45, -15, 80],
+  ["速いゴロ（正面）",   45, -10, 130],
+  ["ゴロ（三遊間）",     20, -12, 100],
+  ["ゴロ（一二間）",     70, -12, 100],
+  ["弱いゴロ（投前）",   25, -8, 60],
 
   // ライナー系
-  ["低ライナー",         0, 15, 80],
-  ["鋭いライナー(左中)",  -15, 12, 130],
-  ["ライナー(右中)",      15, 18, 110],
+  ["低ライナー",         45, 15, 80],
+  ["鋭いライナー(左中)", 25, 12, 130],
+  ["ライナー(右中)",     65, 18, 110],
 
   // フライ系
-  ["浅いフライ",         0, 30, 90],
-  ["深いフライ(左)",    -25, 35, 120],
-  ["深いフライ(中)",      0, 32, 130],
-  ["深いフライ(右)",     25, 35, 120],
-  ["フェンス際フライ",    0, 28, 145],
+  ["浅いフライ",         45, 30, 90],
+  ["深いフライ(左)",     15, 35, 120],
+  ["深いフライ(中)",     45, 32, 130],
+  ["深いフライ(右)",     75, 35, 120],
+  ["フェンス際フライ",   45, 28, 145],
 
   // ポップフライ
-  ["内野ポップ",         10, 65, 70],
-  ["キャッチャーポップ",   0, 75, 60],
+  ["内野ポップ",         45, 65, 70],
+  ["キャッチャーポップ", 45, 75, 60],
 
   // 極端なケース
-  ["三塁線ゴロ",        -40, -10, 90],
-  ["一塁線ゴロ",         40, -10, 90],
-  ["ボテボテゴロ",        0, -5, 50],
+  ["三塁線ゴロ",          5, -10, 90],
+  ["一塁線ゴロ",         85, -10, 90],
+  ["ボテボテゴロ",       45, -5, 50],
 ];
 
 /** 走者パターン: [名前, {first, second, third}] */
@@ -393,14 +393,37 @@ function runAllScenarios() {
       }
       for (const [rule, vs] of byRule) {
         console.log(`\n  == ${rule} (${vs.length}件) ==`);
-        for (const v of vs.slice(0, 3)) {
+        for (const v of vs.slice(0, 5)) {
           console.log(`    ${v.scenario}`);
           console.log(`      → ${v.detail}`);
         }
-        if (vs.length > 3) {
-          console.log(`    ... 他${vs.length - 3}件`);
+        if (vs.length > 5) {
+          console.log(`    ... 他${vs.length - 5}件`);
         }
       }
+    }
+  }
+
+  // プレー時間長いWARNの打球パターン×アウトカウント内訳
+  const durationWarns = allViolations.filter(v => v.rule === "プレー時間長い");
+  if (durationWarns.length > 0) {
+    console.log("\n--- プレー時間長いWARN 内訳 ---");
+    const byBall = new Map<string, number[]>();
+    for (const v of durationWarns) {
+      // scenarioから打球パターン名とアウトカウントを抽出
+      const parts = v.scenario.split("|").map(s => s.trim());
+      const ballName = parts[0];
+      const outsMatch = parts[2]?.match(/(\d)アウト/);
+      const outsCount = outsMatch ? parseInt(outsMatch[1]) : -1;
+      const arr = byBall.get(ballName) ?? [];
+      arr.push(outsCount);
+      byBall.set(ballName, arr);
+    }
+    for (const [ball, outsList] of byBall) {
+      const outs0 = outsList.filter(o => o === 0).length;
+      const outs1 = outsList.filter(o => o === 1).length;
+      const outs2 = outsList.filter(o => o === 2).length;
+      console.log(`  ${ball}: ${outsList.length}件 (0アウト:${outs0}, 1アウト:${outs1}, 2アウト:${outs2})`);
     }
   }
 
