@@ -123,6 +123,8 @@ export interface ActionScore {
   coverBase?: keyof typeof BASE_POSITIONS;
   /** ダンピングの影響を受けない緊急度（走者がこの塁に向かっている事実） */
   urgency?: number;
+  /** リレー（カットオフ）かどうか */
+  isRelay?: boolean;
 }
 
 /** チームメイト観察結果 */
@@ -563,9 +565,9 @@ function calcRelayScore(
   observation: TeammateObservation,
   trajectory: BallTrajectory
 ): ActionScore | null {
-  // 既にリレーしている味方がいたらスキップ
-  const someoneRelaying = (observation.pursuers as FielderAgent[]).some(
-    a => a.action === "relay"
+  // 既にリレーしている味方がいたらスキップ（全エージェントを確認）
+  const someoneRelaying = (observation.allAgents as FielderAgent[]).some(
+    a => a !== agent && a.action === "relay"
   );
   if (someoneRelaying) return null;
 
@@ -575,7 +577,7 @@ function calcRelayScore(
   const proximity = clamp(1 - dist / 30, 0, 1);
   if (proximity <= 0.3) return null;
 
-  return { action: "cover", score: RELAY_SCORE * proximity, target: cutoffPos };
+  return { action: "cover", score: RELAY_SCORE * proximity, target: cutoffPos, isRelay: true };
 }
 
 // ====================================================================
@@ -648,6 +650,22 @@ function calcBackupScore(
         x: agent.currentPos.x + (targetPos.x - agent.currentPos.x) * driftRatio,
         y: agent.currentPos.y + (targetPos.y - agent.currentPos.y) * driftRatio,
       };
+      return { action: "backup", score, target: driftTarget };
+    }
+  }
+
+  // 外野手のフライ時バックアップ: 着弾方向へドリフト
+  const homeY = (agent.homePos ?? agent.currentPos).y;
+  if (!trajectory.isGroundBall && homeY > 60) {
+    const distToLandingOF = vec2Distance(agent.currentPos, trajectory.landingPos);
+    if (distToLandingOF >= 20) {
+      const driftRatio = DRIFT_RATIO_MIN + (awareness / 100) * (DRIFT_RATIO_MAX - DRIFT_RATIO_MIN);
+      const driftTarget = {
+        x: agent.currentPos.x + (trajectory.landingPos.x - agent.currentPos.x) * driftRatio,
+        y: agent.currentPos.y + (trajectory.landingPos.y - agent.currentPos.y) * driftRatio,
+      };
+      const proximity = clamp(1 - distToLandingOF / 80, 0, 1);
+      const score = proximity * 0.4 + 0.15;
       return { action: "backup", score, target: driftTarget };
     }
   }
@@ -787,11 +805,7 @@ function applyCover(agent: FielderAgent, score: ActionScore): void {
   agent.targetPos.x = score.target.x;
   agent.targetPos.y = score.target.y;
 
-  // リレーかベースカバーかを score と target で判断
-  // リレーはカットオフ位置（着弾位置の40%地点）に向かう
-  const landingDist = Math.sqrt(score.target.x ** 2 + score.target.y ** 2);
-  const isLikelyRelay = landingDist > 0 && landingDist < 50 && score.score === RELAY_SCORE;
-  agent.action = isLikelyRelay ? "relay" : "cover_base";
+  agent.action = score.isRelay ? "relay" : "cover_base";
 }
 
 function applyBackup(agent: FielderAgent, score: ActionScore): void {
