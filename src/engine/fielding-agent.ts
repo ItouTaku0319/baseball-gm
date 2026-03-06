@@ -635,25 +635,50 @@ export function resolvePlayWithAgents(
       }
 
       // ROUNDING → エキストラベース判断
-      for (const runner of runners) {
-        if (runner.state === "ROUNDING") {
-          runner.roundingTimer = (runner.roundingTimer ?? 0) - unifiedDt;
-          if (runner.roundingTimer <= 0) {
-            if (decideExtraBase(runner, ballHolder, retrieverAgent, throwBall, t, trajectory, restPosForBall, rng)) {
-              runner.fromBase = runner.targetBase;
-              runner.targetBase += 1;
-              runner.progress = 0;
-              runner.state = "RUNNING";
-              runner.isForced = false;
-            } else {
-              runner.state = "SAFE";
+      // 先の塁のランナーから判断（3塁→2塁→1塁の順）
+      const roundingRunners = runners
+        .filter(r => r.state === "ROUNDING")
+        .sort((a, b) => b.targetBase - a.targetBase);
+      for (const runner of roundingRunners) {
+        runner.roundingTimer = (runner.roundingTimer ?? 0) - unifiedDt;
+        if (runner.roundingTimer <= 0) {
+          const nextBase = runner.targetBase + 1;
+          // 後ろのランナーが自分の塁に向かっている → 押し出し（必ず進塁）
+          const pushedForward = runners.some(r =>
+            r !== runner && r.state !== "OUT" &&
+            r.targetBase === runner.targetBase &&
+            (r.state === "RUNNING" || r.state === "ROUNDING")
+          );
+          // 次の塁に他のランナーが停留中 → 進塁不可（ただし押し出し時は連鎖押し出し）
+          const blocker = nextBase <= 3 ? runners.find(r =>
+            r !== runner && r.state !== "OUT" &&
+            (r.state === "SAFE" || r.state === "HOLDING") && r.targetBase === nextBase
+          ) : null;
+          const shouldAdvance = pushedForward || (
+            !blocker && decideExtraBase(runner, ballHolder, retrieverAgent, throwBall, t, trajectory, restPosForBall, rng)
+          );
+          if (shouldAdvance && nextBase <= 4) {
+            // 押し出し連鎖: 次の塁に居るランナーも強制進塁
+            if (blocker && pushedForward && blocker.targetBase + 1 <= 4) {
+              blocker.fromBase = blocker.targetBase;
+              blocker.targetBase += 1;
+              blocker.progress = 0;
+              blocker.state = "RUNNING";
             }
+            runner.fromBase = runner.targetBase;
+            runner.targetBase = nextBase;
+            runner.progress = 0;
+            runner.state = "RUNNING";
+            runner.isForced = false;
+          } else {
+            runner.state = "SAFE";
           }
         }
       }
 
       // ballHolder が HOLDING のまま待機中にランナーが走り始めたら再送球判断
-      if (ballHolder && ballHolder.state === "HOLDING" && !throwBall) {
+      // ただし3アウト到達済みなら送球不要
+      if (ballHolder && ballHolder.state === "HOLDING" && !throwBall && (outs + outsAdded) < 3) {
         const hasActiveRunner = runners.some(r =>
           r.state === "RUNNING" || r.state === "TAGGED_UP"
         );
@@ -767,8 +792,14 @@ export function resolvePlayWithAgents(
           throwBall = null;
           if (receiver) {
             ballHolder = receiver;
-            receiver.state = "SECURING";
-            securingTimer = PIVOT_TIME;
+            // 3アウト到達済みなら追加送球不要
+            if ((outs + outsAdded) < 3 &&
+                runners.some(r => r.state === "RUNNING" || r.state === "TAGGED_UP")) {
+              receiver.state = "SECURING";
+              securingTimer = PIVOT_TIME;
+            } else {
+              receiver.state = "HOLDING";
+            }
           }
         }
       }
@@ -2524,8 +2555,9 @@ function buildPhase2Result(
 
   // --- ゴロアウト判定（捕球成功 or リトリーバー送球アウト） ---
   if (trajectory.isGroundBall && (catchSuccess || outsAdded > 0)) {
-    // DP判定: 2アウト以上追加
-    if (outsAdded >= 2) {
+    // DP判定: 2アウト以上追加 かつ 2アウト未満の場合のみ
+    // (2アウトからDPは不可能 — 3アウト目で打者走者がアウトになり併殺にならない)
+    if (outsAdded >= 2 && originalOuts < 2) {
       return {
         result: "doublePlay",
         fielderPos,
