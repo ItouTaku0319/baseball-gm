@@ -608,6 +608,14 @@ export function resolvePlayWithAgents(
           }
         }
       }
+      // ゴロ帰塁完了: 非フォースランナーはHOLDINGに戻す（プレー終了判定から除外）
+      if (trajectory.isGroundBall) {
+        for (const runner of runners) {
+          if (runner.state === "WAITING_TAG" && !runner.isForced) {
+            runner.state = "HOLDING";
+          }
+        }
+      }
 
       // タッチアップ判断
       for (const runner of runners) {
