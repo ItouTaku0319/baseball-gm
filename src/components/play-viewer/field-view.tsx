@@ -141,8 +141,8 @@ function getAgentFrameAtTime(timeline: AgentTimelineEntry[], t: number) {
             y: pLean.y + (nLean.y - pLean.y) * ratio,
           };
         }),
-        runners: b.runners ? b.runners.map((r, j) => {
-          const prev = a.runners?.[j];
+        runners: b.runners ? b.runners.map((r) => {
+          const prev = a.runners?.find(ar => ar.fromBase === r.fromBase);
           if (!prev) return r;
           return {
             ...r,
