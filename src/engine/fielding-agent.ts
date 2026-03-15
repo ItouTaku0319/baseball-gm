@@ -1,13 +1,15 @@
 /**
  * エージェントベース守備AI — メインロジック
  *
- * 9人の野手エージェントが独立して知覚・判断・移動し、
- * ボールを追跡・捕球する時間ステップシミュレーション。
+ * ゴロ: 台本方式（Play Script）で事前に9人の役割を決定し、物理実行
+ * フライ/ライナー: 従来の自律判断方式（autonomous-fielder.ts）
  */
 import type { Player } from "../models/player";
 import type { FieldingTrace } from "../models/league";
 import type { BallLanding } from "./fielding-ai";
 import { DEFAULT_FIELDER_POSITIONS } from "./fielding-ai";
+import { generateGroundBallScript } from "./play-script";
+import type { PlayScript } from "./play-script";
 import { createBallTrajectory } from "./ball-trajectory";
 import {
   FENCE_BASE,
@@ -15,7 +17,9 @@ import {
   AGENT_DT,
   AGENT_MAX_TIME_GROUND,
   AGENT_MAX_TIME_FLY,
-  AGENT_BASE_REACTION,
+  AGENT_REACTION_INFIELD,
+  AGENT_REACTION_CATCHER,
+  AGENT_REACTION_DEFAULT,
   AGENT_AWARENESS_REACTION_SCALE,
   AGENT_REACTING_SPEED_RATIO,
   AGENT_DIVE_MIN_DIST,
@@ -181,6 +185,19 @@ export function resolvePlayWithAgents(
     : estimateRestPosition(trajectory);
   const unifiedBall = createUnifiedBallState(trajectory, restPosForBall);
 
+  // === ゴロ台本生成 ===
+  // 台本が生成できた場合のみ台本方式を使用。内野を抜ける打球はnull→自律方式
+  let script: PlayScript | null = null;
+  if (trajectory.isGroundBall) {
+    const runnerSituation = {
+      first: !!bases.first,
+      second: !!bases.second,
+      third: !!bases.third,
+    };
+    script = generateGroundBallScript(trajectory, agents, runnerSituation, outs);
+  }
+  const useScript = script !== null;
+
   // === 統一ループ状態 ===
   const unifiedDt = UNIFIED_DT;
   const maxPreCatchTime = trajectory.isGroundBall
@@ -265,15 +282,40 @@ export function resolvePlayWithAgents(
           }
         }
 
-        // 自律行動決定
-        for (const agent of agents) {
-          calcAndStorePursuitScore(agent, agents, trajectory, t);
+        // 行動決定: ゴロは台本方式、その他は自律方式
+        if (useScript && script) {
+          // 台本方式: 反応完了した野手に台本の役割を適用（1回のみ）
+          for (const agent of agents) {
+            if (agent.reactionRemaining <= 0 && agent.state === "REACTING") {
+              const assignment = script.assignments.get(agent.pos);
+              if (assignment) {
+                (agent as { state: AgentState }).state = assignment.state;
+                agent.targetPos.x = assignment.targetPos.x;
+                agent.targetPos.y = assignment.targetPos.y;
+                agent.action = assignment.action;
+
+                // 捕球者: checkGroundBallIntercept が必要とするフィールドを設定
+                if (agent.pos === script.primaryFielder && assignment.state === "PURSUING") {
+                  (agent as { interceptPoint?: Vec2 }).interceptPoint = {
+                    x: assignment.targetPos.x,
+                    y: assignment.targetPos.y,
+                  };
+                  agent.action = "field_ball";
+                }
+              }
+            }
+          }
+        } else {
+          // 自律方式（フライ/ライナー/ポップフライ）
+          for (const agent of agents) {
+            calcAndStorePursuitScore(agent, agents, trajectory, t);
+          }
+          const coverSnapshot = snapshotCoverAssignments(agents);
+          for (const agent of agents) {
+            autonomousDecide(agent, agents, trajectory, t, bases, outs, coverSnapshot);
+          }
+          deconflictBaseCoverage(agents);
         }
-        const coverSnapshot = snapshotCoverAssignments(agents);
-        for (const agent of agents) {
-          autonomousDecide(agent, agents, trajectory, t, bases, outs, coverSnapshot);
-        }
-        deconflictBaseCoverage(agents);
       }
 
       // 捕球前フェーズ: 判断・移動・捕球チェック（2ティックごと = dt=0.1s）
@@ -1002,8 +1044,12 @@ function createAgents(
       awareness: player.batting.awareness ?? 50,
     };
 
-    // 統一反応時間 + awareness のみで決定
-    let baseReaction = AGENT_BASE_REACTION;
+    // ポジション別反応時間 + awareness で決定
+    const isInfielder = pos >= 3 && pos <= 6;
+    const isCatcher = pos === 2;
+    let baseReaction = isInfielder ? AGENT_REACTION_INFIELD
+      : isCatcher ? AGENT_REACTION_CATCHER
+      : AGENT_REACTION_DEFAULT;
     baseReaction -= (skill.awareness - 50) * AGENT_AWARENESS_REACTION_SCALE;
     baseReaction = Math.max(0.05, baseReaction);
 
