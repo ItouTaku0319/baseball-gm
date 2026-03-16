@@ -194,12 +194,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
-  "R2-5": { // 3Bゴロ
-    1: "COVER_3B", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "COVER_2B",
+  "R2-5": { // 3Bゴロ — P: 送球邪魔回避（SSが三塁カバー済み）
+    1: "AVOID_THROW_LINE", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "COVER_2B",
     5: "FIELD", 6: "COVER_3B", 7: "BACKUP_BALL", 8: "BACKUP_2B_THROW", 9: "BACKUP_1B_THROW",
   },
-  "R2-6": { // SSゴロ
-    1: "BACKUP_1B_THROW", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "COVER_2B",
+  "R2-6": { // SSゴロ — P: 送球邪魔回避
+    1: "AVOID_THROW_LINE", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "COVER_2B",
     5: "COVER_3B", 6: "FIELD", 7: "BACKUP_BALL", 8: "BACKUP_BALL", 9: "BACKUP_1B_THROW",
   },
 
@@ -226,8 +226,8 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "BACKUP_BALL", 2: "COVER_HOME", 3: "COVER_1B", 4: "COVER_2B",
     5: "FIELD", 6: "COVER_3B", 7: "BACKUP_BALL", 8: "BACKUP_GENERAL", 9: "BACKUP_1B_THROW",
   },
-  "R3-6": { // SSゴロ
-    1: "BACKUP_1B_THROW", 2: "COVER_HOME", 3: "COVER_1B", 4: "COVER_2B",
+  "R3-6": { // SSゴロ — P: 送球邪魔回避
+    1: "AVOID_THROW_LINE", 2: "COVER_HOME", 3: "COVER_1B", 4: "COVER_2B",
     5: "COVER_3B", 6: "FIELD", 7: "BACKUP_BALL", 8: "BACKUP_BALL", 9: "BACKUP_1B_THROW",
   },
 
