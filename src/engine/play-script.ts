@@ -138,12 +138,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
     5: "HOLD", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
-  "none-5": { // 3Bゴロ — P: 送球の邪魔にならない位置に移動しボールから目を離さない
-    1: "AVOID_THROW_LINE", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "COVER_2B",
+  "none-5": { // 3Bゴロ — P:送球邪魔回避, 2B:悪送球カバーリング(→二塁), SS:3Bに近づきBU
+    1: "AVOID_THROW_LINE", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "BACKUP_1B_THROW",
     5: "FIELD", 6: "BACKUP_BALL", 7: "BACKUP_BALL", 8: "BACKUP_1B_THROW", 9: "BACKUP_1B_THROW",
   },
-  "none-6": { // SSゴロ — P: 主だったカバーリングなし（送球邪魔回避）
-    1: "AVOID_THROW_LINE", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "COVER_2B",
+  "none-6": { // SSゴロ — P:送球邪魔回避, 2B:悪送球カバーリング, 3B:SSに近づきBU
+    1: "AVOID_THROW_LINE", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "BACKUP_1B_THROW",
     5: "BACKUP_BALL", 6: "FIELD", 7: "BACKUP_BALL", 8: "BACKUP_BALL", 9: "BACKUP_1B_THROW",
   },
 
