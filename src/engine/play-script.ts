@@ -126,9 +126,9 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "FIELD", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "BACKUP_BALL",
     5: "BACKUP_BALL", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_1B_THROW",
   },
-  "none-2": { // Cゴロ
+  "none-2": { // Cゴロ — 3B:ファンブルBU兼サードベースカバー
     1: "BACKUP_BALL", 2: "FIELD", 3: "COVER_1B", 4: "BACKUP_1B_THROW",
-    5: "BACKUP_1B_THROW", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_1B_THROW", 9: "BACKUP_1B_THROW",
+    5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_1B_THROW", 9: "BACKUP_1B_THROW",
   },
   "none-3": { // 1Bゴロ
     1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "FIELD", 4: "COVER_1B",
