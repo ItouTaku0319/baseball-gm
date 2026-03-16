@@ -138,12 +138,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
     5: "HOLD", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
-  "none-5": { // 3Bゴロ
-    1: "BACKUP_BALL", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "COVER_2B",
+  "none-5": { // 3Bゴロ — P: 送球の邪魔にならない位置に移動しボールから目を離さない
+    1: "AVOID_THROW_LINE", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "COVER_2B",
     5: "FIELD", 6: "BACKUP_BALL", 7: "BACKUP_BALL", 8: "BACKUP_1B_THROW", 9: "BACKUP_1B_THROW",
   },
-  "none-6": { // SSゴロ
-    1: "MINIMAL", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "COVER_2B",
+  "none-6": { // SSゴロ — P: 主だったカバーリングなし（送球邪魔回避）
+    1: "AVOID_THROW_LINE", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "COVER_2B",
     5: "BACKUP_BALL", 6: "FIELD", 7: "BACKUP_BALL", 8: "BACKUP_BALL", 9: "BACKUP_1B_THROW",
   },
 
@@ -896,12 +896,21 @@ function calcThrowBackupPosition(base: number, interceptPos?: Vec2): Vec2 {
 
 /** 送球ラインを避ける位置（投手が送球ライン上に立たないよう） */
 function calcAvoidThrowLinePosition(interceptTarget: Vec2, agent: FielderAgent): Vec2 {
-  // 三塁側（左）にオフセット: マウンド付近の投手がサードゴロ後に邪魔にならない位置
-  const sideOffset = agent.pos === 1 ? -6 : 6;
-  return {
-    x: interceptTarget.x + sideOffset,
-    y: interceptTarget.y - 3,
-  };
+  // 投手は送球ライン（捕球点→一塁）を横切らないように避ける。
+  // マウンド付近に留まりつつ、打球方向にやや前進してファンブル対応。
+  // 捕球点のxが負（三塁側）なら三塁側に寄る、正（一塁側）なら一塁側に寄る。
+  const homePos = agent.homePos ?? { x: 0, y: 18.4 };
+  const dx = interceptTarget.x - homePos.x;
+  const dy = interceptTarget.y - homePos.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist < 1) return { x: homePos.x, y: homePos.y };
+  // 打球方向に4m程度だけ移動（全力で追わない）+ 送球ラインから横に3mオフセット
+  const moveDist = Math.min(4, dist * 0.3);
+  const moveX = homePos.x + (dx / dist) * moveDist;
+  const moveY = homePos.y + (dy / dist) * moveDist;
+  // 送球ラインから横にずれる（捕球点の反対側）
+  const sideOffset = interceptTarget.x < 0 ? -3 : 3;
+  return { x: moveX + sideOffset, y: moveY };
 }
 
 /** 打球方向に少しドリフトする位置 */
