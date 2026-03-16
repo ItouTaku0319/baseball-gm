@@ -389,12 +389,19 @@ function actionToAssignment(
         action: "cover_base",
       };
 
-    case "BACKUP_BALL":
+    case "BACKUP_BALL": {
+      // 内野手・投手: 打球に向かって前進（ファンブルフォロー）
+      // 外野手: 打球の後方でバックアップ
+      const isOutfielder = agent.pos >= 7 && agent.pos <= 9;
+      const ballTarget = isOutfielder
+        ? calcBackupPosition(trajectory, agent.pos)
+        : calcApproachPosition(agent, trajectory);
       return {
         state: "BACKING_UP",
-        targetPos: calcBackupPosition(trajectory, agent.pos),
+        targetPos: ballTarget,
         action: "backup",
       };
+    }
 
     case "BACKUP_1B_THROW":
       return {
@@ -860,6 +867,26 @@ function selectBackupOutfielder(
 // ====================================================================
 
 /** バックアップ位置: 捕球地点の後方 */
+/**
+ * 内野手・投手が打球に向かう位置を計算する（BACKUP_BALL用）。
+ * 「自分でも処理するつもりで前進」＝打球地点に近づく。
+ * ただし捕球者と重ならないよう、着地点の手前5m程度を目標にする。
+ */
+function calcApproachPosition(agent: FielderAgent, trajectory: BallTrajectory): Vec2 {
+  const landing = trajectory.landingPos;
+  const homePos = agent.homePos ?? agent.currentPos;
+  const dx = landing.x - homePos.x;
+  const dy = landing.y - homePos.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist < 1) return { x: landing.x, y: landing.y };
+  // 打球地点の手前5mを目標（捕球者と重ならない）
+  const approachDist = Math.max(0, dist - 5);
+  return {
+    x: homePos.x + (dx / dist) * approachDist,
+    y: homePos.y + (dy / dist) * approachDist,
+  };
+}
+
 function calcBackupPosition(
   trajectory: BallTrajectory,
   fielder: FielderPosition,
