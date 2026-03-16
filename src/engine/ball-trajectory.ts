@@ -14,18 +14,19 @@ import {
   GROUND_BALL_SPEED_FACTOR,
   GROUND_BALL_AVG_SPEED_RATIO,
   GROUND_BALL_BOUNCE_ANGLE_SCALE,
+  LINER_LAUNCH_ANGLE_MAX,
 } from "./physics-constants";
 
 /** 打球タイプ分類 (simulation.ts の classifyBattedBallType と完全一致) */
 function classifyBallType(launchAngle: number, exitVelocity: number): BallType {
   if (launchAngle >= 50) return "popup";
   if (launchAngle < GROUND_BALL_ANGLE_THRESHOLD) return "ground_ball";
-  // 10-19°: ライナー帯（低速・低角度の弱い打球はゴロ扱い）
-  if (launchAngle < 20) {
+  // 10-24°: ライナー帯（低速・低角度の弱い打球はゴロ扱い）
+  if (launchAngle < LINER_LAUNCH_ANGLE_MAX) {
     if (launchAngle < 12 && exitVelocity < 85) return "ground_ball";
     return "line_drive";
   }
-  // 20°以上: フライ
+  // 25°以上: フライ
   return "fly_ball";
 }
 

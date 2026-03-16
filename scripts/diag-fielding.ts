@@ -23,7 +23,7 @@ for (const p of [1,2,3,4,5,6,7,8,9] as FielderPosition[]) fm.set(p, createD50(p)
 const batter = createD50(3);
 const noRunners = { first: null, second: null, third: null };
 
-const dir=15, la=35, ev=120;
+const dir=10, la=30, ev=150;
 const ballType = classifyBattedBallType(la, ev);
 const landing = calcBallLanding(dir, la, ev);
 const ball = { direction: dir, launchAngle: la, exitVelocity: ev, type: ballType };

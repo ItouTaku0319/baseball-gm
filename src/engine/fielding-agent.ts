@@ -8,8 +8,8 @@ import type { Player } from "../models/player";
 import type { FieldingTrace } from "../models/league";
 import type { BallLanding } from "./fielding-ai";
 import { DEFAULT_FIELDER_POSITIONS } from "./fielding-ai";
-import { generateGroundBallScript } from "./play-script";
-import type { PlayScript } from "./play-script";
+import { generateGroundBallScript, determineGroundBallOutcome } from "./play-script";
+import type { PlayScript, PredeterminedOutcome } from "./play-script";
 import { createBallTrajectory } from "./ball-trajectory";
 import {
   FENCE_BASE,
@@ -198,6 +198,21 @@ export function resolvePlayWithAgents(
   }
   const useScript = script !== null;
 
+  // === ゴロ結果の事前決定 (Statcast確率テーブル) ===
+  let predeterminedOutcome: PredeterminedOutcome | null = null;
+  if (useScript && script) {
+    const primaryAgent = agents.find(a => a.pos === script.primaryFielder);
+    if (primaryAgent) {
+      predeterminedOutcome = determineGroundBallOutcome(
+        trajectory.exitVelocity,
+        primaryAgent.skill.fielding,
+        { first: !!bases.first, second: !!bases.second, third: !!bases.third },
+        outs,
+        rng,
+      );
+    }
+  }
+
   // === 統一ループ状態 ===
   const unifiedDt = UNIFIED_DT;
   const maxPreCatchTime = trajectory.isGroundBall
@@ -332,6 +347,10 @@ export function resolvePlayWithAgents(
             agents, prevBallPos, ballPos, trajectory, t, rng
           );
           if (result) {
+            // 確率テーブル補正: ヒット/エラー判定なら捕球を失敗に変更
+            if (predeterminedOutcome === "single" || predeterminedOutcome === "error") {
+              result.catchResult.success = false;
+            }
             catcherAgent = result.agent;
             catchResult = result.catchResult;
             catchTime = t;
@@ -453,10 +472,16 @@ export function resolvePlayWithAgents(
 
           // エラーフラグ
           if (catchResult && !catchResult.success && catcherAgent && trajectory.isGroundBall) {
-            const ballSpeedAtCatch = trajectory.getSpeedAt(catcherAgent.arrivalTime);
-            if (ballSpeedAtCatch < GROUND_BALL_HARD_HIT_SPEED) {
+            if (predeterminedOutcome === "error") {
+              // 確率テーブルによるエラー判定
               catchError = true;
               catchErrorPos = catcherAgent.pos;
+            } else {
+              const ballSpeedAtCatch = trajectory.getSpeedAt(catcherAgent.arrivalTime);
+              if (ballSpeedAtCatch < GROUND_BALL_HARD_HIT_SPEED) {
+                catchError = true;
+                catchErrorPos = catcherAgent.pos;
+              }
             }
           }
 

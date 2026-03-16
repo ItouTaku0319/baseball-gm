@@ -487,42 +487,93 @@ export function generateGroundBallScript(
 // 捕球者選定
 // ====================================================================
 
-/**
- * ゴロの捕球担当を選定する。
- * 打球経路に最も早く到達できる内野手を選ぶ。
- * P(1)/C(2) は打球が近い場合のみ候補。
- */
+/** ゾーン方式: 打球方向(viewer座標 0-90)に基づく捕球者ゾーン */
+const ZONE_3B_MAX = 15;       // 0-15: 3B (三塁線)
+const ZONE_3B_SS_MAX = 25;    // 15-25: 3B or SS (三遊間)
+const ZONE_SS_MAX = 40;       // 25-40: SS (遊撃正面)
+const ZONE_SS_2B_MAX = 50;    // 40-50: SS or 2B (二遊間)
+const ZONE_2B_MAX = 60;       // 50-60: 2B (二塁正面)
+const ZONE_2B_1B_MAX = 75;    // 60-75: 2B or 1B (一二塁間)
+// 75-90: 1B (一塁線)
+
+/** 投手がゴロを処理できる最大打球速度 (km/h) */
+const PITCHER_FIELDING_MAX_VELO = 100;
+/** 投手ゴロ判定: マウンド(y=18.4)でのボール通過横距離上限 (m) */
+const PITCHER_ZONE_LATERAL_MAX = 7;
+/** 投手がゴロを処理する最大着弾距離 (m) — マウンド+α以内のみ */
+const PITCHER_FIELDING_MAX_DISTANCE = 30;
+/** 捕手がゴロを処理する最大着弾距離 (m) */
+const CATCHER_FIELDING_MAX_DISTANCE = 10;
+
 function selectPrimaryFielder(
   trajectory: BallTrajectory,
   agents: readonly FielderAgent[],
 ): { pos: FielderPosition; interceptTime: number } {
-  // 通常内野手(3B/SS/2B/1B)を優先、P/Cは近距離のみ
-  const regularInfielders = agents.filter(a => a.pos >= 3 && a.pos <= 6);
+  const direction = trajectory.direction;
 
-  let bestPos: FielderPosition = 6; // デフォルト: SS
-  let bestTime = Infinity;
+  // Step 1: ゾーンから内野手候補を決定 (3-6)
+  const zonePos = getZonePrimary(direction, agents);
+  const zoneAgent = agents.find(a => a.pos === zonePos)!;
+  const zoneTime = estimateInterceptTime(zoneAgent, trajectory);
 
-  for (const agent of regularInfielders) {
-    const time = estimateInterceptTime(agent, trajectory);
-    if (time < bestTime) {
-      bestTime = time;
-      bestPos = agent.pos;
-    }
-  }
-
-  // P/C は打球がマウンド付近(20m以内)の場合のみ候補
-  if (trajectory.landingDistance < 20) {
-    const pitcherCatcher = agents.filter(a => a.pos === 1 || a.pos === 2);
-    for (const agent of pitcherCatcher) {
-      const time = estimateInterceptTime(agent, trajectory);
-      if (time < bestTime) {
-        bestTime = time;
-        bestPos = agent.pos;
+  // Step 2: 投手候補 (遅いゴロがマウンド付近を通過する場合、かつ短距離)
+  if (trajectory.exitVelocity <= PITCHER_FIELDING_MAX_VELO
+    && trajectory.landingDistance <= PITCHER_FIELDING_MAX_DISTANCE) {
+    const pitcher = agents.find(a => a.pos === 1);
+    if (pitcher) {
+      const angleRad = ((direction - 45) * Math.PI) / 180;
+      const cosA = Math.cos(angleRad);
+      if (Math.abs(cosA) > 0.01) {
+        const lateralDist = Math.abs(18.4 * Math.tan(angleRad));
+        if (lateralDist <= PITCHER_ZONE_LATERAL_MAX) {
+          const pTime = estimateInterceptTime(pitcher, trajectory);
+          if (pTime <= zoneTime) {
+            return { pos: 1 as FielderPosition, interceptTime: pTime };
+          }
+        }
       }
     }
   }
 
-  return { pos: bestPos, interceptTime: bestTime };
+  // Step 3: 捕手候補 (バントなど超近距離)
+  if (trajectory.landingDistance < CATCHER_FIELDING_MAX_DISTANCE) {
+    const catcher = agents.find(a => a.pos === 2);
+    if (catcher) {
+      const cTime = estimateInterceptTime(catcher, trajectory);
+      if (cTime <= zoneTime) {
+        return { pos: 2 as FielderPosition, interceptTime: cTime };
+      }
+    }
+  }
+
+  return { pos: zonePos, interceptTime: zoneTime };
+}
+
+/** 打球方向からゾーン候補の内野手を選ぶ */
+function getZonePrimary(
+  direction: number,
+  agents: readonly FielderAgent[],
+): FielderPosition {
+  if (direction < ZONE_3B_MAX) return 5;
+  if (direction < ZONE_3B_SS_MAX) return pickByFielding(agents, 5, 6);
+  if (direction < ZONE_SS_MAX) return 6;
+  if (direction < ZONE_SS_2B_MAX) return pickByFielding(agents, 6, 4);
+  if (direction < ZONE_2B_MAX) return 4;
+  if (direction < ZONE_2B_1B_MAX) return pickByFielding(agents, 4, 3);
+  return 3;
+}
+
+/** 守備力の高い方を返す（同値なら第一候補を優先） */
+function pickByFielding(
+  agents: readonly FielderAgent[],
+  pos1: FielderPosition,
+  pos2: FielderPosition,
+): FielderPosition {
+  const a1 = agents.find(a => a.pos === pos1);
+  const a2 = agents.find(a => a.pos === pos2);
+  if (!a1) return pos2;
+  if (!a2) return pos1;
+  return a1.skill.fielding >= a2.skill.fielding ? pos1 : pos2;
 }
 
 /**
@@ -993,4 +1044,62 @@ function getBasePosition(base: number): Vec2 {
     case 4: return { x: BASE_POSITIONS.home.x, y: BASE_POSITIONS.home.y };
     default: return { x: 0, y: 0 };
   }
+}
+
+// ====================================================================
+// 結果判定の確率テーブル (Phase 2: Statcast準拠)
+// ====================================================================
+
+/** 事前決定された結果 */
+export type PredeterminedOutcome = "out" | "single" | "error" | "doublePlay";
+
+/**
+ * ゴロの結果を確率テーブルで事前決定する。
+ * Statcast実データに基づく EV × 守備力 → アウト/ヒット/エラー確率。
+ *
+ * @param exitVelocity 打球初速 (km/h)
+ * @param fielderSkill 捕球者の守備力 (0-100)
+ * @param runners ランナー状況
+ * @param outs アウトカウント
+ * @param rng 乱数生成器
+ */
+export function determineGroundBallOutcome(
+  exitVelocity: number,
+  fielderSkill: number,
+  runners: RunnerSituation,
+  outs: number,
+  rng: () => number,
+): PredeterminedOutcome {
+  // Statcast EV別アウト率 (mph → km/h変換済み)
+  // <96km/h(60mph): 76%, 96-129(60-80): 85%, 129-161(80-100): 75%, 161+(100+): 58%
+  const evKmh = exitVelocity;
+  let baseOutRate: number;
+  if (evKmh < 96) baseOutRate = 0.76;
+  else if (evKmh < 129) baseOutRate = 0.85;
+  else if (evKmh < 161) baseOutRate = 0.75;
+  else baseOutRate = 0.58;
+
+  // 守備力補正: fielding=50→±0, fielding=80→+9%, fielding=30→-6%
+  const skillAdj = (fielderSkill - 50) * 0.003;
+  const outRate = Math.max(0.30, Math.min(0.95, baseOutRate + skillAdj));
+
+  // エラー率: 1.4%基準、守備力で調整
+  const errorRate = Math.max(0.003, 0.014 + (50 - fielderSkill) * 0.0003);
+
+  // DP率: ランナー1塁+2アウト未満で31.6%（アウト判定の中から）
+  const canDP = runners.first && outs < 2;
+  const dpPortionOfOuts = canDP ? 0.42 : 0; // アウトの42%がDP (31.6/75≈42%)
+
+  const roll = rng();
+
+  // エラー判定（最優先）
+  if (roll < errorRate) return "error";
+
+  // ヒット判定
+  if (roll < errorRate + (1 - outRate)) return "single";
+
+  // アウト判定（DP or 通常アウト）
+  if (canDP && rng() < dpPortionOfOuts) return "doublePlay";
+
+  return "out";
 }

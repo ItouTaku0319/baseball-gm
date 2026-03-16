@@ -216,7 +216,7 @@ describe("キャリブレーション: 能力値別の打球分布", () => {
       const typeLabel =
         hi <= 10 ? "[G]" :
         lo >= 40 ? "[P]" :
-        lo >= 20 ? "[F]" :
+        lo >= 25 ? "[F]" :
         "[L]";
       console.log(`  ${String(lo).padStart(3)}~${String(hi).padStart(3)}° ${typeLabel}: ${String(count).padStart(5)} (${pct.padStart(5)}%) ${bar}`);
     }

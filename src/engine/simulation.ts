@@ -43,6 +43,7 @@ import {
   DROPPED_THIRD_STRIKE_BASE, DROPPED_THIRD_STRIKE_CATCHING_FACTOR,
   HIT_BY_PITCH_BASE, HIT_BY_PITCH_CONTROL_FACTOR,
   FOUL_FLY_FIELDING_SCALE,
+  LINER_LAUNCH_ANGLE_MAX,
 } from "./physics-constants";
 
 /** 球種リストから旧来の breaking 相当の 0-100 スケール値を算出 */
@@ -381,12 +382,12 @@ export function classifyBattedBallType(launchAngle: number, exitVelocity: number
   // 40-49°でも低EV(=内野フライ相当)ならpopup扱い
   if (launchAngle >= 40 && exitVelocity <= POPUP_EV_CLASSIFY_THRESHOLD) return "popup";
   if (launchAngle < GROUND_BALL_ANGLE_THRESHOLD) return "ground_ball";
-  // 10-19°: ライナー帯（低速・低角度の弱い打球はゴロ扱い）
-  if (launchAngle < 20) {
+  // 10-24°: ライナー帯（低速・低角度の弱い打球はゴロ扱い）
+  if (launchAngle < LINER_LAUNCH_ANGLE_MAX) {
     if (launchAngle < 12 && exitVelocity < 85) return "ground_ball";
     return "line_drive";
   }
-  // 20-39°: フライ
+  // 25-39°: フライ
   return "fly_ball";
 }
 

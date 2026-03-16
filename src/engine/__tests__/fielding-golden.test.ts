@@ -405,12 +405,13 @@ describe("ゴールデンテスト: フライ", () => {
 
   test("F08: CF-RF間フライ → CF or RFがアウト", () => {
     // dir=55,angle=30,velo=140 → 着弾(12.6,71.6) RFから15.8m, CFから17.7m
+    // CF位置深化(y:80→90)により到達がやや難しくなった → 閾値緩和
     const stats = runCase(55, 30, 140, noRunners, 0);
     logStats("F08", stats);
     const pos8Rate = stats.fielderDistribution[8] ?? 0;
     const pos9Rate = stats.fielderDistribution[9] ?? 0;
     expect(pos8Rate + pos9Rate).toBeGreaterThan(0.85);
-    expect(stats.outRate).toBeGreaterThan(0.8);
+    expect(stats.outRate).toBeGreaterThan(0.75);
   });
 
   test("F09: 浅いセンターフライ → SS/2Bが処理（着弾33.6m=内野守備範囲）", () => {
