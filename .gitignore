@@ -40,8 +40,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# json
+# json (except claude settings)
 *.json
+!.claude/settings.json
 
 # temp files
 /tmp/

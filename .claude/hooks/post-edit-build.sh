@@ -10,7 +10,7 @@ if [[ ! "$FILE_PATH" =~ \.(ts|tsx|js|jsx)$ ]]; then
   exit 0
 fi
 
-BUILD_OUTPUT=$(cd /c/ITOU/work/baseball-gm && npm run build 2>&1)
+BUILD_OUTPUT=$(cd /c/ITOU/baseball-gm && npm run build 2>&1)
 BUILD_EXIT=$?
 
 if [ $BUILD_EXIT -ne 0 ]; then

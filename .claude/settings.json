@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "postToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "command": "bash .claude/hooks/post-edit-build.sh"
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(npx tsx *)",
+      "Bash(npx vitest *)",
+      "Bash(git *)",
+      "Bash(ls *)",
+      "Bash(node *)",
+      "WebSearch"
+    ]
+  }
+}

@@ -5,7 +5,7 @@
 echo "=== Auto QA Check ===" >&2
 
 # ビルド
-BUILD_OUTPUT=$(cd /c/ITOU/work/baseball-gm && npm run build 2>&1)
+BUILD_OUTPUT=$(cd /c/ITOU/baseball-gm && npm run build 2>&1)
 if [ $? -ne 0 ]; then
   echo "NG: Build failed" >&2
   echo "$BUILD_OUTPUT" | grep -A 2 "Error\|error" | head -10 >&2
@@ -14,7 +14,7 @@ fi
 echo "OK: Build passed" >&2
 
 # Lint
-LINT_OUTPUT=$(cd /c/ITOU/work/baseball-gm && npm run lint 2>&1)
+LINT_OUTPUT=$(cd /c/ITOU/baseball-gm && npm run lint 2>&1)
 if [ $? -ne 0 ]; then
   echo "WARNING: Lint issues found" >&2
   echo "$LINT_OUTPUT" | head -10 >&2
