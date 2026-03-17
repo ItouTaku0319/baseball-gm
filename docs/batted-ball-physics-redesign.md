@@ -1,6 +1,7 @@
 # 打球物理 再設計書
 
 carry廃止・コンタクトモデル導入・物理計算一本化の包括的設計。
+（旧 `batted-ball-design-context.md` の前提情報を末尾に統合）
 
 ---
 
@@ -326,3 +327,74 @@ launchAngle < 10°           → ground_ball
 - [Alan Nathan Baseball Physics](https://baseball.physics.illinois.edu/) — 軌道計算モデル
 - [Baseball Savant Field Breakdown](https://baseballsavant.mlb.com/statcast_field) — 初速×角度の結果分布
 - [RPP Baseball Launch Angles](https://rocklandpeakperformance.com/baseball-launch-angles-exit-velos/) — 角度帯別の打球結果データ
+
+---
+
+## Appendix: 前提情報（旧 batted-ball-design-context.md）
+
+別セッションへのハンドオフ用。このセクションを読めば設計に着手できる状態にする。
+
+### 現状の実装
+
+#### 打球生成フロー (simulation.ts)
+
+```
+コンタクト判定 → ファウル判定 → generateBattedBall() → 守備判定 → 結果確定
+```
+
+#### generateBattedBall()
+
+```typescript
+// 1. 方向 (0-90°にclamp)
+dirMean = 45 (S), 38 (R), 52 (L)
+direction = clamp(gaussianRandom(dirMean, 18), 0, 90)
+
+// 2. 角度 (-15° ~ 70°)
+angleMean = 10 + (power-50)*0.08 - (contact-50)*0.04 + (trajectory-2)*3 - sinkerBonus
+launchAngle = clamp(gaussianRandom(angleMean, 16), -15, 70)
+
+// 3. 速度 (80-170 km/h)
+velMean = 132 + (power-50)*0.15 + (contact-50)*0.15
+exitVelocity = clamp(gaussianRandom(velMean - breakingPenalty, 18), 80, 170)
+
+// 4. タイプ分類
+type = classifyBattedBallType(launchAngle, exitVelocity)
+```
+
+#### 座標系
+
+```
+方向: 0° = レフト線, 45° = センター, 90° = ライト線
+座標: x = 正→ライト方向, 負→レフト方向 / y = 0→ホーム, 正→外野方向
+```
+
+### 現状の問題点
+
+1. ファウルが確率テーブルのみ（打球方向生成前に決定）
+2. 方向が0-90°にclamp（ファウルゾーン打球なし）
+3. 後方打球が存在しない（キャッチャーポップフライなし）
+4. ファウルフライの守備判定がない
+
+### 再設計で実現すべきこと
+
+1. 打球方向の拡張（-30°〜120°）
+2. ファウル判定の物理化（方向ベース判定）
+3. ファウルフライアウト
+4. ファウルチップ（2S後のファウルで三振）
+5. clamp artifactsの解消
+
+### 統計的制約（NPB準拠）
+
+- ファウルアウト/試合: 約1-2回
+- ファウルチップ三振: 全三振の5-10%程度
+- フェア打球率: コンタクト成功時の60-70%
+- 打球方向分布: プルヒッター傾向は維持
+
+### 関連ファイル
+
+| ファイル | 変更の可能性 |
+|---|---|
+| `src/engine/simulation.ts` | **主要変更** |
+| `src/engine/physics-constants.ts` | 追加 |
+| `src/engine/fielding-agent.ts` | 軽微 |
+| `src/models/league.ts` | 追加 |
