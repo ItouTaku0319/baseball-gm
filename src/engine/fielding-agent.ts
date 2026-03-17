@@ -43,13 +43,7 @@ import {
   OUTFIELD_DEPTH_THRESHOLD,
   MAX_PHASE2_TIME,
   SECURING_TIME_BASE,
-  SECURING_TIME_SKILL_SCALE,
   PIVOT_TIME,
-  THROW_SPEED_BASE,
-  THROW_SPEED_ARM_SCALE,
-  RUNNER_SPEED_BASE,
-  RUNNER_SPEED_SCALE,
-  BATTER_SWING_TO_RUN_TIME,
   TAGUP_DELAY,
   BASE_TAG_TIME,
   THROW_ERROR_BASE,
@@ -59,16 +53,6 @@ import {
   RETRIEVER_PICKUP_TIME,
   RETRIEVER_PICKUP_RADIUS,
   RETRIEVER_PICKUP_SPEED,
-  EXTRA_BASE_ROUNDING_TIME,
-  EXTRA_BASE_GO_THRESHOLD,
-  EXTRA_BASE_ROUNDING_FATIGUE,
-
-  EXTRA_BASE_DECISION_NOISE,
-  TAGUP_ARM_PERCEPTION_NOISE,
-  TAGUP_GO_THRESHOLD,
-  TAGUP_DECISION_NOISE,
-  GROUND_ADVANCE_GO_THRESHOLD,
-  GROUND_ADVANCE_DECISION_NOISE,
   TAGUP_THROW_MARGIN_BASE,
   TAGUP_THROW_MARGIN_AWARENESS_SCALE,
   POPUP_LAUNCH_ANGLE,
@@ -79,8 +63,6 @@ import {
   RECEIVER_WAIT_TOLERANCE,
   RECEIVER_MAX_WAIT_TIME,
   GROUND_BALL_APPROACH_WAIT_DIST,
-  RUNNER_GROUND_HESITATION_DIST,
-  RUNNER_LEAD_SPEED,
 } from "./physics-constants";
 import type {
   Vec2,
@@ -109,16 +91,24 @@ import {
   vec2DistanceSq,
   clamp,
   gaussianRandom,
+  getBasePosition,
+  interpolateBasepath,
 } from "./fielding-agent-types";
 import type { FielderAction } from "../models/league";
 import { calcAndStorePursuitScore, autonomousDecide } from "./autonomous-fielder";
 import type { CoverSnapshot } from "./autonomous-fielder";
 import {
-  initRunnersAtBatStart,
-  runnerAutonomousDecide,
-  startRetreating,
-  moveLeadingRunner,
+  initRunnersUnified,
+  updateRunnerPreCatch,
+  transitionRunnersOnCatch,
+  moveRunner,
+  decideTagup,
+  decideExtraBase,
+  decideGroundAdvance,
+  decideHitAdvance,
   moveRetreatingRunner,
+  calcThrowSpeed,
+  calcSecuringTime,
 } from "./runner-agent";
 import { createUnifiedBallState, updateBallPosition, transitionBallPhase } from "./ball-state";
 
@@ -164,14 +154,15 @@ export function resolvePlayWithAgents(
   const agents = createAgents(fielderMap, trajectory);
   const timeline: AgentTimelineEntry[] = [];
 
-  // ランナー早期初期化
-  const earlyRunners = initRunnersAtBatStart(bases);
+  // ランナー統一初期化（バッター含む、全員HOLDING）
+  const runners = initRunnersUnified(batter, bases);
 
   // ゴロ時: フォースランナーをマーク（Phase 1中に走塁開始する）
   // フォース連鎖: 1塁から連続して埋まっている塁のみ強制走塁
   if (trajectory.isGroundBall) {
     const forceThrough = bases.first ? (bases.second ? (bases.third ? 3 : 2) : 1) : 0;
-    for (const runner of earlyRunners) {
+    for (const runner of runners) {
+      if (runner.isBatter) continue; // バッターは別途処理
       if (runner.fromBase <= forceThrough) {
         runner.isForced = true;
         runner.targetBase = runner.fromBase + 1;
@@ -231,7 +222,6 @@ export function resolvePlayWithAgents(
   let catchSuccess = false;
   let catchError = false;
   let catchErrorPos: FielderPosition | undefined;
-  let runners: RunnerAgent[] = [];
   let ballHolder: FielderAgent | null = null;
   let throwBall: ThrowBallState | null = null;
   const throwPlays: ThrowPlay[] = [];
@@ -239,7 +229,6 @@ export function resolvePlayWithAgents(
   let outsAdded = 0;
   let securingTimer = 0;
   let retrieverAgent: FielderAgent | null = null;
-  let batterStartTimer = 0;
   let tagupTimer = 0;
 
   // GC圧力削減: バッファを1回だけ確保して毎ティック再利用
@@ -444,25 +433,13 @@ export function resolvePlayWithAgents(
           // 捕球フレームをタイムラインに記録（捕球前状態のスナップショット）
           if (collectTimeline) {
             const entry = snapshotAll(agents, ballPos, ballH, t, trajectory);
-            // 捕球フレームにもバッター走者と既存ランナーを表示
-            const phase1Runners: import("./fielding-agent-types").RunnerSnapshot[] = [];
-            if (t >= BATTER_SWING_TO_RUN_TIME) {
-              const batterRunT = t - BATTER_SWING_TO_RUN_TIME;
-              const batterSpeed = calcRunnerSpeed(batter);
-              const progress = Math.min(0.95, batterRunT * batterSpeed / BASE_LENGTH);
-              const pos = interpolateBasepath(0, 1, progress);
-              phase1Runners.push({
-                fromBase: 0, targetBase: 1,
-                x: pos.x, y: pos.y, state: "RUNNING",
-              });
-            }
-            for (const runner of earlyRunners) {
-              phase1Runners.push({
-                fromBase: runner.fromBase, targetBase: runner.targetBase,
-                x: runner.currentPos.x, y: runner.currentPos.y, state: runner.state,
-              });
-            }
-            if (phase1Runners.length > 0) entry.runners = phase1Runners;
+            entry.runners = runners
+              .filter(r => r.state !== "HOLDING" || r.fromBase > 0)
+              .map(r => ({
+                fromBase: r.fromBase, targetBase: r.targetBase,
+                x: r.currentPos.x, y: r.currentPos.y, state: r.state,
+              }));
+            if (entry.runners.length === 0) delete entry.runners;
             timeline.push(entry);
           }
 
@@ -473,7 +450,6 @@ export function resolvePlayWithAgents(
           // エラーフラグ
           if (catchResult && !catchResult.success && catcherAgent && trajectory.isGroundBall) {
             if (predeterminedOutcome === "error") {
-              // 確率テーブルによるエラー判定
               catchError = true;
               catchErrorPos = catcherAgent.pos;
             } else {
@@ -492,12 +468,9 @@ export function resolvePlayWithAgents(
           }
 
           catchSuccess = !!(catchResult && catchResult.success && catcherAgent);
-          // フライ捕球: リード中のearlyRunnersを帰塁開始
-          if (catchSuccess && !trajectory.isGroundBall) {
-            for (const runner of earlyRunners) {
-              startRetreating(runner);
-            }
-          }
+
+          // ランナー状態遷移（earlyRunners転写の代替）
+          transitionRunnersOnCatch(runners, trajectory.isGroundBall, catchSuccess);
 
           // 回収者選定
           const groundBallThroughFielder = !catchSuccess && !catchError && catcherAgent
@@ -517,39 +490,6 @@ export function resolvePlayWithAgents(
             };
           }
 
-          // ランナー初期化（tを渡してバッターのヘッドスタートを計算）
-          runners = initRunners(batter, bases, trajectory, catchSuccess, t);
-
-          // earlyRunnerの走塁進捗をPhase 2ランナーに転写
-          if (trajectory.isGroundBall) {
-            for (const runner of runners) {
-              if (runner.isBatter) continue;
-              const early = earlyRunners.find(er => er.player === runner.player);
-              if (!early) continue;
-              if (early.isForced && early.progress > 0) {
-                // フォースランナー: 走塁進捗を転写
-                runner.progress = early.progress;
-                runner.currentPos.x = early.currentPos.x;
-                runner.currentPos.y = early.currentPos.y;
-              } else if (!early.isForced && early.state === "LEADING") {
-                // 非フォースランナー: 飛び出し位置から帰塁開始
-                runner.currentPos.x = early.currentPos.x;
-                runner.currentPos.y = early.currentPos.y;
-                runner.state = "RETREATING";
-              }
-            }
-          } else if (catchSuccess) {
-            // フライ捕球: earlyRunnerのリード位置を転写
-            for (const runner of runners) {
-              const early = earlyRunners.find(er => er.player === runner.player);
-              if (early && (early.state === "RETREATING" || early.state === "LEADING")) {
-                runner.currentPos.x = early.currentPos.x;
-                runner.currentPos.y = early.currentPos.y;
-                runner.state = "RETREATING";
-              }
-            }
-          }
-
           // ボール保持者 / 回収者の設定
           ballHolder = catchSuccess && effectiveCatcher ? effectiveCatcher : null;
           if (!catchSuccess && effectiveCatcher) {
@@ -559,9 +499,6 @@ export function resolvePlayWithAgents(
             retrieverAgent.targetPos.y = restPosForBall.y;
             retrieverAgent.currentSpeed = retrieverAgent.maxSpeed * RETRIEVER_APPROACH_FACTOR;
           }
-
-          // 打者走者スタート遅延: ヘッドスタートで初期進捗を付与済みなので遅延なし
-          batterStartTimer = 0;
 
           // 捕球成功: SECURING状態
           if (ballHolder) {
@@ -608,69 +545,13 @@ export function resolvePlayWithAgents(
       }
 
       // ランナー行動（毎ティック）
-      if (trajectory.isGroundBall) {
-        for (const runner of earlyRunners) {
-          if (t < BATTER_SWING_TO_RUN_TIME) continue;
-
-          if (runner.isForced) {
-            // フォースランナー: 全力走塁
-            if (runner.state === "HOLDING") runner.state = "RUNNING";
-            if (runner.state === "RUNNING") {
-              runner.progress += (runner.speed * unifiedDt) / BASE_LENGTH;
-              if (runner.progress >= 1.0) runner.progress = 1.0;
-              const pos = interpolateBasepath(runner.fromBase, runner.targetBase, runner.progress);
-              runner.currentPos.x = pos.x;
-              runner.currentPos.y = pos.y;
-            }
-          } else {
-            // 非フォースランナー: 飛び出し→帰塁（行けるか？→やめた）
-            if (runner.state === "HOLDING") {
-              runner.state = "LEADING";
-            }
-            if (runner.state === "LEADING") {
-              const nextBase = runner.fromBase + 1;
-              if (nextBase <= 4) {
-                const fromPos = getBasePosition(runner.fromBase);
-                const toPos = getBasePosition(nextBase);
-                const dx = toPos.x - fromPos.x;
-                const dy = toPos.y - fromPos.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                const maxFraction = RUNNER_GROUND_HESITATION_DIST / dist;
-                const targetX = fromPos.x + dx * maxFraction;
-                const targetY = fromPos.y + dy * maxFraction;
-                const diffX = targetX - runner.currentPos.x;
-                const diffY = targetY - runner.currentPos.y;
-                const diffDist = Math.sqrt(diffX * diffX + diffY * diffY);
-                if (diffDist > 0.05) {
-                  const moveDist = RUNNER_LEAD_SPEED * unifiedDt;
-                  if (moveDist >= diffDist) {
-                    runner.currentPos.x = targetX;
-                    runner.currentPos.y = targetY;
-                  } else {
-                    runner.currentPos.x += (diffX / diffDist) * moveDist;
-                    runner.currentPos.y += (diffY / diffDist) * moveDist;
-                  }
-                }
-              }
-            }
-          }
-        }
-      } else {
-        // フライ: リード行動
-        for (const runner of earlyRunners) {
-          runnerAutonomousDecide(runner, unifiedBall, agents, t, rng);
-          moveLeadingRunner(runner, unifiedDt);
-        }
+      for (const runner of runners) {
+        updateRunnerPreCatch(runner, unifiedBall, agents, t, unifiedDt, rng);
       }
     }
 
     // ===== 捕球後フェーズ =====
     if (postCatchStarted) {
-      // 打者走者スタート遅延
-      if (batterStartTimer > 0) {
-        batterStartTimer -= unifiedDt;
-      }
-
       // 帰塁中ランナーの移動（リードからの帰塁 → WAITING_TAG）
       for (const runner of runners) {
         if (runner.state === "RETREATING") {
@@ -711,7 +592,6 @@ export function resolvePlayWithAgents(
       // ランナー移動
       for (const runner of runners) {
         if (runner.state === "RUNNING" || runner.state === "TAGGED_UP") {
-          if (runner.isBatter && batterStartTimer > 0) continue;
           moveRunner(runner, unifiedDt, catchSuccess);
         }
       }
@@ -737,7 +617,7 @@ export function resolvePlayWithAgents(
             (r.state === "SAFE" || r.state === "HOLDING") && r.targetBase === nextBase
           ) : null;
           const shouldAdvance = pushedForward || (
-            !blocker && decideExtraBase(runner, ballHolder, retrieverAgent, throwBall, t, trajectory, restPosForBall, rng)
+            !blocker && decideExtraBase(runner, ballHolder, retrieverAgent, throwBall, t, trajectory, restPosForBall, rng, getPhase2BallGroundPos)
           );
           if (shouldAdvance && nextBase <= 4) {
             // 押し出し連鎖: 次の塁に居るランナーも強制進塁
@@ -932,27 +812,15 @@ export function resolvePlayWithAgents(
     if (collectTimeline) {
       if (!postCatchStarted) {
         // 捕球前: 野手+ボールのスナップショット（decisionTick時のみ記録）
-        // 野手移動が2ティックごとのため、中間フレームの停止状態記録を避ける
         if (fielderDecisionTick === 0) {
           const entry = snapshotAll(agents, ballPos, ballH, t, trajectory);
-          // Phase 1でもバッター走者と既存ランナーを表示
-          const phase1Runners: import("./fielding-agent-types").RunnerSnapshot[] = [];
-          if (t >= BATTER_SWING_TO_RUN_TIME) {
-            const batterRunT = t - BATTER_SWING_TO_RUN_TIME;
-            const batterSpeed = calcRunnerSpeed(batter);
-            const progress = Math.min(0.95, batterRunT * batterSpeed / BASE_LENGTH);
-            const pos = interpolateBasepath(0, 1, progress);
-            phase1Runners.push({
-              fromBase: 0, targetBase: 1,
-              x: pos.x, y: pos.y, state: "RUNNING",
-            });
-          }
-          for (const runner of earlyRunners) {
-            phase1Runners.push({
-              fromBase: runner.fromBase, targetBase: runner.targetBase,
-              x: runner.currentPos.x, y: runner.currentPos.y, state: runner.state,
-            });
-          }
+          // Phase 1: ホームでHOLDINGのバッターは除外（走り始めていない）
+          const phase1Runners = runners
+            .filter(r => r.state !== "HOLDING" || r.fromBase > 0)
+            .map(r => ({
+              fromBase: r.fromBase, targetBase: r.targetBase,
+              x: r.currentPos.x, y: r.currentPos.y, state: r.state,
+            }));
           if (phase1Runners.length > 0) entry.runners = phase1Runners;
           timeline.push(entry);
         }
@@ -1840,490 +1708,8 @@ function round(v: number): number {
 // 捕球後フェーズ: 送球・走塁ヘルパー
 // ====================================================================
 
-/** 塁番号 → 座標（コピーを返す。直接参照するとBASE_POSITIONS定数が汚染されるため） */
-function getBasePosition(baseNum: number): Vec2 {
-  const name = BASE_NAMES[baseNum];
-  const pos = name ? BASE_POSITIONS[name] : BASE_POSITIONS.home;
-  return { x: pos.x, y: pos.y };
-}
-
-/** 塁間の線形補間 */
-function interpolateBasepath(fromBase: number, toBase: number, progress: number): Vec2 {
-  const from = getBasePosition(fromBase);
-  const to = getBasePosition(toBase);
-  return {
-    x: from.x + (to.x - from.x) * progress,
-    y: from.y + (to.y - from.y) * progress,
-  };
-}
-
-/** プレイヤーの走速を計算 */
-function calcRunnerSpeed(player: Player): number {
-  return RUNNER_SPEED_BASE + (player.batting.speed / 100) * RUNNER_SPEED_SCALE;
-}
-
-/** 野手の送球速度を計算（位置に応じて内野/外野を自動判定） */
-function calcThrowSpeed(agent: FielderAgent): number {
-  const distFromHome = Math.sqrt(agent.currentPos.x ** 2 + agent.currentPos.y ** 2);
-  if (distFromHome > OUTFIELD_DEPTH_THRESHOLD) {
-    // 外野: 長距離送球は制御重視で速度が落ちる (旧resolveFlyOut準拠)
-    return 25 + (agent.skill.arm / 100) * 15;
-  }
-  // 内野: 短距離クイックスロー (旧resolveGroundOut準拠)
-  return THROW_SPEED_BASE + (agent.skill.arm / 100) * THROW_SPEED_ARM_SCALE;
-}
-
-/** 捕球→送球準備の所要時間を計算 */
-function calcSecuringTime(agent: FielderAgent): number {
-  return SECURING_TIME_BASE + (1 - agent.skill.fielding / 100) * SECURING_TIME_SKILL_SCALE;
-}
-
-// --- ランナー自律判断関数 ---
-
-/** ヒット時のエキストラベース判断（ROUNDINGタイマー後に呼ばれる） */
-function decideExtraBase(
-  runner: RunnerAgent,
-  ballHolder: FielderAgent | null,
-  retrieverAgent: FielderAgent | null,
-  throwBall: ThrowBallState | null,
-  currentTime: number,
-  trajectory: BallTrajectory,
-  restPos: Vec2,
-  rng: () => number
-): boolean {
-  const nextBase = runner.targetBase + 1;
-  if (nextBase > 4) return false;
-  const nextBasePos = getBasePosition(nextBase);
-
-  // ボールが次塁に届くまでの推定時間
-  let estBallTime: number;
-  if (ballHolder) {
-    // 誰かがボール保持中 → 送球時間
-    const throwSpeed = calcThrowSpeed(ballHolder);
-    const throwDist = vec2Distance(ballHolder.currentPos, nextBasePos);
-    estBallTime = calcSecuringTime(ballHolder) + throwDist / throwSpeed;
-  } else if (throwBall) {
-    // ボール飛行中 → リレー時間を推定
-    const throwRemaining = Math.max(0, throwBall.arrivalTime - currentTime);
-    if (throwBall.targetBase === nextBase) {
-      // 次塁に直接来る → そのまま到着時間
-      estBallTime = throwRemaining;
-    } else {
-      // 別の塁へ飛行中 → 中継(リレー)が必要
-      const relayBasePos = getBasePosition(throwBall.targetBase);
-      const relayDist = vec2Distance(relayBasePos, nextBasePos);
-      const relaySpeed = THROW_SPEED_BASE + THROW_SPEED_ARM_SCALE * 0.5;
-      estBallTime = throwRemaining + SECURING_TIME_BASE + PIVOT_TIME + relayDist / relaySpeed;
-    }
-  } else if (retrieverAgent) {
-    // retrieverの実位置からボール位置への距離で推定
-    const tmpBuf: Vec2 = { x: 0, y: 0 };
-    getPhase2BallGroundPos(trajectory, restPos, currentTime, tmpBuf);
-    const distRetrieverToBall = vec2Distance(retrieverAgent.currentPos, tmpBuf);
-    const pickupTime = distRetrieverToBall / (retrieverAgent.maxSpeed * 0.8);
-    const throwSpeed = calcThrowSpeed(retrieverAgent);
-    const throwDist = vec2Distance(tmpBuf, nextBasePos);
-    estBallTime = pickupTime + RETRIEVER_PICKUP_TIME + SECURING_TIME_BASE + throwDist / throwSpeed;
-  } else {
-    // ボール状態不明 — 安全側に倒して進塁しない（0秒=即送球可能扱い）
-    estBallTime = 0;
-  }
-
-  // 疲労: 2→3で+0.4s, 3→4で+0.8s（走るほど遅くなる）
-  const basesRun = nextBase - 1; // 1→2=1, 2→3=2, 3→4=3
-  const fatigue = Math.max(0, basesRun - 1) * EXTRA_BASE_ROUNDING_FATIGUE;
-  const roundingTime = EXTRA_BASE_ROUNDING_TIME + fatigue;
-  const estRunTime = roundingTime + BASE_LENGTH / runner.speed;
-  const margin = estBallTime - estRunTime;
-  const br = runner.skill?.baseRunning ?? 50;
-  const noise = gaussianRandom(0, EXTRA_BASE_DECISION_NOISE * (1 - br / 100), rng);
-  return (margin + noise) > EXTRA_BASE_GO_THRESHOLD;
-}
-
-/** タッチアップ判断（DECIDING状態で呼ばれる） */
-function decideTagup(
-  runner: RunnerAgent,
-  fielder: FielderAgent,
-  rng: () => number
-): boolean {
-  const targetBasePos = getBasePosition(runner.targetBase);
-  const throwDist = vec2Distance(fielder.currentPos, targetBasePos);
-  const br = runner.skill?.baseRunning ?? 50;
-
-  const perceivedArm = fielder.skill.arm
-    + gaussianRandom(0, TAGUP_ARM_PERCEPTION_NOISE * (1 - br / 100), rng);
-  const clampedArm = clamp(perceivedArm, 0, 100);
-
-  const estThrowSpeed = THROW_SPEED_BASE + (clampedArm / 100) * THROW_SPEED_ARM_SCALE;
-  const estOverhead = SF_CATCH_TO_THROW_OVERHEAD + SECURING_TIME_BASE;
-  const estThrowTime = estOverhead + throwDist / estThrowSpeed;
-
-  const runTime = TAGUP_DELAY + BASE_LENGTH / runner.speed;
-  const margin = estThrowTime - runTime;
-
-  const noise = gaussianRandom(0, TAGUP_DECISION_NOISE * (1 - br / 100), rng);
-  return (margin + noise) > TAGUP_GO_THRESHOLD;
-}
-
-/** ゴロ時の非フォース走者進塁判断 */
-function decideGroundAdvance(
-  runner: RunnerAgent,
-  throwBall: ThrowBallState | null,
-  currentTime: number,
-  rng: () => number
-): boolean {
-  if (!throwBall) return false;
-  const nextBase = runner.fromBase + 1;
-  if (nextBase > 4) return false;
-  const nextBasePos = getBasePosition(nextBase);
-
-  const throwRemaining = Math.max(0, throwBall.arrivalTime - currentTime);
-  const returnThrowDist = vec2Distance(
-    getBasePosition(throwBall.targetBase), nextBasePos);
-  const estBallTime = throwRemaining + PIVOT_TIME + returnThrowDist / 35;
-
-  const runTime = BASE_LENGTH / runner.speed;
-  const margin = estBallTime - runTime;
-  const br = runner.skill?.baseRunning ?? 50;
-  const noise = gaussianRandom(0, GROUND_ADVANCE_DECISION_NOISE * (1 - br / 100), rng);
-  return (margin + noise) > GROUND_ADVANCE_GO_THRESHOLD;
-}
-
-/**
- * 捕球失敗/ヒット時の非フォースランナー進塁判断。
- * 野手がボールを回収して送球するまでの推定時間と、
- * ランナーが次塁に到達する時間を比較する。
- */
-function decideHitAdvance(
-  runner: RunnerAgent,
-  retriever: FielderAgent | null,
-  holder: FielderAgent | null,
-  throwBall: ThrowBallState | null,
-  currentTime: number,
-  rng: () => number
-): boolean {
-  const nextBase = runner.fromBase + 1;
-  if (nextBase > 4) return false;
-  const nextBasePos = getBasePosition(nextBase);
-
-  const runnerDist = vec2Distance(runner.currentPos, nextBasePos);
-  const runnerTime = runnerDist / runner.speed;
-  const throwSpeed = THROW_SPEED_BASE + THROW_SPEED_ARM_SCALE * 0.5;
-
-  let fielderTime: number;
-  if (throwBall) {
-    // 送球中: 送球到着 + ピボット + 返球
-    const throwRemaining = Math.max(0, throwBall.arrivalTime - currentTime);
-    const returnThrowDist = vec2Distance(
-      getBasePosition(throwBall.targetBase), nextBasePos);
-    fielderTime = throwRemaining + PIVOT_TIME + returnThrowDist / throwSpeed;
-  } else if (holder) {
-    // ボール保持済み: 送球時間のみ
-    const throwDist = vec2Distance(holder.currentPos, nextBasePos);
-    fielderTime = PIVOT_TIME + throwDist / throwSpeed;
-  } else if (retriever) {
-    // 回収中: 回収 + ピックアップ + 送球
-    const retrieveDist = vec2Distance(retriever.currentPos, retriever.targetPos);
-    const retrieveTime = retrieveDist / (retriever.maxSpeed * RETRIEVER_APPROACH_FACTOR);
-    const throwDist = vec2Distance(retriever.targetPos, nextBasePos);
-    fielderTime = retrieveTime + RETRIEVER_PICKUP_TIME + PIVOT_TIME +
-      throwDist / throwSpeed;
-  } else {
-    return true; // 野手なし → 走る
-  }
-
-  const margin = fielderTime - runnerTime;
-  const br = runner.skill?.baseRunning ?? 50;
-  const noise = gaussianRandom(0, GROUND_ADVANCE_DECISION_NOISE * (1 - br / 100), rng);
-  return (margin + noise) > GROUND_ADVANCE_GO_THRESHOLD;
-}
-
-// --- ランナー初期化 ---
-
-function makeRunnerSkill(player: Player) {
-  return {
-    speed: player.batting.speed,
-    baseRunning: player.batting.baseRunning ?? 50,
-  };
-}
-
-function initRunners(
-  batter: Player,
-  bases: BaseRunners,
-  trajectory: BallTrajectory,
-  catchSuccess: boolean,
-  catchTime: number = 0
-): RunnerAgent[] {
-  const runners: RunnerAgent[] = [];
-
-  // バッターのヘッドスタート: コンタクト後 BATTER_SWING_TO_RUN_TIME で走り始めている
-  const batterSpeed = calcRunnerSpeed(batter);
-  const headStartTime = Math.max(0, catchTime - BATTER_SWING_TO_RUN_TIME);
-  const batterInitialProgress = Math.min(0.95, headStartTime * batterSpeed / BASE_LENGTH);
-
-  if (catchSuccess && trajectory.isGroundBall) {
-    // ゴロ捕球: 打者→1塁走塁、フォース走者は強制走塁
-    const initPos = batterInitialProgress > 0
-      ? interpolateBasepath(0, 1, batterInitialProgress)
-      : { ...BASE_POSITIONS.home };
-    runners.push({
-      player: batter,
-      state: "RUNNING",
-      currentPos: initPos,
-      fromBase: 0,
-      targetBase: 1,
-      speed: batterSpeed,
-      progress: batterInitialProgress,
-      isBatter: true,
-      isForced: true,
-      skill: makeRunnerSkill(batter),
-      originalBase: 0,
-    });
-
-    // フォース連鎖: 1塁→2塁, 2塁→3塁, 3塁→本塁
-    if (bases.first) {
-      runners.push({
-        player: bases.first,
-        state: "RUNNING",
-        currentPos: { ...BASE_POSITIONS.first },
-        fromBase: 1,
-        targetBase: 2,
-        speed: calcRunnerSpeed(bases.first),
-        progress: 0,
-        isBatter: false,
-        isForced: true,
-        skill: makeRunnerSkill(bases.first),
-        originalBase: 1,
-      });
-      if (bases.second) {
-        runners.push({
-          player: bases.second,
-          state: "RUNNING",
-          currentPos: { ...BASE_POSITIONS.second },
-          fromBase: 2,
-          targetBase: 3,
-          speed: calcRunnerSpeed(bases.second),
-          progress: 0,
-          isBatter: false,
-          isForced: true,
-          skill: makeRunnerSkill(bases.second),
-          originalBase: 2,
-        });
-        if (bases.third) {
-          runners.push({
-            player: bases.third,
-            state: "RUNNING",
-            currentPos: { ...BASE_POSITIONS.third },
-            fromBase: 3,
-            targetBase: 4,
-            speed: calcRunnerSpeed(bases.third),
-            progress: 0,
-            isBatter: false,
-            isForced: true,
-            skill: makeRunnerSkill(bases.third),
-            originalBase: 3,
-          });
-        }
-      }
-    }
-    // 非フォース走者はホールド
-    if (!bases.first && bases.second) {
-      runners.push({
-        player: bases.second,
-        state: "HOLDING",
-        currentPos: { ...BASE_POSITIONS.second },
-        fromBase: 2,
-        targetBase: 2,
-        speed: calcRunnerSpeed(bases.second),
-        progress: 0,
-        isBatter: false,
-        isForced: false,
-        skill: makeRunnerSkill(bases.second),
-        originalBase: 2,
-      });
-    }
-    if (!bases.first && bases.third) {
-      runners.push({
-        player: bases.third,
-        state: "HOLDING",
-        currentPos: { ...BASE_POSITIONS.third },
-        fromBase: 3,
-        targetBase: 3,
-        speed: calcRunnerSpeed(bases.third),
-        progress: 0,
-        isBatter: false,
-        isForced: false,
-        skill: makeRunnerSkill(bases.third),
-        originalBase: 3,
-      });
-    }
-    if (bases.first && !bases.second && bases.third) {
-      runners.push({
-        player: bases.third,
-        state: "HOLDING",
-        currentPos: { ...BASE_POSITIONS.third },
-        fromBase: 3,
-        targetBase: 3,
-        speed: calcRunnerSpeed(bases.third),
-        progress: 0,
-        isBatter: false,
-        isForced: false,
-        skill: makeRunnerSkill(bases.third),
-        originalBase: 3,
-      });
-    }
-  } else if (catchSuccess && !trajectory.isGroundBall) {
-    // フライ捕球: 打者はアウト、走者はタッチアップ待ち
-    // 打者は含めない（フライアウト確定）
-    if (bases.first) {
-      runners.push({
-        player: bases.first,
-        state: "WAITING_TAG",
-        currentPos: { ...BASE_POSITIONS.first },
-        fromBase: 1,
-        targetBase: 2,
-        speed: calcRunnerSpeed(bases.first),
-        progress: 0,
-        isBatter: false,
-        isForced: false,
-        skill: makeRunnerSkill(bases.first),
-        originalBase: 1,
-      });
-    }
-    if (bases.second) {
-      runners.push({
-        player: bases.second,
-        state: "WAITING_TAG",
-        currentPos: { ...BASE_POSITIONS.second },
-        fromBase: 2,
-        targetBase: 3,
-        speed: calcRunnerSpeed(bases.second),
-        progress: 0,
-        isBatter: false,
-        isForced: false,
-        skill: makeRunnerSkill(bases.second),
-        originalBase: 2,
-      });
-    }
-    if (bases.third) {
-      runners.push({
-        player: bases.third,
-        state: "WAITING_TAG",
-        currentPos: { ...BASE_POSITIONS.third },
-        fromBase: 3,
-        targetBase: 4,
-        speed: calcRunnerSpeed(bases.third),
-        progress: 0,
-        isBatter: false,
-        isForced: false,
-        skill: makeRunnerSkill(bases.third),
-        originalBase: 3,
-      });
-    }
-  } else {
-    // 捕球失敗 / 未到達ヒット
-    const hitInitPos = batterInitialProgress > 0
-      ? interpolateBasepath(0, 1, batterInitialProgress)
-      : { ...BASE_POSITIONS.home };
-    runners.push({
-      player: batter,
-      state: "RUNNING",
-      currentPos: hitInitPos,
-      fromBase: 0,
-      targetBase: 1,
-      speed: batterSpeed,
-      progress: batterInitialProgress,
-      isBatter: true,
-      isForced: true,
-      skill: makeRunnerSkill(batter),
-      originalBase: 0,
-    });
-    // フォース連鎖: 1塁から連続して埋まっている塁のみ強制走塁
-    const forceThrough = bases.first ? (bases.second ? (bases.third ? 3 : 2) : 1) : 0;
-    if (bases.first) {
-      runners.push({
-        player: bases.first,
-        state: "RUNNING",
-        currentPos: { ...BASE_POSITIONS.first },
-        fromBase: 1,
-        targetBase: 2,
-        speed: calcRunnerSpeed(bases.first),
-        progress: 0,
-        isBatter: false,
-        isForced: true,
-        skill: makeRunnerSkill(bases.first),
-        originalBase: 1,
-      });
-    }
-    if (bases.second) {
-      const forced = 2 <= forceThrough;
-      runners.push({
-        player: bases.second,
-        state: forced ? "RUNNING" : "HOLDING",
-        currentPos: { ...BASE_POSITIONS.second },
-        fromBase: 2,
-        targetBase: forced ? 3 : 2,
-        speed: calcRunnerSpeed(bases.second),
-        progress: 0,
-        isBatter: false,
-        isForced: forced,
-        skill: makeRunnerSkill(bases.second),
-        originalBase: 2,
-      });
-    }
-    if (bases.third) {
-      const forced = 3 <= forceThrough;
-      runners.push({
-        player: bases.third,
-        state: forced ? "RUNNING" : "HOLDING",
-        currentPos: { ...BASE_POSITIONS.third },
-        fromBase: 3,
-        targetBase: forced ? 4 : 3,
-        speed: calcRunnerSpeed(bases.third),
-        progress: 0,
-        isBatter: false,
-        isForced: forced,
-        skill: makeRunnerSkill(bases.third),
-        originalBase: 3,
-      });
-    }
-  }
-
-  return runners;
-}
-
-// --- ランナー移動 ---
-
-function moveRunner(runner: RunnerAgent, dt: number, catchSuccess: boolean): void {
-  if (runner.state !== "RUNNING" && runner.state !== "TAGGED_UP") return;
-  runner.progress += (runner.speed * dt) / BASE_LENGTH;
-  if (runner.progress >= 1.0) {
-    runner.progress = 1.0;
-    const reachedBase = getBasePosition(runner.targetBase);
-    runner.currentPos = { x: reachedBase.x, y: reachedBase.y };
-    if (runner.targetBase >= 4) {
-      // ホーム到達 → 得点
-      runner.state = "SAFE";
-    } else if (runner.state === "TAGGED_UP") {
-      // タッチアップ到達
-      runner.state = "SAFE";
-    } else if (!catchSuccess && runner.targetBase < 4) {
-      // ヒット時 → ROUNDING（エキストラベース判断へ）
-      // 疲労: 走った塁数が多いほどラウンディングが遅くなる
-      const basesRun = runner.targetBase - (runner.originalBase ?? 0);
-      const fatigue = Math.max(0, basesRun - 1) * EXTRA_BASE_ROUNDING_FATIGUE;
-      runner.state = "ROUNDING";
-      runner.roundingTimer = EXTRA_BASE_ROUNDING_TIME + fatigue;
-    } else {
-      // ゴロフォースプレー到達 → 暫定セーフ（後からOUTに変わりうる）
-      runner.state = "SAFE";
-    }
-  } else {
-    const pos = interpolateBasepath(runner.fromBase, runner.targetBase, runner.progress);
-    runner.currentPos.x = pos.x;
-    runner.currentPos.y = pos.y;
-  }
-}
+// ランナー関連関数は runner-agent.ts に移動済み
+// getBasePosition, interpolateBasepath は fielding-agent-types.ts からimport
 
 // --- 送球先決定 ---
 

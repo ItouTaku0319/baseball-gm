@@ -329,6 +329,23 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+/** 塁番号から位置座標を取得（コピーを返す） */
+export function getBasePosition(baseNum: number): Vec2 {
+  const name = BASE_NAMES[baseNum];
+  const pos = name ? BASE_POSITIONS[name] : BASE_POSITIONS.home;
+  return { x: pos.x, y: pos.y };
+}
+
+/** 塁間の線形補間 */
+export function interpolateBasepath(fromBase: number, toBase: number, progress: number): Vec2 {
+  const from = getBasePosition(fromBase);
+  const to = getBasePosition(toBase);
+  return {
+    x: from.x + (to.x - from.x) * progress,
+    y: from.y + (to.y - from.y) * progress,
+  };
+}
+
 /** Box-Muller変換 (rng注入対応) */
 export function gaussianRandom(
   mean: number,
