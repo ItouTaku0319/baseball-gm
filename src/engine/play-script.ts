@@ -130,12 +130,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "BACKUP_BALL", 2: "FIELD", 3: "COVER_1B", 4: "BACKUP_1B_THROW",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_1B_THROW", 9: "BACKUP_1B_THROW",
   },
-  "none-3": { // 1Bゴロ
-    1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "FIELD", 4: "COVER_1B",
+  "none-3": { // 1Bゴロ — 2Bが一塁カバー（投手はバックアップ）
+    1: "BACKUP_1B_THROW", 2: "BACKUP_1B_THROW", 3: "FIELD", 4: "COVER_1B",
     5: "HOLD", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_1B_THROW", 9: "BACKUP_BALL",
   },
-  "none-4": { // 2Bゴロ
-    1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
+  "none-4": { // 2Bゴロ — 投手は一塁カバーせず（1Bがカバー、NPB準拠）
+    1: "BACKUP_1B_THROW", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
     5: "HOLD", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
   "none-5": { // 3Bゴロ — P:送球邪魔回避, 2B:悪送球カバーリング(→二塁), SS:3Bに近づきBU
@@ -158,12 +158,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "BACKUP_BALL", 2: "FIELD", 3: "COVER_1B", 4: "BACKUP_2B_THROW",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_1B_THROW", 9: "BACKUP_1B_THROW",
   },
-  "R1-3": { // 1Bゴロ
-    1: "COVER_1B", 2: "COVER_1B", 3: "FIELD", 4: "COVER_1B",
+  "R1-3": { // 1Bゴロ — 2Bが一塁カバー
+    1: "BACKUP_1B_THROW", 2: "COVER_1B", 3: "FIELD", 4: "COVER_1B",
     5: "COVER_3B", 6: "COVER_2B", 7: "COVER_2B", 8: "COVER_2B", 9: "BACKUP_1B_THROW",
   },
-  "R1-4": { // 2Bゴロ
-    1: "COVER_1B", 2: "COVER_1B", 3: "COVER_1B", 4: "FIELD",
+  "R1-4": { // 2Bゴロ — 投手は一塁カバーせず
+    1: "BACKUP_1B_THROW", 2: "COVER_1B", 3: "COVER_1B", 4: "FIELD",
     5: "COVER_3B", 6: "COVER_2B", 7: "COVER_2B", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
   "R1-5": { // 3Bゴロ
@@ -186,12 +186,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "BACKUP_BALL", 2: "FIELD", 3: "COVER_1B", 4: "BACKUP_GENERAL",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_GENERAL", 9: "BACKUP_1B_THROW",
   },
-  "R2-3": { // 1Bゴロ
-    1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "FIELD", 4: "COVER_1B",
+  "R2-3": { // 1Bゴロ — 2Bが一塁カバー
+    1: "BACKUP_1B_THROW", 2: "BACKUP_1B_THROW", 3: "FIELD", 4: "COVER_1B",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_1B_THROW", 9: "BACKUP_BALL",
   },
-  "R2-4": { // 2Bゴロ
-    1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
+  "R2-4": { // 2Bゴロ — 投手は一塁カバーせず
+    1: "BACKUP_1B_THROW", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
   "R2-5": { // 3Bゴロ — P: 送球邪魔回避（SSが三塁カバー済み）
@@ -214,12 +214,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "BACKUP_BALL", 2: "FIELD", 3: "COVER_1B", 4: "BACKUP_1B_THROW",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_1B_THROW", 9: "BACKUP_1B_THROW",
   },
-  "R3-3": { // 1Bゴロ
-    1: "COVER_1B", 2: "COVER_HOME", 3: "FIELD", 4: "COVER_1B",
+  "R3-3": { // 1Bゴロ — 2Bが一塁カバー
+    1: "BACKUP_1B_THROW", 2: "COVER_HOME", 3: "FIELD", 4: "COVER_1B",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_1B_THROW", 9: "BACKUP_BALL",
   },
-  "R3-4": { // 2Bゴロ
-    1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
+  "R3-4": { // 2Bゴロ — 投手は一塁カバーせず
+    1: "BACKUP_1B_THROW", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
     5: "BACKUP_BALL", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
   "R3-5": { // 3Bゴロ
@@ -242,12 +242,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "BACKUP_BALL", 2: "FIELD", 3: "COVER_1B", 4: "COVER_2B",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_1B_THROW", 9: "BACKUP_1B_THROW",
   },
-  "R12-3": { // 1Bゴロ
-    1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "FIELD", 4: "COVER_1B",
+  "R12-3": { // 1Bゴロ — 2Bが一塁カバー
+    1: "BACKUP_1B_THROW", 2: "BACKUP_1B_THROW", 3: "FIELD", 4: "COVER_1B",
     5: "COVER_3B", 6: "COVER_2B", 7: "COVER_2B", 8: "COVER_2B", 9: "BACKUP_BALL",
   },
-  "R12-4": { // 2Bゴロ
-    1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
+  "R12-4": { // 2Bゴロ — 投手は一塁カバーせず
+    1: "BACKUP_1B_THROW", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
     5: "COVER_3B", 6: "COVER_2B", 7: "COVER_2B", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
   "R12-5": { // 3Bゴロ（var1: 三塁踏んで一塁 or var2: 二塁送球）
@@ -270,12 +270,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "BACKUP_BALL", 2: "FIELD", 3: "COVER_1B", 4: "BACKUP_1B_THROW",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_1B_THROW", 9: "BACKUP_1B_THROW",
   },
-  "R13-3": { // 1Bゴロ（middle）
-    1: "COVER_1B", 2: "COVER_HOME", 3: "FIELD", 4: "COVER_1B",
+  "R13-3": { // 1Bゴロ（middle）— 2Bが一塁カバー
+    1: "BACKUP_1B_THROW", 2: "COVER_HOME", 3: "FIELD", 4: "COVER_1B",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_GENERAL", 9: "BACKUP_BALL",
   },
-  "R13-4": { // 2Bゴロ（middle）
-    1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
+  "R13-4": { // 2Bゴロ（middle）— 投手は一塁カバーせず
+    1: "BACKUP_1B_THROW", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
     5: "COVER_3B", 6: "COVER_2B", 7: "COVER_2B", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
   "R13-5": { // 3Bゴロ（middle）
@@ -298,12 +298,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "BACKUP_BALL", 2: "FIELD", 3: "COVER_1B", 4: "BACKUP_1B_THROW",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_1B_THROW",
   },
-  "R23-3": { // 1Bゴロ（middle）
-    1: "COVER_1B", 2: "COVER_HOME", 3: "FIELD", 4: "COVER_1B",
+  "R23-3": { // 1Bゴロ（middle）— 2Bが一塁カバー
+    1: "BACKUP_1B_THROW", 2: "COVER_HOME", 3: "FIELD", 4: "COVER_1B",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_GENERAL", 9: "BACKUP_BALL",
   },
-  "R23-4": { // 2Bゴロ（middle）
-    1: "COVER_1B", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
+  "R23-4": { // 2Bゴロ（middle）— 投手は一塁カバーせず
+    1: "BACKUP_1B_THROW", 2: "BACKUP_1B_THROW", 3: "COVER_1B", 4: "FIELD",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_1B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
   "R23-5": { // 3Bゴロ（middle）
@@ -326,12 +326,12 @@ const FORMATION_TABLE: Record<string, Record<number, FormationAction>> = {
     1: "BACKUP_BALL", 2: "FIELD", 3: "COVER_1B", 4: "COVER_2B",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_1B_THROW",
   },
-  "R123-3": {
-    1: "COVER_1B", 2: "COVER_HOME", 3: "FIELD", 4: "COVER_1B",
+  "R123-3": { // 2Bが一塁カバー
+    1: "BACKUP_1B_THROW", 2: "COVER_HOME", 3: "FIELD", 4: "COVER_1B",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_GENERAL", 9: "BACKUP_BALL",
   },
-  "R123-4": {
-    1: "COVER_1B", 2: "COVER_HOME", 3: "COVER_1B", 4: "FIELD",
+  "R123-4": { // 投手は一塁カバーせず
+    1: "BACKUP_1B_THROW", 2: "COVER_HOME", 3: "COVER_1B", 4: "FIELD",
     5: "COVER_3B", 6: "COVER_2B", 7: "BACKUP_3B_THROW", 8: "BACKUP_BALL", 9: "BACKUP_BALL",
   },
   "R123-5": {
@@ -496,12 +496,12 @@ const ZONE_2B_MAX = 60;       // 50-60: 2B (二塁正面)
 const ZONE_2B_1B_MAX = 75;    // 60-75: 2B or 1B (一二塁間)
 // 75-90: 1B (一塁線)
 
-/** 投手がゴロを処理できる最大打球速度 (km/h) — NPBでは投手返しは弱い打球のみ */
-const PITCHER_FIELDING_MAX_VELO = 90;
-/** 投手ゴロ判定: マウンド(y=18.4)でのボール通過横距離上限 (m) — 投手正面の狭いゾーン */
-const PITCHER_ZONE_LATERAL_MAX = 3;
-/** 投手がゴロを処理する最大着弾距離 (m) — マウンド付近のみ */
-const PITCHER_FIELDING_MAX_DISTANCE = 25;
+/** 投手がゴロを処理できる最大打球速度 (km/h) — 速い打球も投手正面なら処理 */
+const PITCHER_FIELDING_MAX_VELO = 130;
+/** 投手ゴロ判定: マウンド(y=18.4)でのボール通過横距離上限 (m) — 投手の左右リーチ */
+const PITCHER_ZONE_LATERAL_MAX = 4;
+/** 投手がゴロを処理する最大着弾距離 (m) — マウンド付近〜内野域 */
+const PITCHER_FIELDING_MAX_DISTANCE = 35;
 /** 捕手がゴロを処理する最大着弾距離 (m) */
 const CATCHER_FIELDING_MAX_DISTANCE = 10;
 
@@ -513,14 +513,17 @@ function selectPrimaryFielder(
 
   // Step 1: ゾーンから内野手候補を決定 (3-6)
   const zonePos = getZonePrimary(direction, agents);
-  const zoneAgent = agents.find(a => a.pos === zonePos)!;
+  const zoneAgent = agents.find(a => a.pos === zonePos);
+  if (!zoneAgent) {
+    // フォールバック: エージェントが見つからない場合（DH等で野手不在）
+    return { pos: zonePos, interceptTime: Infinity };
+  }
   const zoneTime = estimateInterceptTime(zoneAgent, trajectory);
 
-  // Step 2: 投手候補 (遅いゴロがマウンド付近を通過する場合、かつ短距離)
-  // NPBで投手がゴロを処理するのは「投手返し」の弱い打球のみ。
-  // 内野手が余裕で間に合う場合は内野手を優先する。
-  if (trajectory.exitVelocity <= PITCHER_FIELDING_MAX_VELO
-    && trajectory.landingDistance <= PITCHER_FIELDING_MAX_DISTANCE) {
+  // Step 2: 投手候補 (ゴロがマウンド付近を通過する場合)
+  // NPBで投手がゴロを処理するのは「投手返し」。
+  // 投手は内野手より明確に早い場合のみ優先。
+  {
     const pitcher = agents.find(a => a.pos === 1);
     if (pitcher) {
       const angleRad = ((direction - 45) * Math.PI) / 180;
@@ -529,8 +532,8 @@ function selectPrimaryFielder(
         const lateralDist = Math.abs(18.4 * Math.tan(angleRad));
         if (lateralDist <= PITCHER_ZONE_LATERAL_MAX) {
           const pTime = estimateInterceptTime(pitcher, trajectory);
-          // 投手は内野手より明確に早い場合のみ優先（0.3秒マージン）
-          if (pTime + 0.3 <= zoneTime) {
+          // 投手は内野手より早い場合に優先（0.1秒マージン）
+          if (pTime + 0.1 <= zoneTime) {
             return { pos: 1 as FielderPosition, interceptTime: pTime };
           }
         }
@@ -728,7 +731,11 @@ function assignRoles(
   const assignments = new Map<FielderPosition, FielderAssignment>();
 
   // 捕球者のインターセプト点計算
-  const primaryAgent = agents.find(a => a.pos === primaryFielder)!;
+  const primaryAgent = agents.find(a => a.pos === primaryFielder);
+  if (!primaryAgent) {
+    // フォールバック: 捕球者エージェントが見つからない
+    return assignments;
+  }
   const interceptTarget: Vec2 = findInterceptPoint(primaryAgent, trajectory);
 
   // 捕球者の割り当て

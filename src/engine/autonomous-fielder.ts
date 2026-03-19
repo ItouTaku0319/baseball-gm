@@ -34,6 +34,7 @@ import {
   HOLD_DRIFT_RATIO_BASE,
   HOLD_DRIFT_AWARENESS_SCALE,
   HOLD_DRIFT_RATIO_MAX,
+  PITCHER_FLY_PURSUIT_PENALTY,
 } from "./physics-constants";
 
 // ====================================================================
@@ -431,7 +432,8 @@ function calcPursuitScore(
   }
 
   // フライ/ライナーで捕球不可でも、ボール回収のため走る（チェーシング）
-  if (!canReach && !trajectory.isGroundBall) {
+  // 投手(pos=1)は遠いフライを追いかけない（NPB準拠: 投手のPOは極めて稀）
+  if (!canReach && !trajectory.isGroundBall && agent.pos !== 1) {
     const distToPerceived = vec2Distance(agent.currentPos, perceived);
     arrivalMargin = clamp(1 - distToPerceived / 120, 0, 0.15);
     canReach = true;
@@ -478,8 +480,12 @@ function calcPursuitScore(
   // CFはフライ追跡で優先権ボーナス（実際の野球ではCFが最広の守備範囲を持つ）
   const cfBonus = (agent.pos === 8 && !trajectory.isGroundBall) ? CF_FLY_PURSUIT_BONUS : 0;
 
+  // 投手はフライ/ライナー/ポップフライの追跡スコアにペナルティ（NPB準拠: 投手POは極稀）
+  // 実際の野球では他の野手が投手をコールオフするため、投手のフライ捕球は極めて稀
+  const pitcherPenalty = (agent.pos === 1 && !trajectory.isGroundBall) ? PITCHER_FLY_PURSUIT_PENALTY : 0;
+
   const score = clamp(
-    proximity * 0.3 + mobility * 0.2 + arrivalMargin * 0.4 + cfBonus - coordPenalty,
+    proximity * 0.3 + mobility * 0.2 + arrivalMargin * 0.4 + cfBonus - coordPenalty - pitcherPenalty,
     -1,
     1
   );

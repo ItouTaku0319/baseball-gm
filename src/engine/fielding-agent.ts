@@ -953,8 +953,8 @@ function createAgents(
     let baseReaction = isInfielder ? AGENT_REACTION_INFIELD
       : isCatcher ? AGENT_REACTION_CATCHER
       : AGENT_REACTION_DEFAULT;
-    // 投手は投球後のフォロースルーで反応が遅れる（バランス調整: 0.4秒追加）
-    if (isPitcher) baseReaction += 0.4;
+    // 投手は投球後のフォロースルーで反応が遅れる
+    if (isPitcher) baseReaction += PITCHER_REACTION_PENALTY;
     baseReaction -= (skill.awareness - 50) * AGENT_AWARENESS_REACTION_SCALE;
     baseReaction = Math.max(0.05, baseReaction);
 
@@ -1303,10 +1303,12 @@ function checkFlyCatchAtLanding(
   const landingPos = trajectory.landingPos;
 
   // GC圧力削減: filter+map+sortをforループ+構造体配列に変換
+  // NPB準拠: 投手(pos=1)はフライ捕球候補から除外（他野手がコールオフ）
   const candidates: { agent: FielderAgent; dist: number }[] = [];
   for (let i = 0; i < agents.length; i++) {
     const a = agents[i];
     if (a.state !== "PURSUING" || a.hasYielded) continue;
+    if (a.pos === 1) continue;
     candidates.push({ agent: a, dist: vec2Distance(a.currentPos, landingPos) });
   }
   candidates.sort((a, b) => a.dist - b.dist);
@@ -1877,6 +1879,7 @@ function findReceiverForBase(
   const responsiblePositions = BASE_RESPONSIBLE_POSITIONS[baseNum] ?? [];
 
   // まず担当内野手から探す（塁に近い順）
+  // 投手(pos=1)は担当リストに入っていないので自然にスキップされる
   let best: FielderAgent | null = null;
   let bestDist = Infinity;
   for (const a of agents) {

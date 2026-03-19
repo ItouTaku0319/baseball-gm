@@ -75,7 +75,8 @@ export const TIMING_SIGMA_CONTACT_SCALE = 0.15; // ミート依存σ調整量
 export const TIMING_SIGMA_PITCH_SCALE = 0.05; // 変化球依存σ調整量
 
 // 守備チャージ・バウンスペナルティ閾値
-export const PITCHER_REACTION_PENALTY = 0.6; // 投手の投球後反応遅延(秒)
+export const PITCHER_REACTION_PENALTY = 0.4; // 投手の投球後反応遅延(秒)
+export const PITCHER_FLY_PURSUIT_PENALTY = 1.5; // 投手のフライ追跡スコアペナルティ（NPB準拠: 投手POは極稀）
 export const FIELDER_CATCH_RADIUS = 0.5;     // 捕球可能距離(m) ゴロ用
 export const FLY_CATCH_RADIUS = 1.3;         // フライ/ライナーの確実捕球距離(m) 内野手用
 // キャッチャーはポップフライ専門訓練で近距離(20m以内)の反応が速い
