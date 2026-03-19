@@ -496,12 +496,12 @@ const ZONE_2B_MAX = 60;       // 50-60: 2B (二塁正面)
 const ZONE_2B_1B_MAX = 75;    // 60-75: 2B or 1B (一二塁間)
 // 75-90: 1B (一塁線)
 
-/** 投手がゴロを処理できる最大打球速度 (km/h) */
-const PITCHER_FIELDING_MAX_VELO = 100;
-/** 投手ゴロ判定: マウンド(y=18.4)でのボール通過横距離上限 (m) */
-const PITCHER_ZONE_LATERAL_MAX = 7;
-/** 投手がゴロを処理する最大着弾距離 (m) — マウンド+α以内のみ */
-const PITCHER_FIELDING_MAX_DISTANCE = 30;
+/** 投手がゴロを処理できる最大打球速度 (km/h) — NPBでは投手返しは弱い打球のみ */
+const PITCHER_FIELDING_MAX_VELO = 90;
+/** 投手ゴロ判定: マウンド(y=18.4)でのボール通過横距離上限 (m) — 投手正面の狭いゾーン */
+const PITCHER_ZONE_LATERAL_MAX = 3;
+/** 投手がゴロを処理する最大着弾距離 (m) — マウンド付近のみ */
+const PITCHER_FIELDING_MAX_DISTANCE = 25;
 /** 捕手がゴロを処理する最大着弾距離 (m) */
 const CATCHER_FIELDING_MAX_DISTANCE = 10;
 
@@ -517,6 +517,8 @@ function selectPrimaryFielder(
   const zoneTime = estimateInterceptTime(zoneAgent, trajectory);
 
   // Step 2: 投手候補 (遅いゴロがマウンド付近を通過する場合、かつ短距離)
+  // NPBで投手がゴロを処理するのは「投手返し」の弱い打球のみ。
+  // 内野手が余裕で間に合う場合は内野手を優先する。
   if (trajectory.exitVelocity <= PITCHER_FIELDING_MAX_VELO
     && trajectory.landingDistance <= PITCHER_FIELDING_MAX_DISTANCE) {
     const pitcher = agents.find(a => a.pos === 1);
@@ -527,7 +529,8 @@ function selectPrimaryFielder(
         const lateralDist = Math.abs(18.4 * Math.tan(angleRad));
         if (lateralDist <= PITCHER_ZONE_LATERAL_MAX) {
           const pTime = estimateInterceptTime(pitcher, trajectory);
-          if (pTime <= zoneTime) {
+          // 投手は内野手より明確に早い場合のみ優先（0.3秒マージン）
+          if (pTime + 0.3 <= zoneTime) {
             return { pos: 1 as FielderPosition, interceptTime: pTime };
           }
         }

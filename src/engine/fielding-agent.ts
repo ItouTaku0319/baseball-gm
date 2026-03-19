@@ -20,6 +20,7 @@ import {
   AGENT_REACTION_INFIELD,
   AGENT_REACTION_CATCHER,
   AGENT_REACTION_DEFAULT,
+  PITCHER_REACTION_PENALTY,
   AGENT_AWARENESS_REACTION_SCALE,
   AGENT_REACTING_SPEED_RATIO,
   AGENT_DIVE_MIN_DIST,
@@ -473,14 +474,21 @@ export function resolvePlayWithAgents(
           transitionRunnersOnCatch(runners, trajectory.isGroundBall, catchSuccess);
 
           // 回収者選定
-          const groundBallThroughFielder = !catchSuccess && !catchError && catcherAgent
-            && trajectory.isGroundBall && catchResult && !catchResult.success;
-          const retrieverCandidates = groundBallThroughFielder
-            ? agents.filter(a => a !== catcherAgent)
-            : agents;
-          const effectiveCatcher = catchSuccess ? catcherAgent : (
-            catchError ? catcherAgent : findNearestAgent(retrieverCandidates, restPosForBall)
-          );
+          let effectiveCatcher: FielderAgent | null;
+          if (catchSuccess) {
+            effectiveCatcher = catcherAgent;
+          } else if (catchError) {
+            effectiveCatcher = catcherAgent;
+          } else if (!trajectory.isGroundBall && catcherAgent) {
+            // フライ/ライナー捕球失敗: 追球した野手が最も近いので優先回収
+            effectiveCatcher = catcherAgent;
+          } else {
+            // ゴロ: 捕球を試みた野手を抜けた打球は別の野手が回収
+            const retrieverCandidates = (catcherAgent && catchResult && !catchResult.success)
+              ? agents.filter(a => a !== catcherAgent)
+              : agents;
+            effectiveCatcher = findNearestAgent(retrieverCandidates, restPosForBall);
+          }
 
           if (!effectiveCatcher) {
             return {
@@ -881,8 +889,9 @@ export function resolvePlayWithAgents(
 
   // === 結果構築 ===
   if (!postCatchStarted) {
-    // 誰も処理できなかった場合、最寄りの野手をfielderPosにする
+    // 誰も処理できなかった場合、最寄りの野手(投手除外)をfielderPosにする
     const nearestPos = agents.reduce((best, a) => {
+      if (a.pos === 1) return best; // 投手はヒット回収者にならない
       const d = vec2DistanceSq(a.currentPos, restPosForBall);
       return d < best.d ? { d, pos: a.pos } : best;
     }, { d: Infinity, pos: 8 as FielderPosition }).pos;
@@ -904,7 +913,8 @@ export function resolvePlayWithAgents(
     agents,
     rng,
     catchError,
-    catchErrorPos
+    catchErrorPos,
+    retrieverAgent
   );
   return { ...finalResult, agentTimeline: collectTimeline ? timeline : undefined };
 }
@@ -943,6 +953,8 @@ function createAgents(
     let baseReaction = isInfielder ? AGENT_REACTION_INFIELD
       : isCatcher ? AGENT_REACTION_CATCHER
       : AGENT_REACTION_DEFAULT;
+    // 投手は投球後のフォロースルーで反応が遅れる（バランス調整: 0.4秒追加）
+    if (isPitcher) baseReaction += 0.4;
     baseReaction -= (skill.awareness - 50) * AGENT_AWARENESS_REACTION_SCALE;
     baseReaction = Math.max(0.05, baseReaction);
 
@@ -1563,11 +1575,14 @@ function findNearestAgent(
   agents: FielderAgent[],
   pos: Vec2
 ): FielderAgent | null {
-  // 1. PURSUING状態の野手から最速到達を探す（打球を追っていた野手が自然な回収者）
+  // 投手(pos=1)は回収候補から除外（NPBで投手がボール回収するケースは極めて稀）
+  const candidates = agents.filter(a => a.pos !== 1);
+
+  // 1. 打球を追っていた野手から最速到達を探す（PURSUING/BACKING_UP/RETURNING）
   let best: FielderAgent | null = null;
   let bestTime = Infinity;
-  for (const a of agents) {
-    if (a.state !== "PURSUING") continue;
+  for (const a of candidates) {
+    if (a.state !== "PURSUING" && a.state !== "BACKING_UP" && a.state !== "RETURNING") continue;
     const dist = vec2Distance(a.currentPos, pos);
     const arrivalTime = a.maxSpeed > 0 ? dist / a.maxSpeed : Infinity;
     if (arrivalTime < bestTime) {
@@ -1579,12 +1594,10 @@ function findNearestAgent(
 
   // 2. フォールバック: 移動方向＋位置関係を考慮した到達時間で選択
   const ballHomeDist = Math.sqrt(pos.x * pos.x + pos.y * pos.y);
-  for (const a of agents) {
+  for (const a of candidates) {
     const dist = vec2Distance(a.currentPos, pos);
     const targetToBall = vec2Distance(a.targetPos, pos);
-    // targetがボールより近い → ボールに向かって移動中 → 距離ボーナス
     const approachBonus = targetToBall < dist ? (dist - targetToBall) * 1.0 : 0;
-    // ボールより本塁側にいる野手 → 追いかける必要がある → ペナルティ
     const agentHomeDist = Math.sqrt(a.currentPos.x * a.currentPos.x + a.currentPos.y * a.currentPos.y);
     const chasePenalty = agentHomeDist < ballHomeDist ? (ballHomeDist - agentHomeDist) * 1.0 : 0;
     const effectiveDist = Math.max(dist - approachBonus + chasePenalty, 1);
@@ -1592,6 +1605,18 @@ function findNearestAgent(
     if (arrivalTime < bestTime) {
       bestTime = arrivalTime;
       best = a;
+    }
+  }
+
+  // 3. 最終フォールバック: 投手含む全員（候補が0の場合のみ）
+  if (!best) {
+    for (const a of agents) {
+      const dist = vec2Distance(a.currentPos, pos);
+      const arrivalTime = a.maxSpeed > 0 ? dist / a.maxSpeed : Infinity;
+      if (arrivalTime < bestTime) {
+        bestTime = arrivalTime;
+        best = a;
+      }
     }
   }
   return best;
@@ -2016,14 +2041,18 @@ function buildPhase2Result(
   agents: FielderAgent[],
   rng: () => number,
   catchError?: boolean,
-  catchErrorPos?: FielderPosition
+  catchErrorPos?: FielderPosition,
+  retrieverAgent?: FielderAgent | null,
 ): AgentFieldingResult {
-  // catcherAgentがnull（誰もインターセプトしなかった）場合、
-  // 送球を行った野手 or 最後にボールを処理した野手のposを使う
-  const fielderPos = catcherAgent?.pos
-    ?? (throwPlays.length > 0 ? throwPlays[0].from : null)
-    ?? agents.find(a => a.state === "THROWING" || a.state === "HOLDING" || a.state === "SECURING")?.pos
-    ?? (8 as FielderPosition);
+  // アウト時: 捕球した野手のポジション
+  // ヒット時: 回収した野手のポジション（NPB記録に準拠）
+  const fielderPos = catchSuccess
+    ? (catcherAgent?.pos ?? (8 as FielderPosition))
+    : (retrieverAgent?.pos
+      ?? catcherAgent?.pos
+      ?? (throwPlays.length > 0 ? throwPlays[0].from : null)
+      ?? agents.find(a => a.state === "THROWING" || a.state === "HOLDING" || a.state === "SECURING")?.pos
+      ?? (8 as FielderPosition));
 
   // --- ゴロアウト判定（捕球成功 or リトリーバー送球アウト） ---
   if (trajectory.isGroundBall && (catchSuccess || outsAdded > 0)) {
